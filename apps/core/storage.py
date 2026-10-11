@@ -113,16 +113,29 @@ class TenantCloudinaryStorage(Storage):
         return name
 
     def _save(self, name, content):
+        from apps.files.models import StoredFile
+        from apps.tenancy.limits import PlanLimits
+
         public_id, resource_type, _ = self._target(name)
+        stored_name = clean_name(name)
         content.seek(0)
+        data = content.read()
+        size = getattr(content, "size", None)
+        if size is None:
+            size = len(data)
+        existing = StoredFile.objects.filter(name=stored_name).values_list("bytes", flat=True)
+        PlanLimits.for_current_school().check_can_store(size - (existing.first() or 0))
         cloudinary.uploader.upload(
-            content.read(),
+            data,
             public_id=public_id,
             resource_type=resource_type,
             type=self.delivery_type,
             overwrite=True,
         )
-        return clean_name(name)
+        StoredFile.objects.update_or_create(
+            name=stored_name, defaults={"bytes": size, "delivery_type": self.delivery_type}
+        )
+        return stored_name
 
     def url(self, name):
         public_id, resource_type, fmt = self._target(name)
@@ -147,6 +160,9 @@ class TenantCloudinaryStorage(Storage):
     def delete(self, name):
         public_id, resource_type, _ = self._target(name)
         cloudinary.uploader.destroy(public_id, resource_type=resource_type, type=self.delivery_type)
+        from apps.files.models import StoredFile
+
+        StoredFile.objects.filter(name=clean_name(name)).delete()
 
     def _resource(self, name):
         public_id, resource_type, _ = self._target(name)

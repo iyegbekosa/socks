@@ -171,3 +171,65 @@ def test_unique_upload_name():
         r"photos/[0-9a-f]{32}\.jpg", unique_upload_name("photos", "Adébáyọ̀ photo 1.JPG")
     )
     assert "." not in unique_upload_name("docs", "README")
+
+
+def _used():
+    from apps.tenancy.limits import PlanLimits
+
+    return PlanLimits.for_current_school().storage_used_bytes()
+
+
+def test_quota_blocks_before_upload(school_a, upload):
+    from apps.files.models import StoredFile
+    from apps.tenancy.limits import PlanLimitExceeded, PlanLimits
+
+    with schema_context("school_a"):
+        cap = PlanLimits.for_current_school().plan.storage_bytes
+        StoredFile.objects.create(name="big.bin", bytes=cap - 10)
+        with pytest.raises(PlanLimitExceeded):
+            default_storage.save("docs/over.bin", ContentFile(b"x" * 11))
+        upload.assert_not_called()
+        assert not StoredFile.objects.filter(name="docs/over.bin").exists()
+        default_storage.save("docs/fit.bin", ContentFile(b"x" * 10))
+        assert StoredFile.objects.get(name="docs/fit.bin").bytes == 10
+        assert StoredFile.objects.get(name="docs/fit.bin").delivery_type == "authenticated"
+
+
+def test_overwrite_counts_only_difference(school_a, upload):
+    from apps.files.models import StoredFile
+
+    with schema_context("school_a"):
+        default_storage.save("docs/a.bin", ContentFile(b"x" * 10))
+        assert _used() == 10
+        default_storage.save("docs/a.bin", ContentFile(b"x" * 4))
+        assert _used() == 4
+        assert StoredFile.objects.filter(name="docs/a.bin").count() == 1
+
+
+def test_overwrite_at_cap_is_allowed(school_a, upload):
+    from apps.files.models import StoredFile
+    from apps.tenancy.limits import PlanLimits
+
+    with schema_context("school_a"):
+        cap = PlanLimits.for_current_school().plan.storage_bytes
+        StoredFile.objects.create(name="docs/a.bin", bytes=cap)
+        default_storage.save("docs/a.bin", ContentFile(b"x" * 5))
+        assert _used() == 5
+
+
+def test_delete_removes_row(school_a, upload):
+    from apps.files.models import StoredFile
+
+    with schema_context("school_a"):
+        default_storage.save("docs/d.bin", ContentFile(b"abc"))
+        with mock.patch("cloudinary.uploader.destroy"):
+            default_storage.delete("docs/d.bin")
+        assert not StoredFile.objects.filter(name="docs/d.bin").exists()
+
+
+def test_public_storage_records_upload_type(school_a, upload):
+    from apps.files.models import StoredFile
+
+    with schema_context("school_a"):
+        storages["public"].save("branding/logo.png", ContentFile(b"png"))
+        assert StoredFile.objects.get(name="branding/logo.png").delivery_type == "upload"
