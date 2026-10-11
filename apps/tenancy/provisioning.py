@@ -4,8 +4,14 @@ import logging
 
 from django.conf import settings
 from django.core.management import call_command
-from django.db import connection
-from django_tenants.utils import get_public_schema_name, schema_context, tenant_context
+from django.db import connection, transaction
+from django_tenants.postgresql_backend.base import _check_schema_name
+from django_tenants.utils import (
+    get_public_schema_name,
+    schema_context,
+    schema_exists,
+    tenant_context,
+)
 
 from apps.tenancy.models import Domain, School
 from apps.tenancy.seeding import seed_school
@@ -55,6 +61,41 @@ def _invite_contact(school: School, base_url: str, *, resend: bool) -> None:
     )
 
 
+class DomainNotOwned(Exception):
+    """The school's domain row already points at another tenant."""
+
+
+class SchemaNotOwned(Exception):
+    """The school's schema exists but was not created by provisioning: refuse to adopt it."""
+
+
+def _ensure_own_schema(school: School) -> None:
+    """Create the schema, or confirm an existing one is ours from an earlier run.
+
+    CREATE SCHEMA and the ownership flag commit together (Postgres DDL is transactional), so
+    the flag is set if and only if this task created the schema. Tables are added afterwards
+    by migrate_schemas, so a run that dies mid-migration leaves an owned schema to finish.
+    """
+    _check_schema_name(school.schema_name)
+    with schema_context(get_public_schema_name()), transaction.atomic():
+        owned = (
+            School.objects.select_for_update()
+            .filter(pk=school.pk)
+            .values_list("schema_created_by_provisioning", flat=True)
+            .get()
+        )
+        if schema_exists(school.schema_name):
+            if not owned:
+                raise SchemaNotOwned(
+                    f"Schema {school.schema_name!r} already exists and was not created by "
+                    "provisioning; refusing to adopt it."
+                )
+            return
+        with connection.cursor() as cursor:
+            cursor.execute(f'CREATE SCHEMA "{school.schema_name}"')
+        School.objects.filter(pk=school.pk).update(schema_created_by_provisioning=True)
+
+
 @app.task(name="tenancy.provision_school")
 def provision_school(school_id: int) -> None:
     """Create the schema, seed it, invite the first admin, add the domain. Safe to re-run."""
@@ -64,8 +105,8 @@ def provision_school(school_id: int) -> None:
         subdomain = school.schema_name.replace("_", "-")
         base_url = settings.PLATFORM_URL_TEMPLATE.format(subdomain=subdomain)
 
-        school.create_schema(check_if_exists=True, verbosity=0)
-        # Finish a schema left half-migrated by an earlier failed run (no-op when complete).
+        _ensure_own_schema(school)
+        # Create the tables, or finish a schema left half-migrated by an earlier failed run.
         call_command(
             "migrate_schemas",
             tenant=True,
@@ -84,10 +125,12 @@ def provision_school(school_id: int) -> None:
             ).exists():
                 record("school.provisioned", obj=school)
         with schema_context(get_public_schema_name()):
-            Domain.objects.get_or_create(
+            domain, _ = Domain.objects.get_or_create(
                 domain=f"{subdomain}.{settings.PLATFORM_DOMAIN}",
                 defaults={"tenant": school, "is_primary": True},
             )
+        if domain.tenant_id != school.pk:
+            raise DomainNotOwned(f"Domain {domain.domain!r} already belongs to another school.")
         _set_status(school_id, "ready")
     except Exception:
         connection.set_schema_to_public()  # type: ignore[attr-defined]

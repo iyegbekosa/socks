@@ -192,7 +192,7 @@ def _no_leftover_schemas(django_db_blocker):
     """After the module, none of the schemas these tests create may remain (rollback worked)."""
     yield
     with django_db_blocker.unblock():
-        assert not {"newschool", "pendingschool"} & schemas()
+        assert not {"newschool", "pendingschool", "preexisting_x", "preexisting_y"} & schemas()
 
 
 def test_school_a_collision_variants(client, post, payload, school_a):
@@ -327,3 +327,85 @@ def test_migrate_alias_skips_ghost_school(db):
     school.save()
     call_command("migrate", tenant=True, interactive=False, verbosity=0)
     assert "pendingschool" not in schemas()
+
+
+# --- Fix: never adopt a pre-existing Postgres schema --------------------------------------
+
+
+def _tables_in(schema: str) -> int:
+    with connection.cursor() as cur:
+        cur.execute(
+            "select count(*) from information_schema.tables where table_schema = %s", [schema]
+        )
+        return cur.fetchone()[0]
+
+
+def test_information_schema_subdomain_rejected(client, post, payload):
+    before_count = School.objects.count()
+    payload["subdomain"] = "information-schema"
+    resp = post(client, payload)
+    assert resp.status_code == 200
+    assert "subdomain" in resp.context["form"].errors
+    assert School.objects.count() == before_count
+
+
+def test_preexisting_schema_subdomain_rejected(client, post, payload):
+    with connection.cursor() as cur:
+        cur.execute("CREATE SCHEMA preexisting_x")
+    before_count = School.objects.count()
+    payload["subdomain"] = "preexisting-x"
+    resp = post(client, payload)
+    assert resp.status_code == 200
+    assert "subdomain" in resp.context["form"].errors
+    assert School.objects.count() == before_count
+    assert _tables_in("preexisting_x") == 0
+
+
+def test_provisioning_refuses_preexisting_schema(db):
+    with connection.cursor() as cur:
+        cur.execute("CREATE SCHEMA preexisting_y")
+    school = School(
+        schema_name="preexisting_y",
+        name="Squatter",
+        contact_name="Ada Obi",
+        contact_email="ada@example.com",
+        provisioning_status="pending",
+    )
+    school.auto_create_schema = False
+    school.save()
+    with pytest.raises(Exception, match="already exists"):
+        provision_school(school.pk)
+    school.refresh_from_db()
+    assert school.provisioning_status == "failed"
+    assert school.schema_created_by_provisioning is False
+    assert _tables_in("preexisting_y") == 0
+    assert not Domain.objects.filter(tenant=school).exists()
+
+
+def test_provisioning_records_schema_ownership_and_retry_reuses_it(client, post, payload):
+    with mock.patch("apps.tenancy.provisioning.seed_school", side_effect=RuntimeError("boom")):
+        post(client, payload)
+    school = School.objects.get(schema_name="newschool")
+    assert school.provisioning_status == "failed"
+    assert school.schema_created_by_provisioning is True
+    provision_school(school.pk)  # the retry may re-use the schema it created itself
+    school.refresh_from_db()
+    assert school.provisioning_status == "ready"
+
+
+def test_provisioning_refuses_domain_owned_by_another_school(db, school_b):
+    school = School(
+        schema_name="newschool",
+        name="New School",
+        contact_name="Ada Obi",
+        contact_email="ada@example.com",
+        provisioning_status="pending",
+    )
+    school.auto_create_schema = False
+    school.save()
+    Domain.objects.create(domain="newschool.localhost", tenant=school_b, is_primary=False)
+    with pytest.raises(Exception, match="another school"):
+        provision_school(school.pk)
+    school.refresh_from_db()
+    assert school.provisioning_status == "failed"
+    assert Domain.objects.get(domain="newschool.localhost").tenant_id == school_b.pk

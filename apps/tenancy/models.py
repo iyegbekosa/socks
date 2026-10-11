@@ -32,6 +32,10 @@ class School(TenantMixin):
         choices=[("pending", "Pending"), ("ready", "Ready"), ("failed", "Failed")],
         default="ready",
     )
+    # Set (in the same transaction as CREATE SCHEMA) only when the provisioning task created
+    # this school's schema itself. A retry may re-use an existing schema only when this is set,
+    # so signup can never adopt a schema that was already in the database.
+    schema_created_by_provisioning = models.BooleanField(default=False)
 
     auto_create_schema = True
 

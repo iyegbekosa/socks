@@ -5,6 +5,7 @@ import re
 from django import forms
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django_tenants.utils import schema_exists
 
 from apps.accounts.identifiers import normalise_ng_phone
 from apps.tenancy.models import Domain, Plan, School
@@ -23,6 +24,7 @@ RESERVED_SUBDOMAINS = frozenset(
         "help",
         "support",
         "status",
+        "information-schema",
     }  # fmt: skip
 )
 LEVEL_CHOICES = [
@@ -54,6 +56,9 @@ def validate_subdomain(value: str) -> str:
     if (
         School.objects.filter(schema_name=schema_name_for(sub)).exists()
         or Domain.objects.filter(domain__iexact=f"{sub}.{settings.PLATFORM_DOMAIN}").exists()
+        # Any schema already in the database (pg_catalog, information_schema, leftovers...):
+        # a school must never be built inside a schema it did not create.
+        or schema_exists(schema_name_for(sub))
     ):
         raise ValidationError("This web address is already taken.")
     return sub
