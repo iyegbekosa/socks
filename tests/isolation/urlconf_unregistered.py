@@ -2,10 +2,22 @@
 
 from django.http import HttpResponse
 from django.urls import include, path, re_path
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 
 def _view(request):
     return HttpResponse("ok")
+
+
+class ThingView(APIView):
+    """Never called: only its handler methods matter to the guard."""
+
+    def get(self, request, pk):
+        return Response({})
+
+    def patch(self, request, pk):
+        return Response({})
 
 
 _v1 = [
@@ -17,7 +29,10 @@ _v1 = [
 _students = ([path("", _view, name="list"), path("<int:pk>/", _view, name="detail")], "students")
 _teachers = ([path("<int:pk>/", _view, name="detail")], "teachers")
 
+_things = ([path("<int:pk>/", ThingView.as_view(), name="detail")], "things")
+
 urlpatterns = [
+    path("api/v1/things/", include(_things)),
     path("api/v1/students/", include(_students)),
     path("api/v1/teachers/", include(_teachers)),
     path("healthz", _view, name="healthz"),

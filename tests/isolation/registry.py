@@ -30,8 +30,20 @@ ISOLATION_CASES: list[IsolationCase] = []
 EXEMPT_ROUTES: set[str] = {"healthz"}
 
 
-def _walk(patterns, prefix: str = "", namespace: str = "") -> Iterator[tuple[str, str | None]]:
-    """Yield (full route string, namespaced route name or None) per leaf pattern."""
+DRF_METHODS = ("get", "post", "put", "patch", "delete")
+
+
+def _view_methods(callback) -> list[str]:
+    """HTTP methods a view serves: DRF handlers it defines, else GET (plain Django view)."""
+    cls = getattr(callback, "cls", None)
+    methods = [m.upper() for m in DRF_METHODS if cls is not None and hasattr(cls, m)]
+    return methods or ["GET"]
+
+
+def _walk(
+    patterns, prefix: str = "", namespace: str = ""
+) -> Iterator[tuple[str, str | None, list[str]]]:
+    """Yield (full route string, namespaced route name or None, methods) per leaf pattern."""
     for entry in patterns:
         # re_path patterns stringify as "^api/v1/...": strip the anchor per segment so
         # regex routes are checked against API_PREFIX like path() routes.
@@ -45,26 +57,25 @@ def _walk(patterns, prefix: str = "", namespace: str = "") -> Iterator[tuple[str
             name = entry.name
             if name and namespace:
                 name = f"{namespace}:{name}"
-            yield route, name
+            yield route, name, _view_methods(entry.callback)
 
 
 def unregistered_api_routes(
-    urlconf: str = "config.urls_tenant", registered: set[str] | None = None
+    urlconf: str = "config.urls_tenant", registered: set[tuple[str, str]] | None = None
 ) -> list[str]:
-    """Return named routes under api/v1/ with no case or exemption, plus unnamed ones.
+    """Return (name, method) pairs under api/v1/ with no case or exemption, as "name METHOD".
 
     Unnamed routes cannot be registered, so they are reported by route string.
     """
     if registered is None:
-        registered = {c.name for c in ISOLATION_CASES} | EXEMPT_ROUTES
-    else:
-        registered = registered | EXEMPT_ROUTES
+        registered = {(c.name, c.method) for c in ISOLATION_CASES}
+    registered = {(name, method.upper()) for name, method in registered}
     missing = []
-    for route, name in _walk(get_resolver(urlconf).url_patterns):
+    for route, name, methods in _walk(get_resolver(urlconf).url_patterns):
         if not route.startswith(API_PREFIX):
             continue
         if name is None:
             missing.append(route)
-        elif name not in registered:
-            missing.append(name)
+        elif name not in EXEMPT_ROUTES:
+            missing.extend(f"{name} {m}" for m in methods if (name, m) not in registered)
     return sorted(set(missing))
