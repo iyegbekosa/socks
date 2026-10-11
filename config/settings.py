@@ -70,8 +70,18 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "apps.accounts.middleware.StaffIdleTimeoutMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
 ]
+
+SESSION_COOKIE_AGE = 14 * 24 * 3600
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+STAFF_IDLE_TIMEOUT_SECONDS = 1800
+LOGIN_URL = "accounts:login"
+LOGIN_REDIRECT_URL = "home"
 
 TEMPLATES = [
     {

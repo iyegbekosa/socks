@@ -81,4 +81,7 @@ class RequestContextMiddleware:
         user = getattr(request, "user", None)
         if user is not None and user.is_authenticated:
             user_id_var.set(str(user.pk))
-            role_var.set(str(getattr(user, "role", "-")))
+            if user.is_student:
+                role_var.set("student")
+            else:
+                role_var.set(",".join(sorted(user.roles)) or "-")

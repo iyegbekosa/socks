@@ -1,8 +1,11 @@
-from django.urls import path
+from django.urls import include, path
 
+from apps.accounts.views import home
 from apps.core.views import healthz
 
 urlpatterns = [
+    path("", home, name="home"),
+    path("accounts/", include("apps.accounts.urls")),
     path("healthz", healthz, name="healthz"),
 ]
 

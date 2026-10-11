@@ -1,0 +1,20 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{% if request.tenant.name %}{{ request.tenant.name }}{% else %}Build2Learn{% endif %}{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'core/app.css' %}">
+</head>
+<body>
+  <header class="site-header">
+    {% block branding %}<span class="brand">{% if request.tenant.name %}{{ request.tenant.name }}{% else %}Build2Learn{% endif %}</span>{% endblock %}
+    {% if request.user.is_authenticated %}
+    <form method="post" action="{% url 'accounts:logout' %}" class="inline">{% csrf_token %}<button type="submit" class="link">Log out</button></form>
+    {% endif %}
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
