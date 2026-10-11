@@ -2,8 +2,10 @@
 
 from django.http import HttpResponse
 from django.urls import include, path, re_path
+from django.views import View
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.viewsets import ViewSet
 
 
 def _view(request):
@@ -20,7 +22,31 @@ class ThingView(APIView):
         return Response({})
 
 
+class WidgetViewSet(ViewSet):
+    """Never called: routed with an explicit actions mapping."""
+
+    def retrieve(self, request, pk):
+        return Response({})
+
+    def partial_update(self, request, pk):
+        return Response({})
+
+
+class GadgetView(View):
+    def get(self, request):
+        return HttpResponse("ok")
+
+    def post(self, request):
+        return HttpResponse("ok")
+
+
 _v1 = [
+    path(
+        "widgets/<int:pk>/",
+        WidgetViewSet.as_view({"get": "retrieve", "patch": "partial_update"}),
+        name="widget-detail",
+    ),
+    path("gadgets/", GadgetView.as_view(), name="gadget-list"),
     path("students/", _view, name="student-list"),
     path("registered/", _view, name="registered-route"),
     path("anonymous/", _view),  # unnamed: cannot be registered

@@ -34,9 +34,17 @@ DRF_METHODS = ("get", "post", "put", "patch", "delete")
 
 
 def _view_methods(callback) -> list[str]:
-    """HTTP methods a view serves: DRF handlers it defines, else GET (plain Django view)."""
-    cls = getattr(callback, "cls", None)
-    methods = [m.upper() for m in DRF_METHODS if cls is not None and hasattr(cls, m)]
+    """HTTP methods a view serves (HEAD/OPTIONS excluded).
+
+    Router/ViewSet routes: keys of ``view.actions``. DRF APIViews (``view.cls``) and plain
+    class-based views (``view.view_class``): the handlers they define. Function views: GET.
+    """
+    actions = getattr(callback, "actions", None)
+    if actions:
+        methods = [m.upper() for m in actions if m.lower() in DRF_METHODS]
+    else:
+        cls = getattr(callback, "cls", None) or getattr(callback, "view_class", None)
+        methods = [m.upper() for m in DRF_METHODS if cls is not None and hasattr(cls, m)]
     return methods or ["GET"]
 
 

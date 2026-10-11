@@ -114,3 +114,20 @@ def test_namespaced_case_name_satisfies_guard():
     )
     assert "students:list GET" not in missing
     assert "students:detail GET" in missing
+
+
+def test_guard_reads_viewset_actions_mapping():
+    missing = unregistered_api_routes(
+        "tests.isolation.urlconf_unregistered", registered={("widget-detail", "GET")}
+    )
+    assert "widget-detail PATCH" in missing
+    assert "widget-detail GET" not in missing
+
+
+def test_guard_reads_plain_class_based_view_handlers():
+    missing = unregistered_api_routes("tests.isolation.urlconf_unregistered")
+    assert "gadget-list GET" in missing
+    assert "gadget-list POST" in missing
+    assert not any(
+        m.startswith("gadget-list") and m.split()[1] in {"HEAD", "OPTIONS"} for m in missing
+    )
