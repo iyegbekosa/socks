@@ -3,7 +3,6 @@ import time
 
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
-from django.http import HttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -109,7 +108,11 @@ def login_view(request):
             logout(request)
         else:
             request.session.cycle_key()
-        request.session["mfa_pending"] = {"user_id": user.pk, "at": int(time.time())}
+        request.session["mfa_pending"] = {
+            "user_id": user.pk,
+            "at": int(time.time()),
+            "next": _safe_next(request),
+        }
         return redirect(reverse("accounts:mfa"))
 
     login(request, user)
@@ -125,8 +128,3 @@ def logout_view(request):
         record("auth.logout", request=request, actor=user, obj=user)
     logout(request)
     return redirect(reverse("accounts:login"))
-
-
-def mfa_placeholder(request):
-    """Replaced by the real MFA view in Task 7."""
-    return HttpResponse(status=501)

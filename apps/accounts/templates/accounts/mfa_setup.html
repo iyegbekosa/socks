@@ -1,0 +1,17 @@
+{% extends "core/base.html" %}
+{% block title %}Set up two-factor authentication{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Set up two-factor authentication</h1>
+  <p>Your role requires a second step at login. Scan this QR code with an authenticator app (Google Authenticator, Authy, Microsoft Authenticator), then enter the 6-digit code it shows.</p>
+  <div class="qr">{{ qr_svg|safe }}</div>
+  <p>Can't scan? Enter this key manually: <code>{{ secret }}</code></p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="{% url 'accounts:mfa_setup' %}">
+    {% csrf_token %}
+    <label for="id_code">6-digit code</label>
+    <input type="text" id="id_code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" required>
+    <button type="submit">Confirm and log in</button>
+  </form>
+</div>
+{% endblock %}

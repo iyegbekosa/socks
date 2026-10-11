@@ -16,3 +16,13 @@ def create_student_user(
     user.full_clean(exclude=["password"])
     user.save()
     return user
+
+
+def reset_mfa(user: User, *, by: User, request=None) -> None:
+    """Delete all of ``user``'s TOTP devices so they enrol again at next login."""
+    from django_otp.plugins.otp_totp.models import TOTPDevice
+
+    from apps.audit.services import record
+
+    TOTPDevice.objects.filter(user=user).delete()
+    record("auth.mfa_reset", request=request, actor=by, obj=user)

@@ -18,6 +18,8 @@ dependencies = [
     "python-json-logger>=3",
     "sentry-sdk>=2",
     "gunicorn>=23",
+    "django-otp>=1.5",
+    "segno>=1.6",
 ]
 
 [project.optional-dependencies]
@@ -52,7 +54,7 @@ python_version = "3.12"
 plugins = ["mypy_django_plugin.main"]
 
 [[tool.mypy.overrides]]
-module = ["cloudinary.*", "django_tenants.*", "environ.*", "pythonjsonlogger.*", "celery.*", "kombu.*", "rest_framework.*", "factory.*"]
+module = ["cloudinary.*", "django_tenants.*", "environ.*", "pythonjsonlogger.*", "celery.*", "kombu.*", "rest_framework.*", "factory.*", "django_otp.*", "segno.*"]
 ignore_missing_imports = true
 
 [tool.django-stubs]

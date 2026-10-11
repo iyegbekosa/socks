@@ -249,9 +249,9 @@ def test_log_role_staff_and_student(client_a, caplog):
     caplog.handler.addFilter(ContextFilter())
     with schema_context("school_a"):
         u = StaffFactory()
-        set_roles(u, ["bursar", "teacher"], by=u)
+        set_roles(u, ["proprietor", "teacher"], by=u)
         s = StudentFactory()
-    for user, expected in ((u, "bursar,teacher"), (s, "student")):
+    for user, expected in ((u, "proprietor,teacher"), (s, "student")):
         caplog.clear()
         with schema_context("school_a"):
             client_a.force_login(user)

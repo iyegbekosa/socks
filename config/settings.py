@@ -42,6 +42,8 @@ TENANT_APPS = [
     "apps.accounts",
     "apps.audit",
     "apps.files",
+    "django_otp",
+    "django_otp.plugins.otp_totp",
 ]
 
 INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
@@ -73,7 +75,9 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django_otp.middleware.OTPMiddleware",
     "apps.accounts.middleware.StaffIdleTimeoutMiddleware",
+    "apps.accounts.middleware.MfaEnforcementMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
 ]
 
@@ -83,6 +87,10 @@ SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 STAFF_IDLE_TIMEOUT_SECONDS = 1800
+# Our own per-user limiter (apps/accounts/views/mfa.py) guards TOTP guessing; turn off
+# django-otp's per-device delay so a typo does not lock out a correct code for seconds.
+OTP_TOTP_THROTTLE_FACTOR = 0
+MFA_PENDING_SECONDS = 300
 LOGIN_URL = "accounts:login"
 LOGIN_REDIRECT_URL = "home"
 

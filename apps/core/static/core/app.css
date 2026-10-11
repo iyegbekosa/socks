@@ -15,3 +15,4 @@ form.inline { display:inline; }
 .error { color:var(--danger); background:#fef3f2; border:1px solid #fecdca; border-radius:6px; padding:.6rem .75rem; margin-bottom:.75rem; }
 .muted { color:var(--muted); }
 @media (min-width:640px) { .container { margin-top:3rem; } }
+.qr svg { max-width:100%; height:auto; } code { word-break:break-all; }
