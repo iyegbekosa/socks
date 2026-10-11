@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import environ
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -147,6 +148,9 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TIMEZONE = "Africa/Lagos"
 # Workers keep Django's JSON LOGGING (see the setup_logging receiver in config/celery.py).
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False
+if not DEBUG and not REDIS_URL:
+    # Without a broker every task would run inline in the web request (eager mode), silently.
+    raise ImproperlyConfigured("REDIS_URL is required when DEBUG is off (Celery broker and cache).")
 if not REDIS_URL:
     CELERY_TASK_ALWAYS_EAGER = True
     CELERY_TASK_EAGER_PROPAGATES = True

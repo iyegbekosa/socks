@@ -8,6 +8,10 @@ from apps.core.request_id import request_id_var, role_var, schema_name_var, user
 SENSITIVE_KEYS = frozenset({"password", "otp", "token", "secret", "card", "pin", "authorization"})
 _SEGMENT_SPLIT = re.compile(r"[_\-.]")
 REDACTED = "[REDACTED]"
+# Celery tasks whose arguments are secret (phone numbers, OTP codes). Celery's trace and
+# worker loggers attach the task context as ``extra={"data": {...}}``, args included.
+SECRET_ARG_TASKS = frozenset({"apps.core.sms.deliver_sms"})
+_TASK_ARG_KEYS = ("args", "kwargs", "argsrepr", "kwargsrepr")
 
 _STANDARD_ATTRS = frozenset(
     logging.LogRecord("", 0, "", 0, "", None, None).__dict__.keys() | {"message", "asctime"}
@@ -42,4 +46,11 @@ class RedactFilter(logging.Filter):
                 continue
             if is_sensitive_key(key):
                 setattr(record, key, REDACTED)
+        data = getattr(record, "data", None)
+        if isinstance(data, dict) and data.get("name") in SECRET_ARG_TASKS:
+            # A copy: the same dict is Celery's message context and may be reused elsewhere.
+            redacted = {k: (REDACTED if k in _TASK_ARG_KEYS else v) for k, v in data.items()}
+            record.data = redacted
+            if record.args is data:  # trace logs pass the context as the %-format args too
+                record.args = redacted
         return True

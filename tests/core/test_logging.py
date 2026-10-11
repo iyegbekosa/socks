@@ -151,3 +151,49 @@ def test_redact_filter_keeps_innocent_keys():
     RedactFilter().filter(record)
     assert record.shipping == "lagos"
     assert record.api_token == "[REDACTED]"
+
+
+@pytest.mark.usefixtures("_restore_root_logging")
+def test_celery_trace_record_for_deliver_sms_is_redacted():
+    """Celery's trace logger passes the task context as ``extra={"data": ...}``; the JSON
+    formatter would print its args (phone + OTP) unless redacted."""
+    import io
+    import logging.config
+
+    from celery.app.trace import LOG_SUCCESS
+    from django.conf import settings
+
+    logging.config.dictConfig(settings.LOGGING)
+    (handler,) = [h for h in logging.getLogger().handlers if isinstance(h.formatter, JsonFormatter)]
+    stream = io.StringIO()
+    handler.setStream(stream)
+    context = {
+        "id": "abc",
+        "name": "apps.core.sms.deliver_sms",
+        "args": "['+2348031234567', 'School A: your password reset code is 123456.']",
+        "kwargs": "{'to': '+2348031234567'}",
+        "argsrepr": "['+2348031234567', '123456']",
+        "kwargsrepr": "{}",
+        "return_value": "None",
+        "runtime": 0.01,
+    }
+    record = logging.getLogger("celery.app.trace").makeRecord(
+        "celery.app.trace", logging.INFO, "trace.py", 1, LOG_SUCCESS, context, None,
+        extra={"data": context},
+    )  # fmt: skip
+    handler.handle(record)
+    out = stream.getvalue()
+    assert "deliver_sms" in out and "succeeded" in out
+    for secret in ("123456", "8031234567", "2348031234567"):
+        assert secret not in out
+    assert json.loads(out)["data"]["args"] == "[REDACTED]"
+    assert context["args"].startswith("['+234")  # the caller's dict is not mutated
+
+
+def test_other_tasks_keep_their_args():
+    record = logging.getLogger("celery.app.trace").makeRecord(
+        "celery.app.trace", logging.INFO, "f", 1, "m", None, None,
+        extra={"data": {"name": "tenancy.provision_school", "args": "(7,)"}},
+    )  # fmt: skip
+    RedactFilter().filter(record)
+    assert record.data["args"] == "(7,)"
