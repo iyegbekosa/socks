@@ -52,6 +52,7 @@ SHOW_PUBLIC_IF_NO_TENANT_FOUND = True
 
 MIDDLEWARE = [
     "apps.tenancy.middleware.HostTenantMiddleware",
+    "apps.core.request_id.RequestContextMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -111,3 +112,49 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+REST_FRAMEWORK = {
+    "EXCEPTION_HANDLER": "apps.core.errors.api_exception_handler",
+}
+
+LOG_LEVEL = env("LOG_LEVEL", default="INFO")
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "filters": {
+        "context": {"()": "apps.core.logging.ContextFilter"},
+        "redact": {"()": "apps.core.logging.RedactFilter"},
+    },
+    "formatters": {
+        "json": {
+            "()": "apps.core.logging.JsonFormatter",
+            "format": (
+                "%(asctime)s %(levelname)s %(name)s %(message)s "
+                "%(request_id)s %(schema)s %(user_id)s %(role)s"
+            ),
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "json",
+            "filters": ["context", "redact"],
+        },
+    },
+    "root": {"handlers": ["console"], "level": LOG_LEVEL},
+}
+
+
+def _sentry_before_send(event, hint):
+    from apps.core.request_id import request_id_var, schema_name_var
+
+    tags = event.setdefault("tags", {})
+    tags["schema"] = schema_name_var.get()
+    tags["request_id"] = request_id_var.get()
+    return event
+
+
+if SENTRY_DSN:
+    import sentry_sdk
+
+    sentry_sdk.init(dsn=SENTRY_DSN, send_default_pii=False, before_send=_sentry_before_send)

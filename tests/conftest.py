@@ -57,5 +57,7 @@ def _reset_schema_to_public():
     """Middleware under test switches the shared connection; undo it after each test."""
     yield
     from django.db import connection
+    from django.urls import set_urlconf
 
     connection.set_schema_to_public()
+    set_urlconf(None)
