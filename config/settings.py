@@ -148,6 +148,20 @@ if not REDIS_URL:
 
 # Dotted path of the SMS backend. Console in development; unset in production until the
 # real provider lands (P5), when send_sms raises ImproperlyConfigured.
+# Staff invite links expire after 72 hours (also the password-reset token lifetime).
+PASSWORD_RESET_TIMEOUT = 259200
+
+if DEBUG:
+    EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
+else:
+    EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
+EMAIL_HOST = env("EMAIL_HOST", default="localhost")
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@build2learn.local")
+
 SMS_BACKEND = env("SMS_BACKEND", default="apps.core.sms.ConsoleSmsBackend" if DEBUG else None)
 
 AUTH_PASSWORD_VALIDATORS = [

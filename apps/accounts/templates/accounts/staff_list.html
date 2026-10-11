@@ -1,0 +1,17 @@
+{% extends "core/base.html" %}
+{% block title %}Staff{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Staff</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  <p><a class="button" href="{% url 'staff:invite' %}">Invite staff</a></p>
+  <ul class="plain">
+  {% for row in rows %}
+    <li>
+      <a href="{% url 'staff:edit' row.user.pk %}">{{ row.user.get_full_name|default:row.user.email }}</a>
+      <span class="muted">{{ row.roles|join:", "|default:"No roles" }}{% if not row.user.is_active %} · deactivated{% elif row.pending %} · invite pending{% endif %}</span>
+    </li>
+  {% endfor %}
+  </ul>
+</div>
+{% endblock %}

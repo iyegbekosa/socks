@@ -1,12 +1,22 @@
 import hashlib
 import hmac
 import secrets
+from collections.abc import Iterable
 
 from django.conf import settings
+from django.contrib.auth.models import Group
+from django.contrib.auth.tokens import default_token_generator
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
+from django.core.mail import send_mail
+from django.db import connection, transaction
+from django.template.loader import render_to_string
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 
 from apps.accounts.identifiers import classify_identifier
 from apps.accounts.models import User
+from apps.accounts.roles import SCHOOL_ADMIN, set_roles
 
 
 def create_student_user(
@@ -103,3 +113,151 @@ def find_user_by_identifier(raw: str) -> User | None:
     else:
         qs = qs.filter(kind="student", admission_number=value)
     return qs.first()
+
+
+# --- Staff invites and management -------------------------------------------------
+
+
+def invite_link(user: User, base_url: str) -> str:
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = default_token_generator.make_token(user)
+    return f"{base_url.rstrip('/')}/accounts/invite/{uid}/{token}/"
+
+
+def _send_invite_on_commit(user: User, base_url: str) -> None:
+    """Queue the invite email/SMS for after the surrounding transaction commits."""
+    from apps.core.sms import send_sms, sms_configured
+
+    school_name = connection.tenant.name  # type: ignore[attr-defined]
+    link = invite_link(user, base_url)
+    email, phone = user.email, user.phone
+
+    def _send() -> None:
+        if email:
+            send_mail(
+                render_to_string(
+                    "accounts/email/invite_subject.txt", {"school_name": school_name}
+                ).strip(),
+                render_to_string(
+                    "accounts/email/invite_body.txt",
+                    {"school_name": school_name, "link": link, "name": user.first_name},
+                ),
+                None,
+                [email],
+            )
+        if phone and sms_configured():
+            send_sms(
+                phone,
+                f"{school_name}: you've been invited to the staff portal. "
+                f"Set your password: {link}",
+            )
+
+    transaction.on_commit(_send)
+
+
+def invite_staff(
+    *,
+    full_name: str,
+    email: str | None,
+    phone: str | None,
+    roles: Iterable[str],
+    by: User | None,
+    base_url: str,
+    request=None,
+) -> User:
+    from apps.audit.services import record
+
+    email = (email or "").strip().lower()
+    phone = (phone or "").strip() or None
+    if not email and not phone:
+        raise ValidationError("An email address or a phone number is required.")
+    first, _, last = full_name.strip().partition(" ")
+    user = User(
+        kind=User.Kind.STAFF,
+        first_name=first,
+        last_name=last.strip(),
+        email=email,
+        phone=phone,
+    )
+    user.set_unusable_password()
+    user._normalise()  # canonical phone/email; invalid phones raise ValidationError
+    roles = sorted(set(roles))
+    errors = {}
+    clash = User.objects.filter(kind=User.Kind.STAFF)
+    if user.email and clash.filter(email=user.email).exists():
+        errors["email"] = "A staff member with this email already exists."
+    if user.phone and clash.filter(phone=user.phone).exists():
+        errors["phone"] = "A staff member with this phone number already exists."
+    if errors:
+        raise ValidationError(errors)
+    user.full_clean(exclude=["password"], validate_constraints=True)
+    with transaction.atomic():
+        user.save()
+        set_roles(user, roles, by=by, request=request)
+        record(
+            "user.invited",
+            request=request,
+            actor=by,
+            obj=user,
+            after={"roles": roles},
+        )
+        _send_invite_on_commit(user, base_url)
+    return user
+
+
+def resend_invite(user: User, *, by: User, base_url: str, request=None) -> None:
+    from apps.audit.services import record
+
+    if user.kind != User.Kind.STAFF or not user.is_active or user.has_usable_password():
+        raise ValidationError("An invite can only be resent while the password is not set.")
+    with transaction.atomic():
+        record("user.invited", request=request, actor=by, obj=user, after={"resent": True})
+        _send_invite_on_commit(user, base_url)
+
+
+def _lock_admins() -> list[int]:
+    """Serialise admin-count changes: lock the role's group row, then the admin rows."""
+    Group.objects.select_for_update().get_or_create(name=SCHOOL_ADMIN)
+    return list(
+        User.objects.select_for_update(of=("self",))
+        .filter(is_active=True, kind=User.Kind.STAFF, groups__name=SCHOOL_ADMIN)
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    )
+
+
+def update_staff_roles(user: User, roles: Iterable[str], *, by: User, request=None) -> None:
+    wanted = set(roles)
+    with transaction.atomic():
+        admins = _lock_admins()
+        if SCHOOL_ADMIN not in wanted and user.pk in admins and len(admins) <= 1:
+            raise ValidationError(
+                "This is the last active school administrator. Make someone else an "
+                "administrator first."
+            )
+        set_roles(user, wanted, by=by, request=request)
+
+
+def deactivate_staff(user: User, *, by: User, request=None) -> None:
+    from apps.audit.services import record
+
+    if user.pk == by.pk:
+        raise ValidationError("You cannot deactivate yourself.")
+    with transaction.atomic():
+        admins = _lock_admins()
+        if user.pk in admins and len(admins) <= 1:
+            raise ValidationError(
+                "This is the last active school administrator and cannot be deactivated."
+            )
+        user.is_active = False
+        user.save(update_fields=["is_active"])
+        record("user.deactivated", request=request, actor=by, obj=user)
+
+
+def reactivate_staff(user: User, *, by: User, request=None) -> None:
+    from apps.audit.services import record
+
+    with transaction.atomic():
+        user.is_active = True
+        user.save(update_fields=["is_active"])
+        record("user.reactivated", request=request, actor=by, obj=user)

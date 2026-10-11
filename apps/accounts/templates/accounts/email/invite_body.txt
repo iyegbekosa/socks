@@ -1,0 +1,9 @@
+{% autoescape off %}Hello{% if name %} {{ name }}{% endif %},
+
+You've been invited to the {{ school_name }} staff portal.
+
+Set your password here (the link works for 72 hours):
+{{ link }}
+
+If you weren't expecting this, you can ignore this email.
+{% endautoescape %}

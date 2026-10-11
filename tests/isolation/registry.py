@@ -24,7 +24,15 @@ class IsolationCase:
     body: dict | None = None
 
 
-ISOLATION_CASES: list[IsolationCase] = []
+def _student_in_active_schema():
+    from tests.accounts.factories import StudentFactory
+
+    return StudentFactory.create()
+
+
+ISOLATION_CASES: list[IsolationCase] = [
+    IsolationCase("api:me", "GET", url=lambda u: "/api/v1/me", make_obj=_student_in_active_schema),
+]
 
 # Route names deliberately outside the isolation requirement (no tenant data).
 EXEMPT_ROUTES: set[str] = {"healthz"}

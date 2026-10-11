@@ -43,6 +43,17 @@ def test_every_tenant_api_route_is_registered():
     )
 
 
+def test_tenant_api_has_routes():
+    """Sentinel: an empty api/v1/ tree would make the guard vacuous."""
+    from django.urls import get_resolver
+
+    from tests.isolation.registry import API_PREFIX, _walk
+
+    routes = [r for r, _n, _m in _walk(get_resolver("config.urls_tenant").url_patterns)]
+    assert any(r.startswith(API_PREFIX) for r in routes)
+    assert ("api:me", "GET") in {(c.name, c.method) for c in ISOLATION_CASES}
+
+
 def test_guard_reports_unregistered_and_unnamed_routes():
     missing = unregistered_api_routes(
         "tests.isolation.urlconf_unregistered", registered={("registered-route", "GET")}

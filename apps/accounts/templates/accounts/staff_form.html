@@ -1,0 +1,58 @@
+{% extends "core/base.html" %}
+{% block title %}{% if invite %}Invite staff{% else %}Edit staff{% endif %}{% endblock %}
+{% block content %}
+<div class="card">
+{% if invite %}
+  <h1>Invite staff</h1>
+  <form method="post" action="{% url 'staff:invite' %}">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    <label for="id_full_name">Full name</label>
+    {{ form.full_name }}
+    {% for e in form.full_name.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    <label for="id_email">Email</label>
+    {{ form.email }}
+    {% for e in form.email.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    <label for="id_phone">Phone</label>
+    {{ form.phone }}
+    {% for e in form.phone.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    <fieldset><legend>Roles</legend>{{ form.roles }}</fieldset>
+    <button type="submit">Send invite</button>
+  </form>
+{% else %}
+  <h1>{{ target.get_full_name|default:target.email }}</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% for e in errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+  <p class="muted">{{ target.email }}{% if target.email and target.phone %} · {% endif %}{{ target.phone|default:"" }}{% if not target.is_active %} · deactivated{% elif pending %} · invite pending{% endif %}</p>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="roles">
+    <fieldset><legend>Roles</legend>{{ roles_form.roles }}</fieldset>
+    <button type="submit">Save roles</button>
+  </form>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="reset_mfa">
+    <button type="submit">Reset two-factor</button>
+  </form>
+  {% if pending and target.is_active %}
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="resend">
+    <button type="submit">Resend invite</button>
+  </form>
+  {% endif %}
+  <form method="post">
+    {% csrf_token %}
+    {% if target.is_active %}
+    <input type="hidden" name="action" value="deactivate">
+    <button type="submit">Deactivate account</button>
+    {% else %}
+    <input type="hidden" name="action" value="reactivate">
+    <button type="submit">Reactivate account</button>
+    {% endif %}
+  </form>
+{% endif %}
+  <p><a href="{% url 'staff:list' %}">Back to staff</a></p>
+</div>
+{% endblock %}

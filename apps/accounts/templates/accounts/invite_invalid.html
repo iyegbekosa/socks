@@ -1,0 +1,9 @@
+{% extends "core/base.html" %}
+{% block title %}Invalid link{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>This link is invalid or has expired</h1>
+  <p>Invite links work once and expire after 72 hours. Ask your school administrator to send a new invite.</p>
+  <p><a href="{% url 'accounts:login' %}">Go to log in</a></p>
+</div>
+{% endblock %}
