@@ -117,6 +117,8 @@ def test_invalid_colour(client_a, upload):
     "name,content",
     [
         ("a.gif", png_bytes("GIF")),
+        ("a.png", png_bytes("GIF")),
+        ("a.png", png_bytes("JPEG")),
         ("a.png", b"x" * 1_048_577),
         ("a.png", b"not an image"),
     ],
@@ -182,3 +184,52 @@ def test_public_host_renders_with_no_branding(client_a):
     r = Client(HTTP_HOST="localhost").get("/")
     assert r.status_code == 200
     assert r.context["branding"] is None
+
+
+def test_trailing_junk_is_stripped(client_a, upload):
+    admin(client_a)
+    r = post(client_a, logo=SimpleUploadedFile("a.png", png_bytes() + b"JUNKJUNK" * 128))
+    assert r.status_code == 302
+    sent = upload.call_args.args[0]
+    assert b"JUNKJUNK" not in sent
+    assert Image.open(io.BytesIO(sent)).format == "PNG"
+
+
+def test_replaced_logo_is_deleted(client_a, upload, django_capture_on_commit_callbacks):
+    from apps.files.models import StoredFile
+
+    admin(client_a)
+    with django_capture_on_commit_callbacks(execute=True):
+        post(client_a, logo=SimpleUploadedFile("a.png", png_bytes()))
+    with schema_context("school_a"):
+        old = Branding.objects.get(pk=1).logo.name
+        assert StoredFile.objects.filter(name=old).exists()
+    with mock.patch("cloudinary.uploader.destroy") as destroy:
+        with django_capture_on_commit_callbacks(execute=True):
+            post(client_a, logo=SimpleUploadedFile("b.png", png_bytes("PNG")))
+    with schema_context("school_a"):
+        assert Branding.objects.get(pk=1).logo.name != old
+        assert not StoredFile.objects.filter(name=old).exists()
+    assert destroy.call_args.args[0] == "dev/school_a/" + old.removesuffix(".png")
+
+
+def test_logo_only_change_refreshes_cache(client_a, upload, django_capture_on_commit_callbacks):
+    admin(client_a)
+    with schema_context("school_a"):
+        assert get_branding().logo_url is None
+    with django_capture_on_commit_callbacks(execute=True):
+        post(client_a, logo=SimpleUploadedFile("a.png", png_bytes()))
+    with schema_context("school_a"):
+        assert get_branding().logo_url is not None
+
+
+def test_cache_is_per_school(school_b):
+    with schema_context("school_a"):
+        b = get_branding()
+        b.motto = "Only A"
+        b.save()
+        assert get_branding().motto == "Only A"
+    with schema_context("school_b"):
+        assert get_branding().motto == ""
+        Branding.objects.all().delete()
+        cache.clear()

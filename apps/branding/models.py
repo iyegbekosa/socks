@@ -1,7 +1,7 @@
 from django.core.cache import cache
 from django.core.files.storage import storages
 from django.core.validators import RegexValidator
-from django.db import models
+from django.db import models, transaction
 
 from apps.core.storage import unique_upload_name
 
@@ -37,6 +37,7 @@ class Branding(models.Model):
         self.pk = 1
         super().save(*args, **kwargs)
         cache.delete(CACHE_KEY)
+        transaction.on_commit(lambda: cache.delete(CACHE_KEY))
 
     @property
     def logo_url(self) -> str | None:

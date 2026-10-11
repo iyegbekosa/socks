@@ -1,14 +1,25 @@
+import io
 import os
 
 from django import forms
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import transaction
 from PIL import Image, UnidentifiedImageError
 
-from apps.branding.models import COLOR_VALIDATOR, Branding
+from apps.branding.models import COLOR_VALIDATOR, Branding, public_storage
 from apps.tenancy.limits import PlanLimitExceeded
 
 MAX_LOGO_BYTES = 1_048_576
-LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+EXT_FORMATS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
+LOGO_EXTENSIONS = set(EXT_FORMATS)
+_IMAGE_ERRORS = (
+    UnidentifiedImageError,
+    OSError,
+    SyntaxError,
+    ValueError,
+    Image.DecompressionBombError,
+    Image.DecompressionBombWarning,
+)
 
 
 class BrandingForm(forms.ModelForm):
@@ -29,20 +40,42 @@ class BrandingForm(forms.ModelForm):
             raise forms.ValidationError("Logo must be a .png, .jpg, .jpeg or .webp file.")
         if logo.size > MAX_LOGO_BYTES:
             raise forms.ValidationError("Logo must be 1 MB or smaller.")
+        logo.seek(0)
+        raw = logo.read()
+        logo.seek(0)
+        expected = EXT_FORMATS[ext]
         try:
-            logo.seek(0)
-            Image.open(logo).verify()
-        except (UnidentifiedImageError, OSError, SyntaxError, ValueError):
+            Image.open(io.BytesIO(raw)).verify()
+            img = Image.open(io.BytesIO(raw))
+            if img.format != expected:
+                raise forms.ValidationError("The file content does not match its extension.")
+            img.load()
+            clean = io.BytesIO()
+            options = {"quality": 90} if expected in ("JPEG", "WEBP") else {}
+            # Re-encode from pixels only: drops metadata and any trailing/embedded payload.
+            fresh = img.copy()
+            fresh.info = {k: v for k, v in img.info.items() if k == "transparency"}
+            fresh.save(clean, expected, **options)
+        except forms.ValidationError:
+            raise
+        except _IMAGE_ERRORS:
             raise forms.ValidationError("That file is not a valid image.") from None
-        finally:
-            logo.seek(0)
-        return logo
+        data = clean.getvalue()
+        if len(data) > MAX_LOGO_BYTES:
+            raise forms.ValidationError("Logo must be 1 MB or smaller.")
+        return SimpleUploadedFile(logo.name, data, content_type=logo.content_type)
 
     def save_with_quota(self):
         """Save, turning a storage-quota failure into a form error. Returns the instance or None."""
+        old_name = Branding.objects.filter(pk=1).values_list("logo", flat=True).first() or ""
         try:
             with transaction.atomic():  # savepoint, so a quota failure leaves the txn usable
-                return self.save()
+                instance = self.save()
+                new_name = instance.logo.name or ""
+                if old_name and old_name != new_name:
+                    storage = public_storage()
+                    transaction.on_commit(lambda: storage.delete(old_name))
+                return instance
         except PlanLimitExceeded as exc:
             self.add_error("logo", exc.message)
             return None

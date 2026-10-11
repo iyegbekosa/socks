@@ -233,3 +233,18 @@ def test_public_storage_records_upload_type(school_a, upload):
     with schema_context("school_a"):
         storages["public"].save("branding/logo.png", ContentFile(b"png"))
         assert StoredFile.objects.get(name="branding/logo.png").delivery_type == "upload"
+
+
+def test_image_url_full(school_a):
+    with schema_context("school_a"):
+        url = storages["public"].image_url("branding/abc.png", width=240)
+    expected = cloudinary.CloudinaryImage("dev/school_a/branding/abc").build_url(
+        type="upload",
+        secure=True,
+        transformation=[{"width": 240, "crop": "limit", "fetch_format": "auto", "quality": "auto"}],
+    )
+    assert url == expected
+    assert (
+        url
+        == "https://res.cloudinary.com/test/image/upload/c_limit,f_auto,q_auto,w_240/v1/dev/school_a/branding/abc"
+    )
