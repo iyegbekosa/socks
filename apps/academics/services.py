@@ -8,6 +8,7 @@ from django.db import connection, transaction
 from django.db.models import ProtectedError, RestrictedError
 from django.utils import timezone
 from django.utils.text import slugify
+from django_tenants.utils import get_tenant_model
 
 from apps.academics.models import (
     PREFIX_RE,
@@ -403,6 +404,11 @@ def default_prefix() -> str:
     """Initials of the current school's name, letters only, at most 8 characters."""
     tenant = getattr(connection, "tenant", None)
     name = getattr(tenant, "name", "") or ""
+    if not name:
+        # Celery TenantTask and schema_context use a FakeTenant with no name: look the school up.
+        schema = getattr(connection, "schema_name", None)
+        school = get_tenant_model().objects.filter(schema_name=schema).first() if schema else None
+        name = getattr(school, "name", "") or ""
     initials = "".join(
         ch for word in name.split() for ch in word[:1] if ch.isalpha() and ch.isascii()
     )
@@ -414,6 +420,16 @@ def get_academic_settings() -> AcademicSettings:
     if not obj.admission_prefix:
         obj.admission_prefix = default_prefix()
         obj.save(update_fields=["admission_prefix"])
+    return obj
+
+
+def academic_settings_or_defaults() -> AcademicSettings:
+    """Read-only view of the settings: an unsaved instance with defaults if no row exists."""
+    obj = AcademicSettings.objects.filter(pk=1).first()
+    if obj is None:
+        obj = AcademicSettings(pk=1)
+    if not obj.admission_prefix:
+        obj.admission_prefix = default_prefix()
     return obj
 
 
@@ -434,6 +450,29 @@ def validate_admission_prefix(prefix: str) -> None:
         raise ValidationError({"admission_prefix": "Use 1 to 8 capital letters, A to Z only."})
 
 
+def _check_phone_safe(pattern: str, fail) -> None:
+    """Reject patterns that can render a phone-shaped number at some sequence value.
+
+    A letter (literal or {PREFIX}) or a "/" makes a number unparseable as a phone. Otherwise
+    the result can be all digits, so its start must be fixed text (not {SEQ}) that cannot
+    begin a Nigerian number (0..., 234...).
+    """
+    if "{PREFIX}" in pattern or re.search(r"[A-Z/]", _TOKEN_RE.sub("", pattern)):
+        return
+    fixed = ""
+    for part in re.split(r"(\{[^}]*\})", pattern):
+        if part.startswith("{SEQ"):
+            break
+        fixed += "2026" if part == "{YEAR}" else part.replace("-", "")
+    if len(fixed) < 3:
+        raise fail(
+            "Start the pattern with a prefix, letters, or at least three fixed digits "
+            "(such as {YEAR}) so numbers cannot look like phone numbers."
+        )
+    if fixed.startswith(("0", "234")):
+        raise fail("Admission numbers must not start with 0 or 234; they could look like phones.")
+
+
 def validate_admission_pattern(pattern: str, prefix: str) -> None:
     def fail(msg: str) -> ValidationError:
         return ValidationError({"admission_pattern": msg})
@@ -447,6 +486,7 @@ def validate_admission_pattern(pattern: str, prefix: str) -> None:
     literal = _TOKEN_RE.sub("", pattern)
     if not _LITERAL_RE.match(literal):
         raise fail("Use only capital letters, digits, / and -, plus {PREFIX}, {YEAR} and {SEQ:n}.")
+    _check_phone_safe(pattern, fail)
     sample = render_admission_number(pattern, prefix, 2026, 1)
     if len(sample) > ADMISSION_MAX_LEN:
         raise fail(f"Admission numbers can be at most {ADMISSION_MAX_LEN} characters long.")
@@ -497,8 +537,8 @@ def next_admission_number(year: int) -> str:
 
 
 def preview_next_admission_number(year: int) -> str:
-    """Sample of the next number. Never touches the counter."""
-    conf = get_academic_settings()
+    """Sample of the next number. Writes nothing: neither counter nor settings row."""
+    conf = academic_settings_or_defaults()
     counter = AdmissionCounter.objects.filter(year=year).first()
     return render_admission_number(
         conf.admission_pattern, conf.admission_prefix, year, (counter.last if counter else 0) + 1

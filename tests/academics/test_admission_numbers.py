@@ -2,6 +2,7 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.urls import reverse
+from django.utils import timezone
 from django_tenants.utils import schema_context, tenant_context
 
 from apps.academics.models import AcademicSettings, AdmissionCounter
@@ -10,6 +11,7 @@ from apps.academics.services import (
     get_academic_settings,
     next_admission_number,
     preview_next_admission_number,
+    render_admission_number,
     update_admission_settings,
     validate_admission_pattern,
     validate_manual_admission_number,
@@ -142,6 +144,22 @@ def test_bad_patterns_rejected(pattern):
         validate_admission_pattern(pattern.upper(), "GFS")
 
 
+@pytest.mark.parametrize(
+    "pattern", ["{YEAR}{SEQ:6}", "GFS/{YEAR}/{SEQ:4}", "{PREFIX}{SEQ:5}", "{YEAR}-{SEQ:4}"]
+)
+def test_good_patterns_never_phone_shaped(pattern):
+    validate_admission_pattern(pattern, "GFS")
+    seqs = [*range(1, 10**6, 997), 9, 10, 99, 100, 999, 1000, 9999, 10000, 99999, 100000, 999999]
+    for year in range(2020, 2041):
+        for seq in seqs:
+            assert not looks_like_phone(render_admission_number(pattern, "GFS", year, seq))
+
+
+def test_default_prefix_under_bare_schema_context(school_a):
+    with schema_context("school_a"):
+        assert get_academic_settings().admission_prefix == "SA"
+
+
 def test_overlong_pattern_rejected():
     with pytest.raises(ValidationError):
         validate_admission_pattern("A" * 30 + "{SEQ:4}", "GFS")
@@ -150,21 +168,20 @@ def test_overlong_pattern_rejected():
 def test_bad_prefix_rejected(school_a):
     with schema_context("school_a"):
         for bad in ["", "gfs1", "ABCDEFGHI", "G-S"]:
-            if bad == "":
-                continue
             with pytest.raises(ValidationError):
                 configure(prefix=bad)
 
 
-def test_runtime_overflow_into_phone_or_length(school_a):
+def test_runtime_phone_shaped_result_refused(school_a):
+    # A legacy pattern saved without validation; the runtime guard must still refuse it.
     with schema_context("school_a"), transaction.atomic():
-        configure(pattern="0803{SEQ:3}")  # 0803001 is not phone-shaped
-        counter = AdmissionCounter.objects.create(year=2026, last=999_9999)
-        # 0803 + 8 digits = 12 chars: still not valid phone; make one that is: 0803 + 7 digits
-        counter.last = 1_234_566
-        counter.save()
+        AcademicSettings.objects.create(
+            pk=1, admission_prefix="GFS", admission_pattern="0803{SEQ:3}"
+        )
+        AdmissionCounter.objects.create(year=2026, last=1_234_566)
         with pytest.raises(ValidationError):
-            next_admission_number(2026)  # renders 08031234567
+            next_admission_number(2026)  # would render 08031234567
+        assert AdmissionCounter.objects.get(year=2026).last == 1_234_566
 
 
 def test_runtime_overflow_too_long(school_a):
@@ -189,7 +206,10 @@ def test_settings_page_admin_edit_and_audit(client_a, admin_user):
     url = reverse("academics:settings")
     resp = client_a.get(url)
     assert resp.status_code == 200
-    assert b"/2026/" in resp.content or b"/20" in resp.content
+    year = timezone.localdate().year
+    assert f"SA/{year}/0001".encode() in resp.content
+    with schema_context("school_a"):
+        assert not AcademicSettings.objects.exists()  # GET must not create the row
     resp = client_a.post(url, {"admission_prefix": "gfs", "admission_pattern": "{PREFIX}-{SEQ:5}"})
     assert resp.status_code == 302
     with schema_context("school_a"):
@@ -209,7 +229,7 @@ def test_settings_page_rejects_phone_pattern(client_a, admin_user):
         {"admission_prefix": "GFS", "admission_pattern": "08031{SEQ:6}"},
     )
     assert resp.status_code == 200
-    assert b"phone number" in resp.content
+    assert b"look like phone" in resp.content
 
 
 @pytest.mark.parametrize("role", ["proprietor", "principal"])

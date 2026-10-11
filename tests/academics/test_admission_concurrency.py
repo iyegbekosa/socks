@@ -72,11 +72,12 @@ def test_two_threads_get_distinct_numbers(conc_schema, django_db_blocker):
         finally:
             connections.close_all()
 
-    threads = [threading.Thread(target=worker) for _ in range(2)]
+    threads = [threading.Thread(target=worker, daemon=True) for _ in range(2)]
     for t in threads:
         t.start()
     for t in threads:
         t.join(timeout=60)
+    assert not any(t.is_alive() for t in threads), "worker thread hung"
     assert not errors, errors
     assert len(results) == 40
     assert len(set(results)) == 40

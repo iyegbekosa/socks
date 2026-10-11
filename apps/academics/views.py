@@ -24,13 +24,13 @@ from apps.academics.models import (
     Term,
 )
 from apps.academics.services import (
+    academic_settings_or_defaults,
     academic_write_lock,
     assign_form_teacher,
     assign_offering,
     current_session,
     delete_arm,
     delete_subject,
-    get_academic_settings,
     preview_next_admission_number,
     remove_form_teacher,
     set_current_term,
@@ -328,7 +328,7 @@ def settings_page(request):
         if form.is_valid() and _save(request, form, lambda c: "Admission number settings saved."):
             return redirect("academics:settings")
     else:
-        conf = get_academic_settings()
+        conf = academic_settings_or_defaults()
         form = AdmissionSettingsForm(
             initial={
                 "admission_prefix": conf.admission_prefix,
