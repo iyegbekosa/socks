@@ -44,3 +44,4 @@ select = ["E", "F", "I", "B", "UP", "DJ"]
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings"
 testpaths = ["tests"]
+markers = ["cloudinary: hits the live Cloudinary API (needs CLOUDINARY_URL)"]

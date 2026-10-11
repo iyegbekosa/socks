@@ -1,0 +1,153 @@
+from unittest import mock
+from urllib.parse import unquote
+
+import cloudinary
+import cloudinary.exceptions
+import cloudinary.utils
+import pytest
+from django.conf import settings
+from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage, storages
+from django_tenants.utils import schema_context
+
+from apps.core.storage import NoTenantError, public_id_for, resource_type_for
+
+pytestmark = pytest.mark.django_db
+
+
+@pytest.fixture(autouse=True)
+def _cloudinary_config():
+    old = cloudinary.config().__dict__.copy()
+    cloudinary.config(cloud_name="test", api_key="k", api_secret="s")
+    yield
+    cloudinary.config(**old)
+
+
+@pytest.fixture
+def upload():
+    with mock.patch("cloudinary.uploader.upload", return_value={"public_id": "x"}) as m:
+        yield m
+
+
+def test_settings_define_storages():
+    assert settings.PRIVATE_URL_TTL_SECONDS == 600
+    assert settings.STORAGES["default"]["OPTIONS"] == {"delivery_type": "private"}
+    assert settings.STORAGES["public"]["OPTIONS"] == {"delivery_type": "upload"}
+
+
+def test_resource_type_for():
+    assert resource_type_for("a/b.JPG") == "image"
+    assert resource_type_for("a/b.webp") == "image"
+    assert resource_type_for("a/b.pdf") == "raw"
+
+
+def test_save_prefixes_env_and_schema(school_a, upload):
+    with schema_context("school_a"):
+        name = default_storage.save("report_cards/t1/a.pdf", ContentFile(b"%PDF"))
+    assert name == "report_cards/t1/a.pdf"
+    kwargs = upload.call_args.kwargs
+    assert kwargs["public_id"] == "dev/school_a/report_cards/t1/a.pdf"
+    assert kwargs["resource_type"] == "raw"
+    assert kwargs["type"] == "private"
+    assert kwargs["overwrite"] is True
+
+
+def test_image_drops_extension_and_uses_image_type(school_a, upload):
+    with schema_context("school_a"):
+        name = default_storage.save("photos/x.jpg", ContentFile(b"img"))
+    assert name == "photos/x.jpg"
+    kwargs = upload.call_args.kwargs
+    assert kwargs["public_id"] == "dev/school_a/photos/x"
+    assert kwargs["resource_type"] == "image"
+
+
+def test_private_url_is_signed_and_expires(school_a):
+    with mock.patch("time.time", return_value=1_000_000):
+        with schema_context("school_a"):
+            url = default_storage.url("report_cards/t1/a.pdf")
+        expected = cloudinary.utils.private_download_url(
+            "dev/school_a/report_cards/t1/a.pdf",
+            "",
+            resource_type="raw",
+            type="private",
+            expires_at=1_000_600,
+        )
+    assert url == expected
+
+
+def test_private_image_url_is_signed_and_expires(school_a):
+    with mock.patch("time.time", return_value=1_000_000):
+        with schema_context("school_a"):
+            url = default_storage.url("photos/x.jpg")
+        expected = cloudinary.utils.private_download_url(
+            "dev/school_a/photos/x",
+            "jpg",
+            resource_type="image",
+            type="private",
+            expires_at=1_000_600,
+        )
+    assert url == expected
+
+
+def test_public_url_is_plain_https(school_a):
+    with schema_context("school_a"):
+        url = storages["public"].url("branding/logo.png")
+    assert url.startswith("https://res.cloudinary.com/")
+    assert "/image/upload/" in url
+    assert "dev/school_a/branding/logo" in url
+
+
+def test_same_name_in_other_school_points_to_other_folder(school_a, school_b):
+    with schema_context("school_a"):
+        url_a = unquote(default_storage.url("report_cards/t1/a.pdf"))
+    with schema_context("school_b"):
+        url_b = unquote(default_storage.url("report_cards/t1/a.pdf"))
+    assert "school_a/" in url_a and "school_b/" not in url_a
+    assert "school_b/" in url_b and "school_a/" not in url_b
+
+
+def test_public_schema_refuses_storage(upload):
+    with schema_context("public"):
+        with pytest.raises(NoTenantError):
+            default_storage.save("a/b.pdf", ContentFile(b"x"))
+        with pytest.raises(NoTenantError):
+            default_storage.url("a/b.pdf")
+        with pytest.raises(NoTenantError):
+            default_storage.delete("a/b.pdf")
+        with pytest.raises(NoTenantError):
+            default_storage.exists("a/b.pdf")
+    upload.assert_not_called()
+
+
+def test_unicode_filename_is_slugified(school_a, upload):
+    with schema_context("school_a"):
+        default_storage.save("photos/Adébáyọ̀ photo 1.JPG", ContentFile(b"img"))
+    kwargs = upload.call_args.kwargs
+    assert kwargs["public_id"] == "dev/school_a/photos/adebayo-photo-1"
+    assert kwargs["resource_type"] == "image"
+    assert public_id_for.__name__  # exported
+
+
+def test_exists_false_on_not_found(school_a):
+    with mock.patch("cloudinary.api.resource", side_effect=cloudinary.exceptions.NotFound("x")):
+        with schema_context("school_a"):
+            assert default_storage.exists("a/b.pdf") is False
+
+
+def test_exists_true_and_size(school_a):
+    with mock.patch("cloudinary.api.resource", return_value={"bytes": 42}) as res:
+        with schema_context("school_a"):
+            assert default_storage.exists("a/b.pdf") is True
+            assert default_storage.size("a/b.pdf") == 42
+    assert res.call_args.args[0] == "dev/school_a/a/b.pdf"
+    assert res.call_args.kwargs["resource_type"] == "raw"
+    assert res.call_args.kwargs["type"] == "private"
+
+
+def test_delete_calls_destroy(school_a):
+    with mock.patch("cloudinary.uploader.destroy") as destroy:
+        with schema_context("school_a"):
+            default_storage.delete("photos/x.jpg")
+    assert destroy.call_args.args[0] == "dev/school_a/photos/x"
+    assert destroy.call_args.kwargs["resource_type"] == "image"
+    assert destroy.call_args.kwargs["type"] == "private"

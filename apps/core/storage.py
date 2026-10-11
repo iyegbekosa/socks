@@ -1,0 +1,139 @@
+"""Tenant-scoped Cloudinary storage.
+
+Stored names are relative (``report_cards/2026-1/a.pdf``). The ``{env}/{schema}/`` prefix is
+added on every access from the *current* connection, so a name copied from another school
+resolves inside the current school's folder and can never reach the other school's file.
+"""
+
+import io
+import os
+import time
+import unicodedata
+import urllib.request
+from typing import Literal
+
+import cloudinary
+import cloudinary.api
+import cloudinary.exceptions
+import cloudinary.uploader
+import cloudinary.utils
+from django.conf import settings
+from django.core.files.base import ContentFile
+from django.core.files.storage import Storage
+from django.db import connection
+from django.utils.deconstruct import deconstructible
+from django.utils.text import slugify
+from django_tenants.utils import get_public_schema_name
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+class NoTenantError(RuntimeError):
+    """Raised when storage is used outside a school (e.g. in the public schema)."""
+
+
+def resource_type_for(name: str) -> Literal["image", "raw"]:
+    ext = os.path.splitext(name)[1].lower()
+    return "image" if ext in IMAGE_EXTENSIONS else "raw"
+
+
+def _ascii_slug(text: str) -> str:
+    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    return slugify(folded)
+
+
+def clean_name(name: str) -> str:
+    """Slugify each path segment (ASCII-folded) and lowercase the extension."""
+    segments = [s for s in name.replace("\\", "/").split("/") if s not in ("", ".", "..")]
+    cleaned = []
+    for i, segment in enumerate(segments):
+        if i == len(segments) - 1:
+            stem, ext = os.path.splitext(segment)
+            ext = _ascii_slug(ext.lstrip(".")) if ext else ""
+            segment = (_ascii_slug(stem) or "file") + (f".{ext}" if ext else "")
+        else:
+            segment = _ascii_slug(segment) or "_"
+        cleaned.append(segment)
+    return "/".join(cleaned)
+
+
+def _current_schema() -> str:
+    schema = getattr(connection, "schema_name", None)
+    if not schema or schema == get_public_schema_name():
+        raise NoTenantError("Storage can only be used inside a school (tenant) schema.")
+    return schema
+
+
+def public_id_for(name: str) -> str:
+    path = clean_name(name)
+    if resource_type_for(path) == "image":
+        path = os.path.splitext(path)[0]
+    return f"{settings.CLOUDINARY_ENV_PREFIX}/{_current_schema()}/{path}"
+
+
+@deconstructible
+class TenantCloudinaryStorage(Storage):
+    def __init__(self, delivery_type: Literal["upload", "private"] = "private"):
+        self.delivery_type = delivery_type
+
+    def _target(self, name: str) -> tuple[str, str, str]:
+        """Return (public_id, resource_type, format) for a stored name."""
+        cleaned = clean_name(name)
+        resource_type = resource_type_for(cleaned)
+        fmt = os.path.splitext(cleaned)[1].lstrip(".") if resource_type == "image" else ""
+        return public_id_for(name), resource_type, fmt
+
+    def get_available_name(self, name, max_length=None):
+        return name
+
+    def _save(self, name, content):
+        public_id, resource_type, _ = self._target(name)
+        content.seek(0)
+        cloudinary.uploader.upload(
+            content.read(),
+            public_id=public_id,
+            resource_type=resource_type,
+            type=self.delivery_type,
+            overwrite=True,
+        )
+        return clean_name(name)
+
+    def url(self, name):
+        public_id, resource_type, fmt = self._target(name)
+        if self.delivery_type == "private":
+            expires_at = int(time.time()) + settings.PRIVATE_URL_TTL_SECONDS
+            return cloudinary.utils.private_download_url(
+                public_id,
+                fmt,
+                resource_type=resource_type,
+                type="private",
+                expires_at=expires_at,
+            )
+        options = {"resource_type": resource_type, "type": "upload", "secure": True}
+        if fmt:
+            options["format"] = fmt
+        return cloudinary.utils.cloudinary_url(public_id, **options)[0]
+
+    def _open(self, name, mode="rb"):
+        with urllib.request.urlopen(self.url(name), timeout=30) as resp:  # noqa: S310
+            return ContentFile(io.BytesIO(resp.read()).getvalue(), name=name)
+
+    def delete(self, name):
+        public_id, resource_type, _ = self._target(name)
+        cloudinary.uploader.destroy(public_id, resource_type=resource_type, type=self.delivery_type)
+
+    def _resource(self, name):
+        public_id, resource_type, _ = self._target(name)
+        return cloudinary.api.resource(
+            public_id, resource_type=resource_type, type=self.delivery_type
+        )
+
+    def exists(self, name):
+        try:
+            self._resource(name)
+        except cloudinary.exceptions.NotFound:
+            return False
+        return True
+
+    def size(self, name):
+        return self._resource(name)["bytes"]

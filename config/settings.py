@@ -108,6 +108,22 @@ USE_TZ = True
 DATE_FORMAT = "d/m/Y"
 DATE_INPUT_FORMATS = ["%d/%m/%Y", "%Y-%m-%d"]
 
+PRIVATE_URL_TTL_SECONDS = 600
+
+STORAGES = {
+    # Child-related files: Cloudinary type="private", served via short-lived signed links.
+    "default": {
+        "BACKEND": "apps.core.storage.TenantCloudinaryStorage",
+        "OPTIONS": {"delivery_type": "private"},
+    },
+    # School branding only (logos): plain public delivery.
+    "public": {
+        "BACKEND": "apps.core.storage.TenantCloudinaryStorage",
+        "OPTIONS": {"delivery_type": "upload"},
+    },
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+}
+
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
