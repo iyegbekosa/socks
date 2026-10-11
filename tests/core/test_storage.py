@@ -1,3 +1,4 @@
+import re
 from unittest import mock
 from urllib.parse import unquote
 
@@ -10,7 +11,7 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage, storages
 from django_tenants.utils import schema_context
 
-from apps.core.storage import NoTenantError, public_id_for, resource_type_for
+from apps.core.storage import NoTenantError, resource_type_for, unique_upload_name
 
 pytestmark = pytest.mark.django_db
 
@@ -125,7 +126,6 @@ def test_unicode_filename_is_slugified(school_a, upload):
     kwargs = upload.call_args.kwargs
     assert kwargs["public_id"] == "dev/school_a/photos/adebayo-photo-1"
     assert kwargs["resource_type"] == "image"
-    assert public_id_for.__name__  # exported
 
 
 def test_exists_false_on_not_found(school_a):
@@ -151,3 +151,23 @@ def test_delete_calls_destroy(school_a):
     assert destroy.call_args.args[0] == "dev/school_a/photos/x"
     assert destroy.call_args.kwargs["resource_type"] == "image"
     assert destroy.call_args.kwargs["type"] == "private"
+
+
+def test_non_latin_names_get_distinct_deterministic_ids(school_a, upload):
+    ids = []
+    with schema_context("school_a"):
+        for name in ("photos/张三.jpg", "photos/李四.jpg", "photos/张三.jpg"):
+            default_storage.save(name, ContentFile(b"i"))
+            ids.append(upload.call_args.kwargs["public_id"])
+    assert ids[0] != ids[1]
+    assert ids[0] == ids[2]
+    for public_id in ids:
+        assert re.fullmatch(r"dev/school_a/photos/file-[0-9a-f]{8}", public_id)
+
+
+def test_unique_upload_name():
+    assert unique_upload_name("photos", "a.jpg") != unique_upload_name("photos", "a.jpg")
+    assert re.fullmatch(
+        r"photos/[0-9a-f]{32}\.jpg", unique_upload_name("photos", "Adébáyọ̀ photo 1.JPG")
+    )
+    assert "." not in unique_upload_name("docs", "README")

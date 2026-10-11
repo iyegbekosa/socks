@@ -5,11 +5,12 @@ added on every access from the *current* connection, so a name copied from anoth
 resolves inside the current school's folder and can never reach the other school's file.
 """
 
-import io
+import hashlib
 import os
 import time
 import unicodedata
 import urllib.request
+import uuid
 from typing import Literal
 
 import cloudinary
@@ -42,6 +43,17 @@ def _ascii_slug(text: str) -> str:
     return slugify(folded)
 
 
+def _fallback_stem(original: str) -> str:
+    digest = hashlib.sha256(original.encode("utf-8")).hexdigest()[:8]
+    return f"file-{digest}"
+
+
+def unique_upload_name(folder: str, filename: str) -> str:
+    """Collision-free stored name for user uploads: ``folder/<uuid4 hex><.ext>``."""
+    ext = os.path.splitext(filename)[1].lower()
+    return f"{folder}/{uuid.uuid4().hex}{ext}"
+
+
 def clean_name(name: str) -> str:
     """Slugify each path segment (ASCII-folded) and lowercase the extension."""
     segments = [s for s in name.replace("\\", "/").split("/") if s not in ("", ".", "..")]
@@ -50,9 +62,9 @@ def clean_name(name: str) -> str:
         if i == len(segments) - 1:
             stem, ext = os.path.splitext(segment)
             ext = _ascii_slug(ext.lstrip(".")) if ext else ""
-            segment = (_ascii_slug(stem) or "file") + (f".{ext}" if ext else "")
+            segment = (_ascii_slug(stem) or _fallback_stem(stem)) + (f".{ext}" if ext else "")
         else:
-            segment = _ascii_slug(segment) or "_"
+            segment = _ascii_slug(segment) or _fallback_stem(segment)
         cleaned.append(segment)
     return "/".join(cleaned)
 
@@ -73,6 +85,15 @@ def public_id_for(name: str) -> str:
 
 @deconstructible
 class TenantCloudinaryStorage(Storage):
+    """Cloudinary storage whose public_ids are namespaced by env prefix and current schema.
+
+    Contract:
+    - Names must be unique after cleaning: case, spaces and punctuation are folded, and
+      image extensions are not part of the public_id (``x.jpg`` and ``x.png`` collide).
+    - Callers build names from IDs (or ``unique_upload_name``), never from user-supplied text.
+    - Saving an existing name overwrites it (intended for regenerated PDFs).
+    """
+
     def __init__(self, delivery_type: Literal["upload", "private"] = "private"):
         self.delivery_type = delivery_type
 
@@ -116,7 +137,7 @@ class TenantCloudinaryStorage(Storage):
 
     def _open(self, name, mode="rb"):
         with urllib.request.urlopen(self.url(name), timeout=30) as resp:  # noqa: S310
-            return ContentFile(io.BytesIO(resp.read()).getvalue(), name=name)
+            return ContentFile(resp.read(), name=name)
 
     def delete(self, name):
         public_id, resource_type, _ = self._target(name)
