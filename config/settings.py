@@ -40,9 +40,13 @@ TENANT_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "apps.accounts",
+    "apps.audit",
 ]
 
 INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
+
+# Header carrying the real client IP behind a proxy, e.g. "HTTP_CF_CONNECTING_IP".
+CLIENT_IP_HEADER: str | None = None
 
 AUTH_USER_MODEL = "accounts.User"
 AUTHENTICATION_BACKENDS = ["apps.accounts.backends.IdentifierBackend"]

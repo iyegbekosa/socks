@@ -2,6 +2,7 @@ import re
 import uuid
 from contextvars import ContextVar
 
+from django.conf import settings
 from django.db import connection
 
 REQUEST_ID_HEADER = "X-Request-ID"
@@ -15,6 +16,16 @@ role_var: ContextVar[str] = ContextVar("role", default="-")
 
 def get_request_id() -> str:
     return request_id_var.get()
+
+
+def client_ip(request) -> str | None:
+    header = getattr(settings, "CLIENT_IP_HEADER", None)
+    value = request.META.get(header) if header else None
+    if not value:
+        value = request.META.get("REMOTE_ADDR")
+    if value and "," in value:
+        value = value.split(",")[0]
+    return value.strip() or None if value else None
 
 
 def _new_id() -> str:

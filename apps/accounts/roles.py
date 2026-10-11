@@ -6,9 +6,11 @@ from django.conf import settings
 from django.contrib.auth.models import Group
 from django.contrib.auth.views import redirect_to_login
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
 from rest_framework.permissions import BasePermission
 
 from apps.accounts.models import MFA_REQUIRED_ROLE_NAMES
+from apps.audit.services import record
 
 PROPRIETOR = "proprietor"
 SCHOOL_ADMIN = "school_admin"
@@ -34,13 +36,14 @@ def set_roles(user: Any, roles: Iterable[str], *, by: Any, request: Any = None) 
         raise ValueError(f"Unknown roles: {sorted(unknown)}")
     if user.is_student:
         raise ValidationError("Students cannot hold staff roles.")
-    current = set(user.roles)
-    for name in sorted(wanted - current):
-        user.groups.add(Group.objects.get_or_create(name=name)[0])
-        # audit: Task 4 wires role.added/role.removed here
-    for name in sorted(current - wanted):
-        user.groups.remove(Group.objects.get(name=name))
-        # audit: Task 4 wires role.added/role.removed here
+    with transaction.atomic():
+        current = set(user.roles)
+        for name in sorted(current - wanted):
+            user.groups.remove(Group.objects.get(name=name))
+            record("role.removed", request=request, actor=by, obj=user, before={"role": name})
+        for name in sorted(wanted - current):
+            user.groups.add(Group.objects.get_or_create(name=name)[0])
+            record("role.added", request=request, actor=by, obj=user, after={"role": name})
 
 
 def require_roles(*roles: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
