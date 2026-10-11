@@ -1,5 +1,6 @@
 import pytest
 from django.contrib.auth import authenticate
+from django.contrib.auth.models import update_last_login
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django_tenants.utils import schema_context
@@ -49,8 +50,9 @@ def test_student_cannot_login_by_recovery_phone(school_a):
 
 def test_staff_cannot_login_by_admission_number(school_a):
     with schema_context("school_a"):
-        StaffFactory(admission_number="GFS/2026/0001")
-        assert authenticate(identifier="GFS/2026/0001", password=DEFAULT_PASSWORD) is None
+        StudentFactory(admission_number="GFS/2026/0042", password="Studentpass!1")
+        StaffFactory(password="Staffpass!long1")
+        assert authenticate(identifier="GFS/2026/0042", password="Staffpass!long1") is None
 
 
 def test_wrong_password_and_inactive(school_a):
@@ -90,3 +92,89 @@ def test_create_student_user(school_a):
         assert s.recovery_phone == "+2348031234567"
         assert s.first_name == "Ada" and s.last_name == "Obi Eze"
         assert s.password.startswith("argon2$")
+
+
+def test_create_student_user_spaced_recovery_phone(school_a):
+    with schema_context("school_a"):
+        s = create_student_user(
+            admission_number="GFS/2026/0800",
+            full_name="Ada Eze",
+            recovery_phone="+234 803 123 4567",
+            password=DEFAULT_PASSWORD,
+        )
+        assert s.recovery_phone == "+2348031234567"
+
+
+def test_full_clean_long_formatted_phone(school_a):
+    with schema_context("school_a"):
+        u = StaffFactory.build(phone="+234 (803) 123-4567")
+        u.full_clean(exclude=["password"])
+        assert u.phone == "+2348031234567"
+
+
+def test_same_phone_two_formats_collides(school_a):
+    with schema_context("school_a"):
+        StaffFactory(phone="0803 123 4567")
+        dup = StaffFactory.build(phone="+234 803 123 4567")
+        with pytest.raises(ValidationError):
+            dup.full_clean(exclude=["password"])
+        with pytest.raises(IntegrityError), transaction.atomic():
+            StaffFactory(phone="+2348031234567")
+
+
+def test_invalid_phone_save_raises_validation_error(school_a):
+    with schema_context("school_a"):
+        with pytest.raises(ValidationError):
+            StaffFactory(phone="12345")
+
+
+def test_kind_identifier_rules_full_clean(school_a):
+    with schema_context("school_a"):
+        bad = [
+            StaffFactory.build(admission_number="GFS/1", phone="+2348031230001"),
+            StaffFactory.build(phone=None, email=""),
+            StudentFactory.build(admission_number=None),
+            StudentFactory.build(phone="+2348031230002"),
+            StudentFactory.build(email="s@school.ng"),
+        ]
+        for u in bad:
+            with pytest.raises(ValidationError):
+                u.full_clean(exclude=["password"])
+
+
+def test_kind_identifier_rules_db_level(school_a):
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+    with schema_context("school_a"):
+        rows = [
+            dict(kind="staff", admission_number="GFS/9", phone="+2348031230011"),
+            dict(kind="staff", phone=None, email=""),
+            dict(kind="student", admission_number=None),
+            dict(kind="student", admission_number="GFS/10", phone="+2348031230012"),
+            dict(kind="student", admission_number="GFS/11", email="s@school.ng"),
+        ]
+        for i, row in enumerate(rows):
+            u = User(username=f"u_db{i}", **row)
+            with pytest.raises(IntegrityError), transaction.atomic():
+                super(User, u).save()
+
+
+def test_guardian_phone_does_not_block_staff_invite(school_a):
+    with schema_context("school_a"):
+        StudentFactory(recovery_phone="0803 123 4567")
+        StudentFactory(recovery_phone="0803 123 4567")
+        s = StaffFactory(phone="+2348031234567")
+        assert s.pk
+
+
+def test_update_last_login_does_not_rewrite_identifiers(school_a):
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+    with schema_context("school_a"):
+        u = StaffFactory(phone="+2348031230021")
+        stale = User.objects.get(pk=u.pk)
+        User.objects.filter(pk=u.pk).update(phone="+2348031230022")
+        update_last_login(None, stale)
+        assert User.objects.get(pk=u.pk).phone == "+2348031230022"

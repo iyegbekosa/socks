@@ -24,7 +24,7 @@ def test_school_host_selects_its_schema(school_a):
 def test_custom_user_model_is_active(school_a, school_b):
     assert get_user_model() is User
     with tenant_context(school_a):
-        User.objects.create_user(username="only-in-a", password="x")
+        User.objects.create_user(username="only-in-a", password="x", email="a@a.ng")
         assert User.objects.filter(username="only-in-a").exists()
     with tenant_context(school_b):
         assert not User.objects.filter(username="only-in-a").exists()

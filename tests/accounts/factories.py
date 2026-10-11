@@ -30,6 +30,8 @@ class StudentFactory(factory.django.DjangoModelFactory):
     kind = "student"
     first_name = factory.Faker("first_name")
     last_name = factory.Faker("last_name")
+    email = ""
+    phone = None
     admission_number = factory.Sequence(lambda n: f"GFS/2026/{n:04d}")
     recovery_phone = "+2348031234567"
     password = factory.PostGenerationMethodCall("set_password", DEFAULT_PASSWORD)

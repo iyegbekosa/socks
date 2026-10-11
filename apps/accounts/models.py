@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from uuid import uuid4
 
 from django.contrib.auth.models import AbstractUser
@@ -24,49 +25,63 @@ class User(AbstractUser):
         constraints = [
             models.UniqueConstraint(
                 fields=["email"], condition=~Q(email=""), name="accounts_user_email_unique"
-            )
+            ),
+            models.CheckConstraint(
+                condition=~Q(kind="staff")
+                | (Q(admission_number__isnull=True) & (Q(phone__isnull=False) | ~Q(email=""))),
+                name="accounts_user_staff_identifiers",
+            ),
+            models.CheckConstraint(
+                condition=~Q(kind="student")
+                | (Q(admission_number__isnull=False) & Q(phone__isnull=True) & Q(email="")),
+                name="accounts_user_student_identifiers",
+            ),
         ]
 
-    def _normalise(self) -> None:
-        if not self.username:
-            self.username = f"u_{uuid4().hex[:12]}"
-        self.email = (self.email or "").strip().lower()
-        self.phone = normalise_ng_phone(self.phone) if self.phone else None
-        self.recovery_phone = (
-            normalise_ng_phone(self.recovery_phone) if self.recovery_phone else None
-        )
-        self.admission_number = normalise_admission_number(self.admission_number or "") or None
+    _NORMALISERS = {
+        "email": lambda v: (v or "").strip().lower(),
+        "phone": lambda v: normalise_ng_phone(v) if v else None,
+        "recovery_phone": lambda v: normalise_ng_phone(v) if v else None,
+        "admission_number": lambda v: normalise_admission_number(v or "") or None,
+    }
 
-    def clean_fields(self, exclude=None):  # type: ignore[no-untyped-def]
-        if not self.username:
+    def _normalise(self, only: Iterable[str] | None = None) -> None:
+        """Normalise identifier fields in place. Invalid phones raise ValidationError."""
+        if not self.username and (only is None or "username" in only):
             self.username = f"u_{uuid4().hex[:12]}"
-        super().clean_fields(exclude=exclude)
-
-    def clean(self) -> None:
-        super().clean()
         errors: dict[str, str] = {}
-        for field in ("phone", "recovery_phone"):
-            value = getattr(self, field)
-            if value:
-                try:
-                    normalise_ng_phone(value)
-                except ValueError as exc:
-                    errors[field] = str(exc)
+        for name, fn in self._NORMALISERS.items():
+            if only is not None and name not in only:
+                continue
+            try:
+                setattr(self, name, fn(getattr(self, name)))
+            except ValueError as exc:
+                errors[name] = str(exc)
         if errors:
             raise ValidationError(errors)
-        self._normalise()
+
+    def clean_fields(self, exclude=None):  # type: ignore[no-untyped-def]
+        # Normalise first so max_length and uniqueness see the canonical value.
+        errors: dict[str, list[str]] = {}
+        skip = set(exclude or ())
+        for name in ("username", *self._NORMALISERS):
+            if name in skip:
+                continue
+            try:
+                self._normalise([name])
+            except ValidationError as exc:
+                errors.update(exc.message_dict)
+                skip.add(name)
+        try:
+            super().clean_fields(exclude=skip)
+        except ValidationError as exc:
+            errors.update(exc.message_dict)
+        if errors:
+            raise ValidationError(errors)
 
     def save(self, *args, **kwargs):  # type: ignore[no-untyped-def]
-        self._normalise()
         update_fields = kwargs.get("update_fields")
-        if update_fields is not None:
-            kwargs["update_fields"] = set(update_fields) | {
-                "username",
-                "email",
-                "phone",
-                "recovery_phone",
-                "admission_number",
-            }
+        self._normalise(None if update_fields is None else set(update_fields))
         super().save(*args, **kwargs)
 
     @property

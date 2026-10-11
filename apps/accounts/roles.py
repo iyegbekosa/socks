@@ -27,7 +27,7 @@ def seed_roles(school: Any = None) -> None:
         Group.objects.get_or_create(name=name)
 
 
-def set_roles(user: Any, roles: Iterable[str], *, by: Any = None, request: Any = None) -> None:
+def set_roles(user: Any, roles: Iterable[str], *, by: Any, request: Any = None) -> None:
     wanted = set(roles)
     unknown = wanted - set(STAFF_ROLES)
     if unknown:
