@@ -1,0 +1,20 @@
+{% extends "core/base.html" %}
+{% block title %}Enter code{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Enter your code</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="{% url 'accounts:reset_verify' %}">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    <label for="id_code">{{ form.code.label }}</label>
+    {{ form.code }}{{ form.code.errors }}
+    <label for="id_new_password1">New password</label>
+    {{ form.new_password1 }}{{ form.new_password1.errors }}
+    <label for="id_new_password2">Repeat new password</label>
+    {{ form.new_password2 }}{{ form.new_password2.errors }}
+    <button type="submit">Change password</button>
+  </form>
+</div>
+{% endblock %}

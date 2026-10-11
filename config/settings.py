@@ -146,6 +146,10 @@ if not REDIS_URL:
     CELERY_TASK_ALWAYS_EAGER = True
     CELERY_TASK_EAGER_PROPAGATES = True
 
+# Dotted path of the SMS backend. Console in development; unset in production until the
+# real provider lands (P5), when send_sms raises ImproperlyConfigured.
+SMS_BACKEND = env("SMS_BACKEND", default="apps.core.sms.ConsoleSmsBackend" if DEBUG else None)
+
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},

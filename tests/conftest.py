@@ -66,3 +66,14 @@ def _reset_schema_to_public():
 
     connection.set_schema_to_public()
     set_urlconf(None)
+
+
+@pytest.fixture
+def sms_outbox(settings):
+    """Route SMS to the in-memory outbox and start each test with it empty."""
+    from apps.core import sms
+
+    settings.SMS_BACKEND = "apps.core.sms.LocmemSmsBackend"
+    sms.outbox.clear()
+    yield sms.outbox
+    sms.outbox.clear()

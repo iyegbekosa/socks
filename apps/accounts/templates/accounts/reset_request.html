@@ -1,0 +1,16 @@
+{% extends "core/base.html" %}
+{% block title %}Reset password{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Reset your password</h1>
+  <p>Enter your admission number, email or phone. We will text a code to the registered phone.</p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="{% url 'accounts:reset' %}">
+    {% csrf_token %}
+    <label for="id_identifier">{{ form.identifier.label }}</label>
+    {{ form.identifier }}
+    <button type="submit">Send code</button>
+  </form>
+  <p><a href="{% url 'accounts:login' %}">Back to log in</a></p>
+</div>
+{% endblock %}

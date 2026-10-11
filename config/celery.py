@@ -10,6 +10,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 app = Celery("config")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
+app.autodiscover_tasks(related_name="sms")  # apps/core/sms.py defines deliver_sms
 
 # Declared here so the queue set is explicit; highest priority first (§8.1).
 app.conf.task_queues = (
