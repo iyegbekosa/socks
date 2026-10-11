@@ -1,38 +1,18 @@
-import json
-
 import pytest
-from django_tenants.utils import schema_context
 
 from tests.isolation.registry import (
     EXEMPT_ROUTES,
     ISOLATION_CASES,
+    IsolationCase,
+    assert_cross_school_refused,
     unregistered_api_routes,
 )
 
 
-def _snapshot(obj):
-    obj.refresh_from_db()
-    return {f.attname: getattr(obj, f.attname) for f in obj._meta.concrete_fields}
-
-
-def _request_kwargs(case):
-    if case.method.upper() in {"POST", "PUT", "PATCH"}:
-        return {"data": json.dumps(case.body or {}), "content_type": "application/json"}
-    return {}
-
-
 @pytest.mark.django_db
 @pytest.mark.parametrize("case", ISOLATION_CASES, ids=lambda c: f"{c.name} {c.method.upper()}")
-def test_cross_school_access_is_refused(case, school_b, client_a):
-    with schema_context(school_b.schema_name):
-        obj = case.make_obj()
-        before = _snapshot(obj)
-
-    response = getattr(client_a, case.method.lower())(case.url(obj), **_request_kwargs(case))
-
-    assert response.status_code in {401, 403, 404}
-    with schema_context(school_b.schema_name):
-        assert _snapshot(obj) == before
+def test_cross_school_access_is_refused(case, school_a, school_b, client_a):
+    assert_cross_school_refused(case, school_a, school_b, client_a)
 
 
 def test_every_tenant_api_route_is_registered():
@@ -142,3 +122,65 @@ def test_guard_reads_plain_class_based_view_handlers():
     assert not any(
         m.startswith("gadget-list") and m.split()[1] in {"HEAD", "OPTIONS"} for m in missing
     )
+
+
+# --- the shared check itself, driven through test-only leaky/well-behaved views ---
+
+
+@pytest.fixture
+def leaky_urls(settings):
+    settings.ROOT_URLCONF = "tests.isolation.urlconf_leaky"
+
+
+def _student_in_school_b():
+    from tests.accounts.factories import StudentFactory
+
+    return StudentFactory.create()
+
+
+def _case(name, url, **kw):
+    return IsolationCase(
+        name, "GET", url=lambda o: url.format(pk=o.pk), make_obj=_student_in_school_b, **kw
+    )
+
+
+def _marker(obj):
+    return obj.admission_number
+
+
+def test_absent_case_requires_marker():
+    with pytest.raises(ValueError):
+        _case("x", "/x/", expect="absent")
+
+
+@pytest.mark.django_db
+def test_leaky_detail_is_caught(leaky_urls, school_a, school_b, client_a):
+    case = _case("leaky:detail", "/api/v1/leaky/{pk}/")
+    with pytest.raises(AssertionError):
+        assert_cross_school_refused(case, school_a, school_b, client_a)
+
+
+@pytest.mark.django_db
+def test_safe_detail_passes(leaky_urls, school_a, school_b, client_a):
+    case = _case("safe:detail", "/api/v1/safe/{pk}/")
+    assert_cross_school_refused(case, school_a, school_b, client_a)
+
+
+@pytest.mark.django_db
+def test_leaky_list_is_caught(leaky_urls, school_a, school_b, client_a):
+    case = _case("leaky:list", "/api/v1/leaky/", expect="absent", marker=_marker)
+    with pytest.raises(AssertionError):
+        assert_cross_school_refused(case, school_a, school_b, client_a)
+
+
+@pytest.mark.django_db
+def test_safe_list_passes(leaky_urls, school_a, school_b, client_a):
+    case = _case("safe:list", "/api/v1/safe/", expect="absent", marker=_marker)
+    assert_cross_school_refused(case, school_a, school_b, client_a)
+
+
+@pytest.mark.django_db
+def test_actor_is_really_logged_in(leaky_urls, school_a, school_b, client_a):
+    """The leaky views need a session: an anonymous case against them is refused (not a leak)."""
+    case = _case("leaky:detail", "/api/v1/leaky/{pk}/", actor=None)
+    assert_cross_school_refused(case, school_a, school_b, client_a)
