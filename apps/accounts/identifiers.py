@@ -22,6 +22,15 @@ def normalise_ng_phone(raw: str) -> str:
     return f"+234{match.group(1)}"
 
 
+def looks_like_phone(raw: str) -> bool:
+    """True when login would treat this identifier as a Nigerian phone number."""
+    try:
+        normalise_ng_phone(raw)
+    except ValueError:
+        return False
+    return True
+
+
 def normalise_admission_number(raw: str) -> str:
     return (raw or "").strip().upper()
 

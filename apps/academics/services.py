@@ -2,6 +2,7 @@ import re
 from datetime import date
 from typing import Any
 
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.db.models import ProtectedError, RestrictedError
@@ -9,8 +10,11 @@ from django.utils import timezone
 from django.utils.text import slugify
 
 from apps.academics.models import (
+    PREFIX_RE,
     SECTIONS,
     AcademicSession,
+    AcademicSettings,
+    AdmissionCounter,
     ClassArm,
     ClassLevel,
     FormTeacher,
@@ -18,6 +22,7 @@ from apps.academics.models import (
     SubjectOffering,
     Term,
 )
+from apps.accounts.identifiers import looks_like_phone, normalise_admission_number
 from apps.audit.services import record
 
 NAME_RE = re.compile(r"^(\d{4})/(\d{4})$")
@@ -383,3 +388,141 @@ def remove_form_teacher(
                     "teacher_id": None,
                 },
             )
+
+
+# --- Admission numbers -------------------------------------------------------
+
+ADMISSION_MAX_LEN = 32
+_LITERAL_RE = re.compile(r"^[A-Z0-9/\-]*$")
+_TOKEN_RE = re.compile(r"\{(PREFIX|YEAR|SEQ:(\d+))\}")
+_PREFIX_RE = re.compile(PREFIX_RE)
+PHONE_SHAPED_MESSAGE = "That would look like a phone number, which students could not log in with."
+
+
+def default_prefix() -> str:
+    """Initials of the current school's name, letters only, at most 8 characters."""
+    name = getattr(connection.tenant, "name", "")  # type: ignore[attr-defined] or ""
+    initials = "".join(
+        ch for word in name.split() for ch in word[:1] if ch.isalpha() and ch.isascii()
+    )
+    return initials.upper()[:8] or "STU"
+
+
+def get_academic_settings() -> AcademicSettings:
+    obj, _ = AcademicSettings.objects.get_or_create(pk=1)
+    if not obj.admission_prefix:
+        obj.admission_prefix = default_prefix()
+        obj.save(update_fields=["admission_prefix"])
+    return obj
+
+
+def render_admission_number(pattern: str, prefix: str, year: int, seq: int) -> str:
+    def sub(match: re.Match) -> str:
+        token = match.group(1)
+        if token == "PREFIX":
+            return prefix
+        if token == "YEAR":
+            return str(year)
+        return str(seq).zfill(int(match.group(2)))
+
+    return _TOKEN_RE.sub(sub, pattern)
+
+
+def validate_admission_prefix(prefix: str) -> None:
+    if not _PREFIX_RE.match(prefix or ""):
+        raise ValidationError({"admission_prefix": "Use 1 to 8 capital letters, A to Z only."})
+
+
+def validate_admission_pattern(pattern: str, prefix: str) -> None:
+    def fail(msg: str) -> ValidationError:
+        return ValidationError({"admission_pattern": msg})
+
+    pattern = pattern or ""
+    seqs = [m for m in _TOKEN_RE.finditer(pattern) if m.group(2) is not None]
+    if len(seqs) != 1:
+        raise fail("The pattern must contain {SEQ:4} (a sequence number) exactly once.")
+    if not 3 <= int(seqs[0].group(2)) <= 6:
+        raise fail("The sequence number must be 3 to 6 digits, for example {SEQ:4}.")
+    literal = _TOKEN_RE.sub("", pattern)
+    if not _LITERAL_RE.match(literal):
+        raise fail("Use only capital letters, digits, / and -, plus {PREFIX}, {YEAR} and {SEQ:n}.")
+    sample = render_admission_number(pattern, prefix, 2026, 1)
+    if len(sample) > ADMISSION_MAX_LEN:
+        raise fail(f"Admission numbers can be at most {ADMISSION_MAX_LEN} characters long.")
+    if looks_like_phone(sample):
+        raise fail(PHONE_SHAPED_MESSAGE)
+
+
+def _admission_number_used(number: str) -> bool:
+    return get_user_model().objects.filter(admission_number=number).exists()
+
+
+def validate_manual_admission_number(raw: str) -> str:
+    number = normalise_admission_number(raw)
+    if not number:
+        raise ValidationError("Enter an admission number.")
+    if len(number) > ADMISSION_MAX_LEN:
+        raise ValidationError(f"Admission numbers can be at most {ADMISSION_MAX_LEN} characters.")
+    if not re.fullmatch(r"[A-Z0-9/\-]+", number):
+        raise ValidationError("Use only letters, digits, / and - in an admission number.")
+    if looks_like_phone(number):
+        raise ValidationError(PHONE_SHAPED_MESSAGE)
+    if _admission_number_used(number):
+        raise ValidationError("That admission number is already in use.")
+    return number
+
+
+def next_admission_number(year: int) -> str:
+    """Allocate the next free admission number for `year`. Call inside the caller's atomic block."""
+    if not connection.in_atomic_block:
+        raise RuntimeError("next_admission_number must be called inside transaction.atomic().")
+    conf = get_academic_settings()
+    AdmissionCounter.objects.get_or_create(year=year)  # savepoint-safe against the create race
+    counter = AdmissionCounter.objects.select_for_update().get(year=year)
+    while True:
+        counter.last += 1
+        number = render_admission_number(
+            conf.admission_pattern, conf.admission_prefix, year, counter.last
+        )
+        if len(number) > ADMISSION_MAX_LEN or looks_like_phone(number):
+            raise ValidationError(
+                "The admission-number pattern has run out of room; "
+                "ask the school admin to change it."
+            )
+        if not _admission_number_used(number):
+            break
+    counter.save(update_fields=["last"])
+    return number
+
+
+def preview_next_admission_number(year: int) -> str:
+    """Sample of the next number. Never touches the counter."""
+    conf = get_academic_settings()
+    counter = AdmissionCounter.objects.filter(year=year).first()
+    return render_admission_number(
+        conf.admission_pattern, conf.admission_prefix, year, (counter.last if counter else 0) + 1
+    )
+
+
+def update_admission_settings(*, prefix: str, pattern: str, by: Any, request: Any = None):
+    prefix = (prefix or "").strip().upper()
+    pattern = (pattern or "").strip().upper()
+    validate_admission_prefix(prefix)
+    validate_admission_pattern(pattern, prefix)
+    with transaction.atomic():
+        academic_write_lock()
+        conf = get_academic_settings()
+        before = {"prefix": conf.admission_prefix, "pattern": conf.admission_pattern}
+        after = {"prefix": prefix, "pattern": pattern}
+        if before != after:
+            conf.admission_prefix, conf.admission_pattern = prefix, pattern
+            conf.save(update_fields=["admission_prefix", "admission_pattern"])
+            record(
+                "academics.admission_pattern_changed",
+                request=request,
+                actor=by,
+                obj=conf,
+                before=before,
+                after=after,
+            )
+    return conf

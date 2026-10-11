@@ -12,6 +12,7 @@ urlpatterns = [
     path("structure/arms/<int:arm_id>/detail/", views.arm_detail, name="arm_detail"),
     path("structure/arms/<int:arm_id>/", views.arm_rename, name="arm_rename"),
     path("structure/arms/<int:arm_id>/delete/", views.arm_delete, name="arm_delete"),
+    path("settings/", views.settings_page, name="settings"),
     path("subjects/", views.subjects, name="subjects"),
     path("subjects/<int:subject_id>/", views.subject_edit, name="subject_edit"),
     path("subjects/<int:subject_id>/delete/", views.subject_delete, name="subject_delete"),

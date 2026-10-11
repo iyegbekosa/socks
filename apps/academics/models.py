@@ -1,7 +1,11 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models import Q
+
+PREFIX_RE = r"^[A-Z]{1,8}$"
+DEFAULT_ADMISSION_PATTERN = "{PREFIX}/{YEAR}/{SEQ:4}"
 
 
 class AcademicSession(models.Model):
@@ -172,3 +176,28 @@ class FormTeacher(models.Model):
 
     def __str__(self) -> str:
         return f"{self.arm} / {self.session}: {self.teacher}"
+
+
+class AcademicSettings(models.Model):
+    """Per-school singleton (pk=1). Use services.get_academic_settings()."""
+
+    admission_prefix = models.CharField(
+        max_length=8,
+        blank=True,
+        validators=[RegexValidator(PREFIX_RE, "Use 1 to 8 capital letters, A to Z only.")],
+    )
+    admission_pattern = models.CharField(max_length=60, default=DEFAULT_ADMISSION_PATTERN)
+
+    class Meta:
+        verbose_name_plural = "academic settings"
+
+    def __str__(self) -> str:
+        return f"Academic settings ({self.admission_prefix})"
+
+
+class AdmissionCounter(models.Model):
+    year = models.PositiveIntegerField(unique=True)
+    last = models.PositiveIntegerField(default=0)
+
+    def __str__(self) -> str:
+        return f"{self.year}: {self.last}"

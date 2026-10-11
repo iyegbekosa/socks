@@ -1,0 +1,23 @@
+{% extends "core/base.html" %}
+{% block title %}Admission numbers{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Admission numbers</h1>
+  <p>Next number (preview only): <strong>{{ sample }}</strong></p>
+  {% if can_edit %}
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    <label for="{{ form.admission_prefix.id_for_label }}">{{ form.admission_prefix.label }}</label>{{ form.admission_prefix }}
+    {% for e in form.admission_prefix.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    <label for="{{ form.admission_pattern.id_for_label }}">{{ form.admission_pattern.label }}</label>{{ form.admission_pattern }}
+    <p class="hint">{{ form.admission_pattern.help_text }}</p>
+    {% for e in form.admission_pattern.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    <button type="submit">Save</button>
+  </form>
+  {% else %}
+  <p>Prefix: {{ form.initial.admission_prefix }}</p>
+  <p>Pattern: {{ form.initial.admission_pattern }}</p>
+  {% endif %}
+</div>
+{% endblock %}

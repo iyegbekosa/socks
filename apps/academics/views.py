@@ -3,10 +3,17 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
-from apps.academics.forms import ArmForm, ArmRenameForm, SessionForm, SubjectForm
+from apps.academics.forms import (
+    AdmissionSettingsForm,
+    ArmForm,
+    ArmRenameForm,
+    SessionForm,
+    SubjectForm,
+)
 from apps.academics.models import (
     AcademicSession,
     ClassArm,
@@ -23,6 +30,8 @@ from apps.academics.services import (
     current_session,
     delete_arm,
     delete_subject,
+    get_academic_settings,
+    preview_next_admission_number,
     remove_form_teacher,
     set_current_term,
 )
@@ -306,3 +315,29 @@ def arm_detail(request, arm_id):
         form_teacher_id=form_teacher.teacher_id if form_teacher else None,
     )
     return render(request, "academics/arm_detail.html", ctx)
+
+
+@never_cache
+@require_roles(SCHOOL_ADMIN, PROPRIETOR, PRINCIPAL)
+def settings_page(request):
+    can_edit = request.user.has_role(SCHOOL_ADMIN)
+    if request.method == "POST":
+        if not can_edit:
+            raise PermissionDenied
+        form = AdmissionSettingsForm(request.POST)
+        if form.is_valid() and _save(request, form, lambda c: "Admission number settings saved."):
+            return redirect("academics:settings")
+    else:
+        conf = get_academic_settings()
+        form = AdmissionSettingsForm(
+            initial={
+                "admission_prefix": conf.admission_prefix,
+                "admission_pattern": conf.admission_pattern,
+            }
+        )
+    sample = preview_next_admission_number(timezone.localdate().year)
+    return render(
+        request,
+        "academics/settings.html",
+        {"form": form, "sample": sample, "can_edit": can_edit},
+    )

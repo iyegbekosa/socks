@@ -7,6 +7,7 @@ from apps.academics.services import (
     create_session,
     create_subject,
     rename_arm,
+    update_admission_settings,
     update_subject,
 )
 
@@ -127,6 +128,31 @@ class SubjectForm(forms.Form):
                 )
             return update_subject(
                 self.subject, name=data["name"], sections=data["sections"], by=by, request=request
+            )
+        except ValidationError as exc:
+            _push_errors(self, exc)
+            return None
+
+
+class AdmissionSettingsForm(forms.Form):
+    admission_prefix = forms.CharField(max_length=8, label="Prefix")
+    admission_pattern = forms.CharField(
+        max_length=60,
+        label="Pattern",
+        help_text=(
+            "Use {PREFIX}, {YEAR} and {SEQ:4} (3 to 6 digits), "
+            "plus capital letters, digits, / and -."
+        ),
+    )
+
+    def save(self, *, by, request=None):
+        data = self.cleaned_data
+        try:
+            return update_admission_settings(
+                prefix=data["admission_prefix"],
+                pattern=data["admission_pattern"],
+                by=by,
+                request=request,
             )
         except ValidationError as exc:
             _push_errors(self, exc)
