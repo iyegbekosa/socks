@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 
 from django import forms
@@ -9,6 +10,7 @@ from PIL import Image, UnidentifiedImageError
 from apps.branding.models import COLOR_VALIDATOR, Branding, public_storage
 from apps.tenancy.limits import PlanLimitExceeded
 
+logger = logging.getLogger(__name__)
 MAX_LOGO_BYTES = 1_048_576
 EXT_FORMATS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
 LOGO_EXTENSIONS = set(EXT_FORMATS)
@@ -20,6 +22,14 @@ _IMAGE_ERRORS = (
     Image.DecompressionBombError,
     Image.DecompressionBombWarning,
 )
+
+
+def _delete_old_logo(storage, name: str) -> None:
+    """Best-effort cleanup after commit; a storage failure must not turn a saved form into a 500."""
+    try:
+        storage.delete(name)
+    except Exception:
+        logger.exception("Could not delete replaced logo %s", name)
 
 
 class BrandingForm(forms.ModelForm):
@@ -74,7 +84,7 @@ class BrandingForm(forms.ModelForm):
                 new_name = instance.logo.name or ""
                 if old_name and old_name != new_name:
                     storage = public_storage()
-                    transaction.on_commit(lambda: storage.delete(old_name))
+                    transaction.on_commit(lambda: _delete_old_logo(storage, old_name))
                 return instance
         except PlanLimitExceeded as exc:
             self.add_error("logo", exc.message)

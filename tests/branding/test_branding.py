@@ -233,3 +233,20 @@ def test_cache_is_per_school(school_b):
         assert get_branding().motto == ""
         Branding.objects.all().delete()
         cache.clear()
+
+
+def test_old_logo_delete_failure_is_logged_not_500(
+    client_a, upload, django_capture_on_commit_callbacks, caplog
+):
+    admin(client_a)
+    with django_capture_on_commit_callbacks(execute=True):
+        post(client_a, logo=SimpleUploadedFile("a.png", png_bytes()))
+    with schema_context("school_a"):
+        old = Branding.objects.get(pk=1).logo.name
+    with mock.patch("cloudinary.uploader.destroy", side_effect=RuntimeError("boom")):
+        with django_capture_on_commit_callbacks(execute=True):
+            r = post(client_a, logo=SimpleUploadedFile("b.png", png_bytes()))
+    assert r.status_code == 302
+    with schema_context("school_a"):
+        assert Branding.objects.get(pk=1).logo.name != old
+    assert any(rec.levelname == "ERROR" and old in rec.getMessage() for rec in caplog.records)
