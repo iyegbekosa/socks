@@ -137,6 +137,12 @@ def test_year_seq_pattern_allowed(school_a):
         "{SEQ:7}",
         "{PREFIX}/{foo}{SEQ:4}",
         "ab{SEQ:4}!",
+        "0{SEQ:3}{YEAR}000",
+        "070{SEQ:3}{YEAR}",
+        "0803-12-{SEQ:4}",
+        "{SEQ:6}{YEAR}",
+        "1{SEQ:6}",
+        "234{SEQ:6}",
     ],
 )
 def test_bad_patterns_rejected(pattern):
