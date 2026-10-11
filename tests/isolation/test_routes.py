@@ -46,3 +46,19 @@ def test_guard_reports_unregistered_and_unnamed_routes():
 
 def test_exempt_routes_start_with_healthz():
     assert "healthz" in EXEMPT_ROUTES
+
+
+def test_guard_distinguishes_namespaces_sharing_a_leaf_name():
+    missing = unregistered_api_routes(
+        "tests.isolation.urlconf_unregistered", registered={"students:detail"}
+    )
+    assert "teachers:detail" in missing
+    assert "students:detail" not in missing
+
+
+def test_namespaced_case_name_satisfies_guard():
+    missing = unregistered_api_routes(
+        "tests.isolation.urlconf_unregistered", registered={"students:list"}
+    )
+    assert "students:list" not in missing
+    assert "students:detail" in missing

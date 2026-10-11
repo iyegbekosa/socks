@@ -16,7 +16,8 @@ API_PREFIX = "api/v1/"
 
 @dataclass(frozen=True)
 class IsolationCase:
-    name: str  # URL route name this case covers
+    # Full namespaced route name, as passed to reverse() (e.g. "students:list").
+    name: str
     method: str
     url: Callable[[Any], str]  # object created in school B -> URL requested as school A
     make_obj: Callable[[], Any]  # creates the object in the active (school B) schema
@@ -29,14 +30,20 @@ ISOLATION_CASES: list[IsolationCase] = []
 EXEMPT_ROUTES: set[str] = {"healthz"}
 
 
-def _walk(patterns, prefix: str = "") -> Iterator[tuple[str, str | None]]:
-    """Yield (full route string, route name or None) for every leaf pattern."""
+def _walk(patterns, prefix: str = "", namespace: str = "") -> Iterator[tuple[str, str | None]]:
+    """Yield (full route string, namespaced route name or None) per leaf pattern."""
     for entry in patterns:
         route = prefix + str(entry.pattern)
         if isinstance(entry, URLResolver):
-            yield from _walk(entry.url_patterns, route)
+            ns = namespace
+            if entry.namespace:
+                ns = f"{namespace}:{entry.namespace}" if namespace else entry.namespace
+            yield from _walk(entry.url_patterns, route, ns)
         elif isinstance(entry, URLPattern):
-            yield route, entry.name
+            name = entry.name
+            if name and namespace:
+                name = f"{namespace}:{name}"
+            yield route, name
 
 
 def unregistered_api_routes(
