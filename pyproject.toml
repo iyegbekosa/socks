@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "build2learn"
+version = "0.1.0"
+description = "Multi-tenant school management SaaS"
+requires-python = ">=3.12"
+dependencies = [
+    "Django>=5.2,<5.3",
+    "djangorestframework>=3.15",
+    "django-tenants>=3.7",
+    "celery[redis]>=5.4",
+    "psycopg[binary]>=3.2",
+    "cloudinary>=1.41",
+    "django-environ>=0.11",
+    "python-json-logger>=3",
+    "sentry-sdk>=2",
+    "gunicorn>=23",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-django",
+    "factory-boy",
+    "ruff",
+    "mypy",
+    "django-stubs",
+]
+
+[tool.setuptools.packages.find]
+include = ["apps*", "config*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "DJ"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+testpaths = ["tests"]

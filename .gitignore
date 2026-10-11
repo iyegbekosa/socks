@@ -12,3 +12,4 @@ htmlcov/
 .superpowers/
 .claude/
 .DS_Store
+*.egg-info/

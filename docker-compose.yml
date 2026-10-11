@@ -1,0 +1,50 @@
+x-app: &app
+  build: .
+  env_file: .env
+  environment:
+    DATABASE_URL: postgres://postgres:postgres@db:5432/build2learn
+    REDIS_URL: redis://redis:6379/0
+  volumes:
+    - .:/app
+  depends_on:
+    - db
+    - redis
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: build2learn
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+  web:
+    <<: *app
+    command: python manage.py runserver 0.0.0.0:8000
+    ports:
+      - "8000:8000"
+
+  worker:
+    <<: *app
+    command: celery -A config worker -Q payments,notifications,default,reports -l info
+
+  beat:
+    <<: *app
+    command: celery -A config beat -l info
+
+volumes:
+  pgdata:

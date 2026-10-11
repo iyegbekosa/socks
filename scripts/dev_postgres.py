@@ -1,7 +1,8 @@
 """Start a local PostgreSQL 16 server for development without Docker.
 
 Uses the embedded server from the `pgserver` package; data lives in `.pgdata/`.
-Prints DATABASE_URL and PGHOST (the socket directory) for `.env`. The server keeps running after this script exits.
+Prints DATABASE_URL and PGHOST (the socket directory) for `.env`.
+The server keeps running after this script exits.
 
     .venv/bin/python scripts/dev_postgres.py
 """
