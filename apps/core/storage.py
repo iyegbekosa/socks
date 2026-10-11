@@ -92,9 +92,14 @@ class TenantCloudinaryStorage(Storage):
       image extensions are not part of the public_id (``x.jpg`` and ``x.png`` collide).
     - Callers build names from IDs (or ``unique_upload_name``), never from user-supplied text.
     - Saving an existing name overwrites it (intended for regenerated PDFs).
+
+    Delivery types: ``"authenticated"`` (default, child data) or ``"upload"`` (public
+    branding). Child files must not use ``"private"``: Cloudinary serves derived
+    (transformed) versions of private assets publicly, so ``.../image/private/w_800/<id>``
+    would expose them. Authenticated assets need a signed URL for every version.
     """
 
-    def __init__(self, delivery_type: Literal["upload", "private"] = "private"):
+    def __init__(self, delivery_type: Literal["upload", "authenticated"] = "authenticated"):
         self.delivery_type = delivery_type
 
     def _target(self, name: str) -> tuple[str, str, str]:
@@ -121,13 +126,13 @@ class TenantCloudinaryStorage(Storage):
 
     def url(self, name):
         public_id, resource_type, fmt = self._target(name)
-        if self.delivery_type == "private":
+        if self.delivery_type == "authenticated":
             expires_at = int(time.time()) + settings.PRIVATE_URL_TTL_SECONDS
             return cloudinary.utils.private_download_url(
                 public_id,
                 fmt,
                 resource_type=resource_type,
-                type="private",
+                type="authenticated",
                 expires_at=expires_at,
             )
         options = {"resource_type": resource_type, "type": "upload", "secure": True}

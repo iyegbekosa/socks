@@ -32,7 +32,7 @@ def upload():
 
 def test_settings_define_storages():
     assert settings.PRIVATE_URL_TTL_SECONDS == 600
-    assert settings.STORAGES["default"]["OPTIONS"] == {"delivery_type": "private"}
+    assert settings.STORAGES["default"]["OPTIONS"] == {"delivery_type": "authenticated"}
     assert settings.STORAGES["public"]["OPTIONS"] == {"delivery_type": "upload"}
 
 
@@ -49,7 +49,7 @@ def test_save_prefixes_env_and_schema(school_a, upload):
     kwargs = upload.call_args.kwargs
     assert kwargs["public_id"] == "dev/school_a/report_cards/t1/a.pdf"
     assert kwargs["resource_type"] == "raw"
-    assert kwargs["type"] == "private"
+    assert kwargs["type"] == "authenticated"
     assert kwargs["overwrite"] is True
 
 
@@ -70,7 +70,7 @@ def test_private_url_is_signed_and_expires(school_a):
             "dev/school_a/report_cards/t1/a.pdf",
             "",
             resource_type="raw",
-            type="private",
+            type="authenticated",
             expires_at=1_000_600,
         )
     assert url == expected
@@ -84,7 +84,7 @@ def test_private_image_url_is_signed_and_expires(school_a):
             "dev/school_a/photos/x",
             "jpg",
             resource_type="image",
-            type="private",
+            type="authenticated",
             expires_at=1_000_600,
         )
     assert url == expected
@@ -141,7 +141,7 @@ def test_exists_true_and_size(school_a):
             assert default_storage.size("a/b.pdf") == 42
     assert res.call_args.args[0] == "dev/school_a/a/b.pdf"
     assert res.call_args.kwargs["resource_type"] == "raw"
-    assert res.call_args.kwargs["type"] == "private"
+    assert res.call_args.kwargs["type"] == "authenticated"
 
 
 def test_delete_calls_destroy(school_a):
@@ -150,7 +150,7 @@ def test_delete_calls_destroy(school_a):
             default_storage.delete("photos/x.jpg")
     assert destroy.call_args.args[0] == "dev/school_a/photos/x"
     assert destroy.call_args.kwargs["resource_type"] == "image"
-    assert destroy.call_args.kwargs["type"] == "private"
+    assert destroy.call_args.kwargs["type"] == "authenticated"
 
 
 def test_non_latin_names_get_distinct_deterministic_ids(school_a, upload):

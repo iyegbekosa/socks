@@ -126,10 +126,11 @@ DATE_INPUT_FORMATS = ["%d/%m/%Y", "%Y-%m-%d"]
 PRIVATE_URL_TTL_SECONDS = 600
 
 STORAGES = {
-    # Child-related files: Cloudinary type="private", served via short-lived signed links.
+    # Child-related files: Cloudinary type="authenticated" (not "private": derived versions
+    # of private assets are public), served via short-lived signed links.
     "default": {
         "BACKEND": "apps.core.storage.TenantCloudinaryStorage",
-        "OPTIONS": {"delivery_type": "private"},
+        "OPTIONS": {"delivery_type": "authenticated"},
     },
     # School branding only (logos): plain public delivery.
     "public": {

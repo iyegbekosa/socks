@@ -31,7 +31,7 @@ def test_private_pdf_roundtrip(school_a):
                 "dev/school_a/live_check/probe.pdf",
                 "",
                 resource_type="raw",
-                type="private",
+                type="authenticated",
                 expires_at=int(time.time()) - 60,
             )
             with pytest.raises(urllib.error.HTTPError):
