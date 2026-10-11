@@ -4,6 +4,7 @@ import secrets
 from collections.abc import Iterable
 
 from django.conf import settings
+from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.contrib.auth.models import Group
 from django.contrib.auth.tokens import default_token_generator
 from django.core.cache import cache
@@ -123,9 +124,13 @@ def consume_reset_code(user: User) -> None:
 
 
 def find_user_by_identifier(raw: str) -> User | None:
-    """Active user matching an identifier, resolved exactly as login does."""
+    """Active user matching an identifier, resolved exactly as login does, for password reset.
+
+    Pending invitees (unusable password) are excluded: they set their first password via the
+    invite link, so a reset code must not become a second way in.
+    """
     kind, value = classify_identifier(raw)
-    qs = User.objects.filter(is_active=True)
+    qs = User.objects.filter(is_active=True).exclude(password__startswith=UNUSABLE_PASSWORD_PREFIX)
     if kind == "email":
         qs = qs.filter(kind="staff", email=value)
     elif kind == "phone":

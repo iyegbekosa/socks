@@ -129,8 +129,14 @@ def test_client_ip_validation(settings):
     assert client_ip(rf.get("/", REMOTE_ADDR="1.1.1.1")) == "1.1.1.1"
     settings.CLIENT_IP_HEADER = "HTTP_X_REAL"
     assert client_ip(rf.get("/", REMOTE_ADDR="1.1.1.1")) == "1.1.1.1"
+    # Comma-separated: the rightmost valid entry is the one the nearest proxy added; anything
+    # to its left may have been sent by the client.
     multi = rf.get("/", REMOTE_ADDR="1.1.1.1", HTTP_X_REAL="203.0.113.5, 10.0.0.1")
-    assert client_ip(multi) == "203.0.113.5"
+    assert client_ip(multi) == "10.0.0.1"
+    forged = rf.get("/", REMOTE_ADDR="1.1.1.1", HTTP_X_REAL="6.6.6.6, 198.51.100.7")
+    assert client_ip(forged) == "198.51.100.7"
+    trailing_junk = rf.get("/", REMOTE_ADDR="1.1.1.1", HTTP_X_REAL="198.51.100.7, junk, ")
+    assert client_ip(trailing_junk) == "198.51.100.7"
     assert client_ip(rf.get("/", REMOTE_ADDR="1.1.1.1", HTTP_X_REAL="abc")) == "1.1.1.1"
     assert client_ip(rf.get("/", REMOTE_ADDR="1.1.1.1", HTTP_X_REAL="2001:db8::1")) == "2001:db8::1"
     assert client_ip(rf.get("/", REMOTE_ADDR="junk")) is None

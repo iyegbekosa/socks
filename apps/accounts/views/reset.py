@@ -28,7 +28,8 @@ SENT_MESSAGE = "If an account matches, we've sent a code to its registered phone
 BAD_CODE = "That code is wrong or has expired."
 
 id_limit = RateLimit("reset:id")
-ip_limit = RateLimit("reset:ip")
+# Per IP like login and reset-verify: a school's pupils often share one NAT address.
+ip_limit = RateLimit("reset:ip", limit=50, window=900)
 verify_user_limit = RateLimit("reset_verify", limit=5, window=900)
 verify_ip_limit = RateLimit("reset_verify_ip", limit=50, window=900)
 

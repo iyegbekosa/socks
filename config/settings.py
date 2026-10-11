@@ -56,6 +56,8 @@ INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in S
 CLIENT_IP_HEADER: str | None = env("CLIENT_IP_HEADER", default=None)
 # Anti-spraying limit: failed logins per client IP per 900 s (per identifier it is 5).
 LOGIN_IP_FAILURE_LIMIT = 50
+# Platform-wide cap on valid self-service signups per 24 h (a WARNING is logged when hit).
+SIGNUP_GLOBAL_DAILY_LIMIT = env.int("SIGNUP_GLOBAL_DAILY_LIMIT", default=50)
 
 AUTH_USER_MODEL = "accounts.User"
 AUTHENTICATION_BACKENDS = ["apps.accounts.backends.IdentifierBackend"]
@@ -82,7 +84,9 @@ MIDDLEWARE = [
     "apps.accounts.middleware.StaffIdleTimeoutMiddleware",
     "apps.accounts.middleware.MfaEnforcementMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+X_FRAME_OPTIONS = "DENY"
 
 SESSION_COOKIE_AGE = 14 * 24 * 3600
 SESSION_COOKIE_HTTPONLY = True

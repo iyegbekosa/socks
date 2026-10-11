@@ -42,8 +42,10 @@ def test_staff_1799_passes_and_updates(client_a):
     with schema_context("school_a"):
         client_a.force_login(u)
     _set_last_seen(client_a, 1799)
+    before = int(time.time())
     assert client_a.get("/").status_code == 200
-    pass
+    with schema_context("school_a"):
+        assert client_a.session["last_seen"] >= before  # refreshed, not the 1799 s-old value
 
 
 def test_student_not_timed_out(client_a):

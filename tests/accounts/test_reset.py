@@ -172,12 +172,6 @@ def test_staff_reset_by_phone_identifier(client_a, sms_outbox):
     assert _login(client_a, u.email, NEW_PW).status_code == 302
 
 
-def test_per_ip_request_limit(client_a, sms_outbox):
-    for n in range(5):
-        assert _request(client_a, f"GFS/1/{n}").status_code == 302
-    assert _request(client_a, "GFS/1/99").status_code == 429
-
-
 def test_inactive_user_gets_no_sms_and_same_page(client_a, sms_outbox):
     with schema_context("school_a"):
         u = StudentFactory(is_active=False)
@@ -238,7 +232,6 @@ def test_reset_clears_login_lockout(client_a, sms_outbox):
     for _ in range(5):
         _login(client_a, s.admission_number, "wrong-pass")
     assert _login(client_a, s.admission_number, NEW_PW).status_code == 429
-    cache.delete_many([k for k in ()])  # keep limits; only the reset request counters are separate
     _request(client_a, s.admission_number)
     _verify(client_a, _code(sms_outbox))
     assert _login(client_a, s.admission_number, NEW_PW).status_code == 302
@@ -246,3 +239,30 @@ def test_reset_clears_login_lockout(client_a, sms_outbox):
 
 def test_login_page_links_to_reset(client_a, sms_outbox):
     assert reverse("accounts:reset") in client_a.get(reverse("accounts:login")).content.decode()
+
+
+def test_reset_request_ip_limit_is_50_per_15_minutes(client_a, sms_outbox):
+    from apps.accounts.views.reset import ip_limit
+
+    assert (ip_limit.limit, ip_limit.window) == (50, 900)
+    for i in range(50):  # distinct identifiers, so only the per-IP limit can trip
+        assert _request(client_a, f"NOPE/{i}").status_code == 302
+    r = _request(client_a, "NOPE/last")
+    assert r.status_code == 429 and "Too many requests. Try again in" in r.content.decode()
+
+
+def test_pending_invitee_gets_no_reset_code(client_a, sms_outbox):
+    """A staff member who has not accepted their invite (unusable password) must set it via
+    the invite link; the reset flow treats them like an unknown account."""
+    with schema_context("school_a"):
+        pending = StaffFactory()
+        pending.set_unusable_password()
+        pending.save()
+    unknown = client_a.post(reverse("accounts:reset"), {"identifier": "nobody@school.ng"})
+    r = _request(client_a, pending.email)
+    assert r.status_code == 302 and r["Location"] == reverse("accounts:reset_verify")
+    assert r["Location"] == unknown["Location"]
+    assert sms_outbox == []
+    assert cache.get(f"reset:code:{pending.pk}") is None
+    page = client_a.get(reverse("accounts:reset_verify"))
+    assert GENERIC in page.content.decode()

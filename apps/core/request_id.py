@@ -29,12 +29,21 @@ def _valid_ip(value: str | None) -> str | None:
 
 
 def client_ip(request) -> str | None:
+    """The client IP from ``CLIENT_IP_HEADER`` (behind a proxy), else ``REMOTE_ADDR``.
+
+    For a comma-separated value (an X-Forwarded-For style chain) take the **rightmost** valid
+    IP: each proxy appends the address it saw, so the rightmost entry was written by the
+    proxy nearest us, while everything to its left may have been sent by the client and
+    forged to dodge per-IP limits. The header should still be one the proxy overwrites
+    (e.g. ``HTTP_CF_CONNECTING_IP``); see the README.
+    """
     header = getattr(settings, "CLIENT_IP_HEADER", None)
     if header:
         raw = request.META.get(header) or ""
-        ip = _valid_ip(raw.split(",")[0])
-        if ip:
-            return ip
+        for part in reversed(raw.split(",")):
+            ip = _valid_ip(part)
+            if ip:
+                return ip
     return _valid_ip(request.META.get("REMOTE_ADDR"))
 
 

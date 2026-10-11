@@ -250,3 +250,45 @@ def test_old_logo_delete_failure_is_logged_not_500(
     with schema_context("school_a"):
         assert Branding.objects.get(pk=1).logo.name != old
     assert any(rec.levelname == "ERROR" and old in rec.getMessage() for rec in caplog.records)
+
+
+def _png_declaring(width: int, height: int) -> bytes:
+    """A real 1x1 PNG whose IHDR claims ``width`` x ``height`` (pixel data never matches)."""
+    import struct
+    import zlib
+
+    raw = bytearray(png_bytes())
+    raw[16:24] = struct.pack(">II", width, height)
+    raw[29:33] = struct.pack(">I", zlib.crc32(bytes(raw[12:29])))
+    return bytes(raw)
+
+
+def test_logo_with_huge_declared_dimensions_rejected_before_decoding(client_a, upload):
+    admin(client_a)
+    data = _png_declaring(5000, 5000)
+    from PIL import ImageFile
+
+    decode = mock.patch.object(ImageFile.ImageFile, "load", side_effect=AssertionError("decoded"))
+    with decode as load:
+        r = post(client_a, logo=SimpleUploadedFile("a.png", data))
+    assert r.status_code == 200
+    assert "4096" in str(r.context["form"].errors["logo"])
+    load.assert_not_called()
+    upload.assert_not_called()
+
+
+@pytest.mark.parametrize("size", [(4097, 1), (1, 4097)])
+def test_logo_over_4096_pixels_on_one_side_rejected(client_a, upload, size):
+    admin(client_a)
+    buf = io.BytesIO()
+    Image.new("RGB", size, "red").save(buf, "PNG")
+    r = post(client_a, logo=SimpleUploadedFile("a.png", buf.getvalue()))
+    assert "4096" in str(r.context["form"].errors["logo"])
+    upload.assert_not_called()
+
+
+def test_logo_of_exactly_4096_pixels_accepted(client_a, upload):
+    admin(client_a)
+    buf = io.BytesIO()
+    Image.new("RGB", (4096, 1), "red").save(buf, "PNG")
+    assert post(client_a, logo=SimpleUploadedFile("a.png", buf.getvalue())).status_code == 302

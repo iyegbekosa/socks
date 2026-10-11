@@ -18,6 +18,8 @@ from apps.audit.services import record
 from apps.core.ratelimit import RateLimit
 
 mfa_limit = RateLimit("mfa", limit=5, window=900)
+# Second, daily cap per user: 5 per 15 minutes alone would still allow ~480 guesses a day.
+mfa_daily_limit = RateLimit("mfa_day", limit=20, window=86400)
 DEVICE_NAME = "default"
 INVALID_CODE = "That code is not correct. Check your authenticator app and try again."
 
@@ -52,7 +54,8 @@ def _key(user: User) -> str:
 
 
 def _blocked_message(key: str) -> str:
-    minutes = max(1, math.ceil(mfa_limit.retry_after(key) / 60))
+    waits = [lim.retry_after(key) for lim in (mfa_limit, mfa_daily_limit) if lim.is_blocked(key)]
+    minutes = max(1, math.ceil(max(waits, default=0) / 60))
     unit = "minute" if minutes == 1 else "minutes"
     return f"Too many attempts. Try again in {minutes} {unit}."
 
@@ -69,6 +72,7 @@ def _next_url(request) -> str:
 def _complete(request, user: User, device: TOTPDevice, *, enrolled: bool):
     target = _next_url(request)
     mfa_limit.reset(_key(user))
+    mfa_daily_limit.reset(_key(user))  # the daily cap is for failures; logins are unlimited
     login(request, user)  # rotates the session key
     otp_login(request, device)
     request.session["last_seen"] = int(time.time())
@@ -85,8 +89,15 @@ def _check_code(request, user: User, device: TOTPDevice):
     Returns (verified, blocked, error, response).
     """
     key = _key(user)
-    count = mfa_limit.hit(key)  # reserve first, so concurrent guesses are counted
-    if count > mfa_limit.limit:
+    # Reserve first in both limiters, so concurrent guesses are counted.
+    count = mfa_limit.hit(key)
+    day_count = mfa_daily_limit.hit(key)
+    if count > mfa_limit.limit or day_count > mfa_daily_limit.limit:
+        # Give back the reservation in a limiter that did not refuse this attempt.
+        if count <= mfa_limit.limit:
+            mfa_limit.release(key)
+        if day_count <= mfa_daily_limit.limit:
+            mfa_daily_limit.release(key)
         return False, True, _blocked_message(key), None
     token = "".join(request.POST.get("code", "").split())
     if token.isdigit() and device.verify_token(token):

@@ -409,3 +409,20 @@ def test_provisioning_refuses_domain_owned_by_another_school(db, school_b):
     school.refresh_from_db()
     assert school.provisioning_status == "failed"
     assert Domain.objects.get(domain="newschool.localhost").tenant_id == school_b.pk
+
+
+def test_global_cap_reads_setting_and_logs_warning(client, post, payload, caplog):
+    import logging
+
+    from django.conf import settings
+
+    from apps.tenancy.views import GLOBAL_KEY, _global_limit
+
+    assert _global_limit.limit == settings.SIGNUP_GLOBAL_DAILY_LIMIT == 50
+    for _ in range(_global_limit.limit):
+        _global_limit.hit(GLOBAL_KEY)
+    with caplog.at_level(logging.WARNING, logger="apps.tenancy.views"):
+        assert post(client, payload).status_code == 429
+    warnings = [r for r in caplog.records if r.name == "apps.tenancy.views"]
+    assert [r.levelno for r in warnings] == [logging.WARNING]
+    assert "Global signup cap reached" in warnings[0].getMessage()

@@ -12,6 +12,7 @@ from apps.tenancy.limits import PlanLimitExceeded
 
 logger = logging.getLogger(__name__)
 MAX_LOGO_BYTES = 1_048_576
+MAX_LOGO_SIDE = 4096  # pixels; a tiny compressed file can declare a huge canvas
 EXT_FORMATS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
 LOGO_EXTENSIONS = set(EXT_FORMATS)
 _IMAGE_ERRORS = (
@@ -59,6 +60,12 @@ class BrandingForm(forms.ModelForm):
             img = Image.open(io.BytesIO(raw))
             if img.format != expected:
                 raise forms.ValidationError("The file content does not match its extension.")
+            # Image.open only reads the header: refuse big canvases before decoding pixels.
+            width, height = img.size
+            if width > MAX_LOGO_SIDE or height > MAX_LOGO_SIDE:
+                raise forms.ValidationError(
+                    f"Logo must be at most {MAX_LOGO_SIDE}×{MAX_LOGO_SIDE} pixels."
+                )
             img.load()
             clean = io.BytesIO()
             options = {"quality": 90} if expected in ("JPEG", "WEBP") else {}

@@ -159,7 +159,6 @@ def test_mfa_pending_cycles_anonymous_session_key(client_a):
         bursar = StaffFactory()
         set_roles(bursar, ["bursar"], by=bursar)
     client_a.get(reverse("accounts:login"))
-    client_a.session["x"] = 1  # ensure a session exists
     s = client_a.session
     s["x"] = 1
     s.save()
@@ -259,3 +258,9 @@ def test_log_role_staff_and_student(client_a, caplog):
             client_a.get("/log")
         records = [r for r in caplog.records if r.name == "tests.core"]
         assert records[0].role == expected
+
+
+def test_login_page_cannot_be_framed(client_a):
+    r = client_a.get(reverse("accounts:login"))
+    assert r.status_code == 200
+    assert r["X-Frame-Options"] == "DENY"

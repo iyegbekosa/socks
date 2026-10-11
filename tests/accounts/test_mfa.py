@@ -328,3 +328,34 @@ def test_reset_mfa_removes_devices_and_audits(school_a):
         assert not TOTPDevice.objects.filter(user=user).exists()
         ev = AuditEvent.objects.get(action="auth.mfa_reset")
     assert ev.object_id == str(user.pk) and ev.actor_id == admin.pk
+
+
+@pytest.mark.parametrize("url_name", ["accounts:mfa", "accounts:mfa_setup"])
+def test_daily_mfa_cap_refuses_21st_attempt_after_window_resets(client_a, url_name):
+    from apps.accounts.views.mfa import mfa_daily_limit, mfa_limit
+
+    user, device = _bursar(with_device=url_name == "accounts:mfa")
+    key = f"mfa:user:{user.pk}"
+    assert (mfa_daily_limit.limit, mfa_daily_limit.window) == (20, 86400)
+    with schema_context("school_a"):  # limiter keys are schema-prefixed
+        for _ in range(20):  # 20 attempts earlier today, over several 15-minute windows
+            mfa_daily_limit.hit(key)
+        assert mfa_limit.count(key) == 0  # the 15-minute window has reset
+    _password_login(client_a, user)
+    if url_name == "accounts:mfa_setup":
+        client_a.get(reverse(url_name))
+        with schema_context("school_a"):
+            device = TOTPDevice.objects.get(user=user)
+    r = client_a.post(reverse(url_name), {"code": f"{totp(device.bin_key):06d}"})
+    assert r.status_code == 429 and "Too many attempts" in r.content.decode()
+    assert not _logged_in(client_a)
+
+
+def test_daily_mfa_cap_counts_alongside_window(client_a):
+    from apps.accounts.views.mfa import mfa_daily_limit
+
+    user, _ = _bursar(with_device=True)
+    _password_login(client_a, user)
+    for _ in range(3):
+        client_a.post(reverse("accounts:mfa"), {"code": "000000"})
+    assert mfa_daily_limit.count(f"mfa:user:{user.pk}") == 3

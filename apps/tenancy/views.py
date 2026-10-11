@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 STATUS_SALT = "signup-status"
 STATUS_MAX_AGE = 86400
 _signup_limit = RateLimit("signup", limit=5, window=3600)
-_global_limit = RateLimit("signup_global", limit=50, window=86400)
+_global_limit = RateLimit("signup_global", limit=settings.SIGNUP_GLOBAL_DAILY_LIMIT, window=86400)
 GLOBAL_KEY = "all"
 BUSY_MESSAGE = "We're getting a lot of signups — please try again later or contact us."
 
@@ -58,7 +58,13 @@ def signup(request):
         return render(request, "tenancy/signup.html", {"form": form}, status=200)
     data = form.cleaned_data
     # The global cap counts only valid signups, so junk POSTs from one client cannot use it up.
-    if _global_limit.hit(GLOBAL_KEY) > _global_limit.limit:
+    global_count = _global_limit.hit(GLOBAL_KEY)
+    if global_count > _global_limit.limit:
+        if global_count == _global_limit.limit + 1:  # once per window, not per refused POST
+            logger.warning(
+                "Global signup cap reached",
+                extra={"limit": _global_limit.limit, "window_seconds": _global_limit.window},
+            )
         return _too_many(request, BUSY_MESSAGE, _global_limit, GLOBAL_KEY)
     try:
         school = _create_school(data)
