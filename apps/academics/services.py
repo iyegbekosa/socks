@@ -3,12 +3,19 @@ from datetime import date
 from typing import Any
 
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import connection, transaction
 
 from apps.academics.models import AcademicSession, Term
 from apps.audit.services import record
 
 NAME_RE = re.compile(r"^(\d{4})/(\d{4})$")
+ACADEMICS_LOCK_KEY = 0x61636164656D6963  # "academic" as a bigint
+
+
+def academic_write_lock() -> None:
+    """Serialise session/term writes for this school until the transaction ends."""
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_xact_lock(%s)", [ACADEMICS_LOCK_KEY])
 
 
 def _term_info(term: Term) -> dict:
@@ -40,6 +47,12 @@ def validate_session(name: str, terms: list[tuple[date, date]]) -> dict[str, lis
             )
         elif i > 1 and start <= terms[i - 2][1]:
             add(f"term_{i}", f"Term {i} must start after term {i - 1} ends.")
+    if match and not errors.get("name"):
+        first = int(match.group(1))
+        if terms[0][0].year != first:
+            add("term_1", f"The session starts in {first}, so term 1 must start in {first}.")
+        if terms[2][1].year != first + 1:
+            add("term_3", f"The session ends in {first + 1}, so term 3 must end in {first + 1}.")
     if not errors:
         s_start, s_end = terms[0][0], terms[2][1]
         if AcademicSession.objects.filter(start_date__lte=s_end, end_date__gte=s_start).exists():
@@ -51,10 +64,11 @@ def create_session(
     *, name: str, terms: list[tuple[date, date]], by: Any, request: Any = None
 ) -> AcademicSession:
     name = (name or "").strip()
-    errors = validate_session(name, terms)
-    if errors:
-        raise ValidationError(errors)
     with transaction.atomic():
+        academic_write_lock()
+        errors = validate_session(name, terms)
+        if errors:
+            raise ValidationError(errors)
         session = AcademicSession(name=name, start_date=terms[0][0], end_date=terms[2][1])
         session.full_clean()
         session.save()
@@ -79,6 +93,7 @@ def create_session(
 
 def set_current_term(term: Term, *, by: Any, request: Any = None) -> None:
     with transaction.atomic():
+        academic_write_lock()
         old = list(
             Term.objects.select_for_update().select_related("session").filter(is_current=True)
         )

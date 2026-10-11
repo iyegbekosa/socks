@@ -1,8 +1,10 @@
 from datetime import date
+from unittest import mock
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django_tenants.utils import schema_context
 
@@ -98,8 +100,8 @@ def test_overlapping_session_and_duplicate_name(admin_user):
         make(by=admin_user)
         with pytest.raises(ValidationError):
             make(by=admin_user)
-        shifted = [(date(2027, 5, 1), date(2027, 8, 1)), (date(2027, 9, 1), date(2027, 10, 1))]
-        shifted.append((date(2027, 11, 1), date(2027, 12, 1)))
+        shifted = [(date(2027, 5, 1), date(2027, 8, 1)), (date(2027, 9, 1), date(2027, 12, 1))]
+        shifted.append((date(2028, 1, 10), date(2028, 3, 1)))
         with pytest.raises(ValidationError) as e:
             make(name="2027/2028", terms=shifted, by=admin_user)
         assert "overlap" in str(e.value.message_dict["name"])
@@ -204,3 +206,79 @@ def test_form_shows_errors(client_a, admin_user):
 def test_home_link(client_a, admin_user):
     login_verified(client_a, admin_user)
     assert "Academic setup" in client_a.get("/").content.decode()
+
+
+def full_data(**over):
+    data = {
+        "name": "2026/2027",
+        "term_1_start": "14/09/2026",
+        "term_1_end": "18/12/2026",
+        "term_2_start": "11/01/2027",
+        "term_2_end": "02/04/2027",
+        "term_3_start": "26/04/2027",
+        "term_3_end": "23/07/2027",
+    }
+    data.update(over)
+    return data
+
+
+def test_session_years_must_match_name(admin_user):
+    shifted = [
+        (date(2030, 9, 1), date(2030, 12, 1)),
+        (date(2031, 1, 5), date(2031, 4, 1)),
+        (date(2031, 4, 20), date(2031, 7, 1)),
+    ]
+    with schema_context("school_a"):
+        with pytest.raises(ValidationError) as e:
+            make(terms=shifted, by=admin_user)
+        assert "term_1" in e.value.message_dict
+        assert "term_3" in e.value.message_dict
+        assert AcademicSession.objects.count() == 0
+
+
+def test_services_take_advisory_lock(admin_user):
+    with schema_context("school_a"):
+        with CaptureQueriesContext(connection) as ctx:
+            s = make(by=admin_user)
+        assert any("pg_advisory_xact_lock" in q["sql"] for q in ctx.captured_queries)
+        with CaptureQueriesContext(connection) as ctx:
+            set_current_term(s.terms.get(number=1), by=admin_user)
+        assert any("pg_advisory_xact_lock" in q["sql"] for q in ctx.captured_queries)
+
+
+def test_set_current_integrity_error_is_friendly(client_a, admin_user):
+    with schema_context("school_a"):
+        term = make(by=admin_user).terms.get(number=1)
+    login_verified(client_a, admin_user)
+    with mock.patch("apps.academics.views.set_current_term", side_effect=IntegrityError):
+        r = client_a.post(reverse("academics:set_current", args=[term.pk]), follow=True)
+    assert r.status_code == 200
+    assert "Someone else changed this at the same time" in r.content.decode()
+
+
+def test_create_integrity_error_is_friendly(client_a, admin_user):
+    login_verified(client_a, admin_user)
+    with mock.patch("apps.academics.forms.create_session", side_effect=IntegrityError):
+        r = client_a.post(reverse("academics:session_create"), full_data())
+    assert r.status_code == 200
+    assert "Someone else changed this at the same time" in r.content.decode()
+
+
+@pytest.mark.parametrize("role", ["principal", "proprietor"])
+def test_read_roles_cannot_set_current(client_a, school_a, admin_user, role):
+    with schema_context("school_a"):
+        term = make(by=admin_user).terms.get(number=1)
+        u = StaffFactory()
+        set_roles(u, [role], by=u)
+    login_verified(client_a, u)
+    r = client_a.post(reverse("academics:set_current", args=[term.pk]))
+    assert r.status_code == 403
+    with schema_context("school_a"):
+        assert current_term() is None
+    html = client_a.get(reverse("academics:sessions")).content.decode()
+    assert "Make current" not in html
+
+
+def test_set_current_unknown_term_404(client_a, admin_user):
+    login_verified(client_a, admin_user)
+    assert client_a.post(reverse("academics:set_current", args=[999999])).status_code == 404

@@ -1,4 +1,5 @@
 from django.contrib import messages
+from django.db import IntegrityError
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
@@ -7,6 +8,8 @@ from apps.academics.forms import SessionForm
 from apps.academics.models import AcademicSession, Term
 from apps.academics.services import set_current_term
 from apps.accounts.roles import PRINCIPAL, PROPRIETOR, SCHOOL_ADMIN, require_roles
+
+CONFLICT_MESSAGE = "Someone else changed this at the same time — please try again."
 
 
 @never_cache
@@ -26,7 +29,11 @@ def session_create(request):
     if request.method == "POST":
         form = SessionForm(request.POST)
         if form.is_valid():
-            session = form.save(by=request.user, request=request)
+            try:
+                session = form.save(by=request.user, request=request)
+            except IntegrityError:
+                session = None
+                messages.error(request, CONFLICT_MESSAGE)
             if session is not None:
                 messages.success(request, f"Session {session.name} created.")
                 return redirect("academics:sessions")
@@ -39,6 +46,10 @@ def session_create(request):
 @require_roles(SCHOOL_ADMIN)
 def set_current(request, term_id):
     term = get_object_or_404(Term, pk=term_id)
-    set_current_term(term, by=request.user, request=request)
-    messages.success(request, f"{term} is now the current term.")
+    try:
+        set_current_term(term, by=request.user, request=request)
+    except IntegrityError:
+        messages.error(request, CONFLICT_MESSAGE)
+    else:
+        messages.success(request, f"{term} is now the current term.")
     return redirect("academics:sessions")
