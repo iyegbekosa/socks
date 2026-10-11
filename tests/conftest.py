@@ -15,8 +15,13 @@ def django_db_setup(django_db_setup, django_db_blocker):
         Domain.objects.get_or_create(
             domain="localhost", defaults={"tenant": public, "is_primary": True}
         )
-        make_school("school_a", "School A", "school-a.localhost")
-        make_school("school_b", "School B", "school-b.localhost")
+        from apps.tenancy.seeding import seed_school
+
+        for args in (
+            ("school_a", "School A", "school-a.localhost"),
+            ("school_b", "School B", "school-b.localhost"),
+        ):
+            seed_school(make_school(*args))
     yield
 
 

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Multi-tenant school management SaaS"
 requires-python = ">=3.12"
 dependencies = [
-    "Django>=5.2,<5.3",
+    "Django[argon2]>=5.2,<5.3",
     "djangorestframework>=3.15",
     "django-tenants>=3.7",
     "celery[redis]>=5.4",
