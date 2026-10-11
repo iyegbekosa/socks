@@ -20,6 +20,7 @@ dependencies = [
     "gunicorn>=23",
     "django-otp>=1.5",
     "segno>=1.6",
+    "Pillow>=10.4",
 ]
 
 [project.optional-dependencies]

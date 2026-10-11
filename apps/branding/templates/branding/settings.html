@@ -1,0 +1,20 @@
+{% extends "core/base.html" %}
+{% block title %}Branding{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>School branding</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if branding.logo_url %}<p><img src="{{ branding.logo_url }}" alt="Current logo" width="120"></p>{% endif %}
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    {% for field in form %}
+    <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+    {% if field.name == "primary_color" or field.name == "accent_color" %}<input type="text" name="{{ field.html_name }}" id="{{ field.id_for_label }}" value="{{ field.value|default:'' }}" maxlength="7" pattern="#[0-9A-Fa-f]{6}">{% else %}{{ field }}{% endif %}
+    {% for e in field.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    {% endfor %}
+    <button type="submit">Save</button>
+  </form>
+  <p><a href="{% url 'home' %}">Back</a></p>
+</div>
+{% endblock %}

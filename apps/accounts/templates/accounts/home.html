@@ -2,5 +2,6 @@
 {% block content %}
 <div class="card">
   <h1>Welcome, {{ request.user.first_name|default:"there" }}</h1>
+  {% if request.user.is_authenticated and request.user.kind == "staff" %}{% if "school_admin" in request.user.roles or "proprietor" in request.user.roles %}<p><a href="{% url 'branding:settings' %}">School branding</a></p>{% endif %}{% endif %}
 </div>
 {% endblock %}

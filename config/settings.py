@@ -42,6 +42,7 @@ TENANT_APPS = [
     "apps.accounts",
     "apps.audit",
     "apps.files",
+    "apps.branding",
     "django_otp",
     "django_otp.plugins.otp_totp",
 ]
@@ -106,6 +107,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "apps.branding.context_processors.branding",
             ],
         },
     },

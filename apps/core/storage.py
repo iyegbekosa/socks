@@ -153,6 +153,20 @@ class TenantCloudinaryStorage(Storage):
             options["format"] = fmt
         return cloudinary.utils.cloudinary_url(public_id, **options)[0]
 
+    def image_url(self, name: str, *, width: int) -> str:
+        """Delivery URL for an image resized to at most ``width`` px (public delivery only)."""
+        public_id, resource_type, fmt = self._target(name)
+        if resource_type != "image":
+            raise ValueError(f"{name!r} is not an image.")
+        return cloudinary.CloudinaryImage(public_id).build_url(
+            type=self.delivery_type,
+            secure=True,
+            format=fmt or None,
+            transformation=[
+                {"width": width, "crop": "limit", "fetch_format": "auto", "quality": "auto"}
+            ],
+        )
+
     def _open(self, name, mode="rb"):
         with urllib.request.urlopen(self.url(name), timeout=30) as resp:  # noqa: S310
             return ContentFile(resp.read(), name=name)

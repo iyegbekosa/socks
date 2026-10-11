@@ -2,6 +2,11 @@
 {% block title %}Log in{% endblock %}
 {% block content %}
 <div class="card">
+  {% if branding %}
+  {% if branding.logo_url %}<img class="logo" src="{{ branding.logo_url }}" alt="{{ request.tenant.name }} logo" width="120">{% endif %}
+  <p class="school-name"><strong>{{ request.tenant.name }}</strong></p>
+  {% if branding.motto %}<p class="muted">{{ branding.motto }}</p>{% endif %}
+  {% endif %}
   <h1>Log in</h1>
   {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
