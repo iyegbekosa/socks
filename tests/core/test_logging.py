@@ -67,3 +67,54 @@ def test_authenticated_request_log_has_user_id(client_a, school_a, caplog):
     assert records
     assert records[0].user_id == pk
     assert records[0].role == "-"
+
+
+@pytest.fixture
+def _restore_root_logging():
+    root = logging.getLogger()
+    handlers, level = root.handlers[:], root.level
+    yield
+    root.handlers[:] = handlers
+    root.setLevel(level)
+
+
+@pytest.mark.usefixtures("_restore_root_logging")
+def test_logging_settings_wire_filters_and_json_formatter():
+    import logging.config
+
+    from django.conf import settings
+
+    logging.config.dictConfig(settings.LOGGING)
+    handlers = logging.getLogger().handlers
+    assert handlers
+    for handler in handlers:
+        assert any(isinstance(f, ContextFilter) for f in handler.filters)
+        assert any(isinstance(f, RedactFilter) for f in handler.filters)
+        assert isinstance(handler.formatter, JsonFormatter)
+
+
+def test_celery_does_not_hijack_root_logger():
+    from config.celery import app
+
+    assert app.conf.worker_hijack_root_logger is False
+
+
+@pytest.mark.usefixtures("_restore_root_logging")
+def test_celery_setup_logging_signal_applies_django_logging():
+    from unittest import mock
+
+    from celery.signals import setup_logging
+    from django.conf import settings
+
+    from config.celery import configure_logging
+
+    with mock.patch("logging.config.dictConfig") as dict_config:
+        responses = setup_logging.send(
+            sender=None, loglevel="INFO", logfile=None, format="", colorize=False
+        )
+    assert configure_logging in [receiver for receiver, _ in responses]
+    dict_config.assert_called_once_with(settings.LOGGING)
+
+    # And for real: the root handler ends up with the JSON formatter.
+    setup_logging.send(sender=None, loglevel="INFO", logfile=None, format="", colorize=False)
+    assert any(isinstance(h.formatter, JsonFormatter) for h in logging.getLogger().handlers)

@@ -107,6 +107,8 @@ CELERY_TASK_DEFAULT_QUEUE = "default"
 CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TIMEZONE = "Africa/Lagos"
+# Workers keep Django's JSON LOGGING (see the setup_logging receiver in config/celery.py).
+CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
