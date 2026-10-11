@@ -1,10 +1,12 @@
 from django.urls import path
 
 from apps.core.views import healthz
-from apps.tenancy.views import landing
+from apps.tenancy.views import landing, signup, signup_status
 
 urlpatterns = [
     path("", landing, name="landing"),
+    path("signup/", signup, name="signup"),
+    path("signup/status/<str:token>/", signup_status, name="signup_status"),
     path("healthz", healthz, name="healthz"),
 ]
 

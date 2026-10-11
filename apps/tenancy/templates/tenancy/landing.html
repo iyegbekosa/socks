@@ -1,14 +1,9 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>School Management Platform</title>
-</head>
-<body>
-  <main>
-    <h1>School Management Platform</h1>
-    <p>Open your school's web address to sign in.</p>
-  </main>
-</body>
-</html>
+{% extends "core/base.html" %}
+{% block title %}Build2Learn{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>School Management Platform</h1>
+  <p>Open your school's web address to sign in.</p>
+  <p><a class="button" href="{% url 'signup' %}">Start your school's portal</a></p>
+</div>
+{% endblock %}

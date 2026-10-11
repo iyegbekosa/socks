@@ -1,0 +1,29 @@
+{% extends "core/base.html" %}
+{% block title %}Start your school's portal{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Start your school's portal</h1>
+  {% if blocked %}<p class="error" role="alert">{{ blocked }}</p>{% endif %}
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error">{{ form.non_field_errors }}</p>{% endif %}
+    {% for field in form %}
+      {% if field.name == "levels_offered" %}
+        <fieldset><legend>Levels offered</legend>
+          {{ field }}
+          {% for e in field.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+        </fieldset>
+      {% elif field.name == "accept_terms" %}
+        <label>{{ field }} I accept the terms of service</label>
+        {% for e in field.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+      {% else %}
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+        {% if field.help_text %}<span class="muted">{{ field.help_text }}</span>{% endif %}
+        {% for e in field.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+      {% endif %}
+    {% endfor %}
+    <button type="submit">Create my school</button>
+  </form>
+</div>
+{% endblock %}

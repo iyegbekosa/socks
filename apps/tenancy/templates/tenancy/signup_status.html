@@ -1,0 +1,16 @@
+{% extends "core/base.html" %}
+{% block title %}Setting up {{ school.name }}{% endblock %}
+{% block head %}{% if status == "pending" %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>{{ school.name }}</h1>
+  {% if status == "ready" %}
+    <p>Your portal is ready. Check your email for the link to set your password.</p>
+    <p><a class="button" href="{{ portal_url }}">Open your portal</a></p>
+  {% elif status == "failed" %}
+    <p class="error" role="alert">Something went wrong while setting up your school. We'll contact you shortly.</p>
+  {% else %}
+    <p>We're setting up your school. This page refreshes by itself.</p>
+  {% endif %}
+</div>
+{% endblock %}

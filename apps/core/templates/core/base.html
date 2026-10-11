@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{% if request.tenant.name %}{{ request.tenant.name }}{% else %}Build2Learn{% endif %}{% endblock %}</title>
   <link rel="stylesheet" href="{% static 'core/app.css' %}">
+  {% block head %}{% endblock %}
   {% if branding %}<style>:root { --primary: {{ branding.primary_color }}; --accent: {{ branding.accent_color }}; }</style>{% endif %}
 </head>
 <body>

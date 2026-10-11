@@ -23,6 +23,16 @@ class School(TenantMixin):
         Plan, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
     )
 
+    levels_offered = models.JSONField(default=list, blank=True)
+    contact_name = models.CharField(max_length=200, blank=True, default="")
+    contact_phone = models.CharField(max_length=20, blank=True, default="")
+    contact_email = models.EmailField(blank=True, default="")
+    provisioning_status = models.CharField(
+        max_length=10,
+        choices=[("pending", "Pending"), ("ready", "Ready"), ("failed", "Failed")],
+        default="ready",
+    )
+
     auto_create_schema = True
 
     def __str__(self) -> str:
