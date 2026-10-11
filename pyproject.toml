@@ -45,3 +45,14 @@ select = ["E", "F", "I", "B", "UP", "DJ"]
 DJANGO_SETTINGS_MODULE = "config.settings"
 testpaths = ["tests"]
 markers = ["cloudinary: hits the live Cloudinary API (needs CLOUDINARY_URL)"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["mypy_django_plugin.main"]
+
+[[tool.mypy.overrides]]
+module = ["cloudinary.*", "django_tenants.*", "environ.*", "pythonjsonlogger.*", "celery.*", "kombu.*", "rest_framework.*", "factory.*"]
+ignore_missing_imports = true
+
+[tool.django-stubs]
+django_settings_module = "config.settings"
