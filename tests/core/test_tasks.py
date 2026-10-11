@@ -1,8 +1,17 @@
+import logging
+
 import pytest
 from django.db import connection
 from django_tenants.utils import schema_context
 
-from apps.core.tasks import MissingTenantError, TenantTask, UnknownTenantError
+from apps.core.logging import ContextFilter
+from apps.core.request_id import request_id_var, schema_name_var
+from apps.core.tasks import (
+    CrossTenantEnqueueError,
+    MissingTenantError,
+    TenantTask,
+    UnknownTenantError,
+)
 from config.celery import app
 
 pytestmark = pytest.mark.django_db
@@ -64,3 +73,46 @@ def test_unknown_schema_fails_clearly():
     # silently read public tables, so TenantTask verifies the school exists.
     with pytest.raises(UnknownTenantError, match="no_such_school"):
         current_schema.apply_async(headers={"schema_name": "no_such_school"})
+
+
+@app.task(base=TenantTask, name="tests.log_line")
+def log_line():
+    logging.getLogger("tests.tasks").warning("hello from task")
+
+
+def test_task_log_lines_carry_school_and_task_id(school_a, caplog):
+    caplog.handler.addFilter(ContextFilter())
+    with caplog.at_level(logging.WARNING, logger="tests.tasks"):
+        with schema_context("school_a"):
+            result = log_line.delay()
+    records = [r for r in caplog.records if r.name == "tests.tasks"]
+    assert records
+    assert records[0].schema == "school_a"
+    assert records[0].request_id == result.id
+    assert schema_name_var.get() == "-"
+    assert request_id_var.get() == "-"
+
+
+@app.task(base=TenantTask, name="tests.sentry_tags")
+def sentry_tags():
+    from config.settings import _sentry_before_send
+
+    return _sentry_before_send({}, None)["tags"]
+
+
+def test_sentry_tags_carry_school_inside_task(school_a):
+    with schema_context("school_a"):
+        result = sentry_tags.delay()
+    assert result.get() == {"schema": "school_a", "request_id": result.id}
+
+
+def test_cross_school_enqueue_from_inside_a_school_is_refused(school_a, school_b):
+    with schema_context("school_a"):
+        with pytest.raises(CrossTenantEnqueueError, match="school_b"):
+            current_schema.apply_async(headers={"schema_name": "school_b"})
+
+
+def test_explicit_header_naming_current_school_is_allowed(school_a):
+    with schema_context("school_a"):
+        result = current_schema.apply_async(headers={"schema_name": "school_a"})
+    assert result.get() == "school_a"

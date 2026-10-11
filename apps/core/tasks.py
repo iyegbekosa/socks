@@ -4,6 +4,8 @@ from celery import Task
 from django.db import connection
 from django_tenants.utils import get_public_schema_name, get_tenant_model, schema_context
 
+from apps.core.request_id import request_id_var, schema_name_var
+
 SCHEMA_HEADER = "schema_name"
 
 
@@ -15,18 +17,29 @@ class UnknownTenantError(MissingTenantError):
     """The schema named in the task message does not belong to any school."""
 
 
+class CrossTenantEnqueueError(RuntimeError):
+    """Code running inside one school tried to enqueue a task for another school."""
+
+
 class TenantTask(Task):
     """Injects the enqueuing schema as a message header and runs inside it."""
 
     def apply_async(self, args=None, kwargs=None, **options):
         headers = dict(options.get("headers") or {})
-        if not headers.get(SCHEMA_HEADER):
-            schema = connection.schema_name
-            if schema == get_public_schema_name():
-                raise MissingTenantError(
-                    f"{self.name} enqueued from the public schema without an explicit "
-                    f"{SCHEMA_HEADER} header"
+        schema = connection.schema_name
+        explicit = headers.get(SCHEMA_HEADER)
+        if explicit:
+            # Only public code (e.g. Beat fan-out) may target a school other than its own.
+            if schema != get_public_schema_name() and explicit != schema:
+                raise CrossTenantEnqueueError(
+                    f"{self.name} enqueued from {schema!r} with {SCHEMA_HEADER}={explicit!r}"
                 )
+        elif schema == get_public_schema_name():
+            raise MissingTenantError(
+                f"{self.name} enqueued from the public schema without an explicit "
+                f"{SCHEMA_HEADER} header"
+            )
+        else:
             headers[SCHEMA_HEADER] = schema
         options["headers"] = headers
         return super().apply_async(args, kwargs, **options)
@@ -72,4 +85,13 @@ class TenantTask(Task):
         if not self._school_exists(schema):
             raise UnknownTenantError(f"{self.name} targets unknown schema {schema!r}")
         with schema_context(schema):
-            return super().__call__(*args, **kwargs)
+            # Logs (ContextFilter) and Sentry tags (before_send) read these contextvars.
+            tokens = [
+                (schema_name_var, schema_name_var.set(schema)),
+                (request_id_var, request_id_var.set(self.request.id or "-")),
+            ]
+            try:
+                return super().__call__(*args, **kwargs)
+            finally:
+                for var, token in reversed(tokens):
+                    var.reset(token)
