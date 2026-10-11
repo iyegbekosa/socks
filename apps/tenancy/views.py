@@ -44,8 +44,6 @@ def signup(request):
         return render(request, "tenancy/signup.html", {"form": SignupForm()})
 
     # Reserve first: every POST counts, valid or not (cheap defence against schema spam).
-    if _global_limit.hit(GLOBAL_KEY) > _global_limit.limit:
-        return _too_many(request, BUSY_MESSAGE, _global_limit, GLOBAL_KEY)
     ip = client_ip(request)
     if ip is not None and _signup_limit.hit(ip) > _signup_limit.limit:
         return _too_many(
@@ -59,6 +57,9 @@ def signup(request):
     if not form.is_valid():
         return render(request, "tenancy/signup.html", {"form": form}, status=200)
     data = form.cleaned_data
+    # The global cap counts only valid signups, so junk POSTs from one client cannot use it up.
+    if _global_limit.hit(GLOBAL_KEY) > _global_limit.limit:
+        return _too_many(request, BUSY_MESSAGE, _global_limit, GLOBAL_KEY)
     try:
         school = _create_school(data)
     except IntegrityError:  # a concurrent signup took the same subdomain

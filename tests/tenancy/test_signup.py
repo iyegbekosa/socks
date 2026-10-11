@@ -234,23 +234,43 @@ def test_signup_sends_no_sms(client, post, payload, settings, sms_outbox):
         assert User.objects.get(email="ada@example.com").phone == "+2348031234567"
 
 
-def test_retry_after_partial_failure_sends_one_invite(client, post, payload, transaction_capture):
-    # Fire on-commit hooks immediately, as a worker's autocommit does, so the failure happens
-    # inside the task.
+def test_retry_after_partial_failure_sends_one_invite(client, post, payload):
+    """Production shape: on_commit hooks run after invite_staff returns, i.e. with the user row
+    already committed, and a failing send fails the task."""
+    import apps.accounts.services as svc
+    from apps.accounts.models import User
+
+    post_without_mail = payload  # first run goes through the view, with mail broken below
+    pending: list = []
+
+    def run_pending(fn):
+        def wrapper(*a, **kw):
+            result = fn(*a, **kw)
+            todo = list(pending)
+            pending.clear()
+            for hook in todo:
+                hook()
+            return result
+
+        return wrapper
+
     with (
-        mock.patch("apps.accounts.services.send_mail", side_effect=RuntimeError("smtp down")),
-        mock.patch("apps.accounts.services.transaction.on_commit", lambda fn: fn()),
+        mock.patch.object(svc.transaction, "on_commit", lambda fn: pending.append(fn)),
+        mock.patch.object(svc, "invite_staff", run_pending(svc.invite_staff)),
+        mock.patch.object(svc, "send_mail", side_effect=RuntimeError("smtp down")),
     ):
-        post(client, payload)
+        post(client, post_without_mail)
     school = School.objects.get(schema_name="newschool")
     assert school.provisioning_status == "failed"
     assert mail.outbox == []
     with schema_context("newschool"):
-        from apps.accounts.models import User
+        user = User.objects.get(email="ada@example.com")
+        assert not user.has_usable_password()
 
-        # The failed send rolled the invite back, so the retry creates the user afresh.
-        assert User.objects.filter(email="ada@example.com").count() == 0
-    with transaction_capture(client):
+    with (
+        mock.patch.object(svc.transaction, "on_commit", lambda fn: pending.append(fn)),
+        mock.patch.object(svc, "resend_invite", run_pending(svc.resend_invite)),
+    ):
         provision_school(school.pk)
     school.refresh_from_db()
     assert school.provisioning_status == "ready"
@@ -285,3 +305,25 @@ def test_rerun_resends_invite_to_unaccepted_contact(client, post, payload, trans
         _invite_contact(school, "http://newschool.localhost:8000", resend=True)
     assert len(mail.outbox) == 2
     assert "/accounts/invite/" in mail.outbox[1].body
+
+
+def test_junk_posts_do_not_consume_global_cap(client, post, payload):
+    from apps.tenancy.views import GLOBAL_KEY, _global_limit
+
+    bad = dict(payload, subdomain="9")
+    for i in range(51):
+        resp = client.post("/signup/", bad, HTTP_HOST=PUBLIC_HOST, REMOTE_ADDR=f"10.0.{i}.1")
+        assert resp.status_code == 200
+    assert _global_limit.count(GLOBAL_KEY) == 0
+    assert post(client, payload).status_code == 302
+    assert School.objects.get(schema_name="newschool").provisioning_status == "ready"
+
+
+def test_migrate_alias_skips_ghost_school(db):
+    from django.core.management import call_command
+
+    school = School(schema_name="pendingschool", name="Ghost", provisioning_status="pending")
+    school.auto_create_schema = False
+    school.save()
+    call_command("migrate", tenant=True, interactive=False, verbosity=0)
+    assert "pendingschool" not in schemas()
