@@ -142,6 +142,7 @@ def staff_edit_view(request, pk: int):
         except ValidationError as exc:
             errors = exc.messages
             target.refresh_from_db()
+            roles_form = RolesForm(initial={"roles": sorted(target.roles)})
         else:
             return redirect(reverse("staff:edit", args=[target.pk]))
 

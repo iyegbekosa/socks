@@ -1,4 +1,5 @@
 import pytest
+from django.contrib.sessions.models import Session
 from django.urls import reverse
 from django_tenants.utils import schema_context
 
@@ -48,7 +49,16 @@ def test_post_not_allowed(client_a):
     with schema_context("school_a"):
         s = StudentFactory()
         client_a.force_login(s)
-    assert client_a.post("/api/v1/me").status_code in {403, 405}
+    assert client_a.post("/api/v1/me").status_code == 405
+
+
+def test_post_without_csrf_token_is_403(school_a):
+    from django_tenants.test.client import TenantClient
+
+    c = TenantClient(school_a, enforce_csrf_checks=True)
+    with schema_context("school_a"):
+        c.force_login(StudentFactory())
+    assert c.post("/api/v1/me").status_code == 403
 
 
 def test_school_b_session_cookie_rejected_on_school_a(client_a, client_b):
@@ -58,3 +68,8 @@ def test_school_b_session_cookie_rejected_on_school_a(client_a, client_b):
     assert client_b.get("/api/v1/me").status_code == 200
     client_a.cookies["sessionid"] = client_b.cookies["sessionid"].value
     assert client_a.get("/api/v1/me").status_code == 401
+    key = client_b.cookies["sessionid"].value
+    with schema_context("school_b"):
+        assert Session.objects.filter(session_key=key).exists()
+    with schema_context("school_a"):
+        assert not Session.objects.filter(session_key=key).exists()

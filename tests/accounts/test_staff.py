@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from django.core import mail
 from django.core.cache import cache
@@ -9,6 +11,7 @@ from apps.accounts.models import User
 from apps.accounts.roles import set_roles
 from apps.audit.models import AuditEvent
 from tests.accounts.factories import StaffFactory, StudentFactory
+from tests.accounts.helpers import login_verified
 
 pytestmark = pytest.mark.django_db
 
@@ -67,7 +70,8 @@ def test_list_shows_staff_not_students(client_a):
     r = client_a.get(reverse("staff:list"))
     assert r.status_code == 200
     assert b"Tolu" in r.content and b"Zed" not in r.content
-    assert st.admission_number.encode() not in r.content and t
+    assert st.admission_number.encode() not in r.content
+    assert t.get_full_name().encode() in r.content
 
 
 def test_edit_404_for_student_or_missing(client_a):
@@ -218,3 +222,61 @@ def test_invite_form_duplicate_shows_field_error(client_a):
         {"full_name": "X Y", "email": "dup2@school.ng", "phone": "", "roles": ["teacher"]},
     )
     assert r.status_code == 200 and b"already" in r.content.lower()
+
+
+def test_verified_school_admin_can_manage_staff(client_a):
+    with schema_context("school_a"):
+        a = StaffFactory()
+        set_roles(a, ["school_admin"], by=a)
+        t = StaffFactory()
+    login_verified(client_a, a)
+    assert client_a.get(reverse("staff:list")).status_code == 200
+    r = _post(client_a, t, action="roles", roles=["teacher"])
+    assert r.status_code == 302
+    with schema_context("school_a"):
+        assert User.objects.get(pk=t.pk).roles == {"teacher"}
+
+
+def test_unverified_school_admin_is_sent_to_login(client_a):
+    with schema_context("school_a"):
+        a = StaffFactory()
+        set_roles(a, ["school_admin"], by=a)
+        client_a.force_login(a)
+    r = client_a.get(reverse("staff:list"))
+    assert r.status_code == 302 and r["Location"].startswith(reverse("accounts:login"))
+
+
+def test_pending_admin_does_not_count_as_a_second_admin(client_a):
+    a = _only_admin()
+    with schema_context("school_a"):
+        pending = StaffFactory()
+        pending.set_unusable_password()
+        pending.save()
+        set_roles(pending, ["school_admin"], by=a)
+    _login(client_a, ["proprietor"])
+    r = _post(client_a, a, action="roles", roles=["teacher"])
+    assert r.status_code == 200 and b"last" in r.content.lower()
+    r = _post(client_a, a, action="deactivate")
+    assert r.status_code == 200 and b"last" in r.content.lower()
+    with schema_context("school_a"):
+        assert User.objects.get(pk=a.pk).is_active
+        assert "school_admin" in User.objects.get(pk=a.pk).roles
+
+
+def test_roles_form_after_rejection_shows_stored_roles(client_a):
+    a = _only_admin()
+    _login(client_a, ["proprietor"])
+    r = _post(client_a, a, action="roles", roles=["teacher"])
+    html = r.content.decode()
+    assert re.search(r'value="school_admin"[^>]*checked', html)
+    assert not re.search(r'value="teacher"[^>]*checked', html)
+
+
+def test_noop_state_changes_record_nothing(client_a):
+    _login(client_a, ["proprietor"])
+    with schema_context("school_a"):
+        inactive = StaffFactory(is_active=False)
+        active = StaffFactory()
+    assert _post(client_a, inactive, action="deactivate").status_code == 302
+    assert _post(client_a, active, action="reactivate").status_code == 302
+    assert not _actions("user.deactivated") and not _actions("user.reactivated")

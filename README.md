@@ -82,6 +82,9 @@ Mailpit (<http://localhost:8025>), the web server, a Celery worker and Celery Be
 - **`CLIENT_IP_HEADER` is required in production** behind Cloudflare or any proxy (e.g.
   `HTTP_CF_CONNECTING_IP`). Without it every visitor shares the proxy's IP, and the per-IP
   login limit (`LOGIN_IP_FAILURE_LIMIT`, 50 failures / 15 min) would hit the whole platform.
+- **`SECURE_PROXY_SSL=true`** when TLS ends at a proxy that sets `X-Forwarded-Proto`.
+  Without it, Django sees plain http and staff invite links in emails and SMS are built
+  as `http://` instead of `https://`.
 - **Cloudinary console:** turn on *Settings → Security → "Allow delivery of PDF and ZIP
   files"*. Report cards and receipts are PDFs, and new accounts block them.
 - **Environment:** set `CLOUDINARY_URL`, `CLOUDINARY_ENV_PREFIX` (e.g. `prod`, which keeps

@@ -133,15 +133,12 @@ def test_accept_flow_then_login(client_a, django_capture_on_commit_callbacks, sm
 
 def test_expired_link(client_a, django_capture_on_commit_callbacks, sms_outbox, school_a):
     user, link = _setup_invite(django_capture_on_commit_callbacks, sms_outbox, school_a)
-    import time
-
-    real = time.time()
     with patch("django.contrib.auth.tokens.PasswordResetTokenGenerator._now") as now:
         from datetime import datetime
 
         now.return_value = datetime.now() + timedelta(hours=73)
         r = client_a.get(link)
-    assert real and r.status_code == 400
+    assert r.status_code == 400
 
 
 def test_valid_just_inside_72h(client_a, django_capture_on_commit_callbacks, sms_outbox, school_a):
@@ -176,3 +173,18 @@ def test_student_and_inactive_and_usable_password_are_invalid(client_a, school_a
                 ],
             )
             assert client_a.get(url).status_code == 400
+
+
+def test_school_a_link_rejected_on_school_b(
+    client_b, django_capture_on_commit_callbacks, sms_outbox, school_a, school_b
+):
+    from django.db import connection
+
+    user, link = _setup_invite(django_capture_on_commit_callbacks, sms_outbox, school_a)
+    with schema_context("school_b"):
+        twin = StaffFactory(id=user.pk, email="twin@school.ng", phone="+2348055550000")
+        twin.set_unusable_password()
+        twin.save()
+    r = client_b.get(link.replace("school-a.localhost", "school-b.localhost"))
+    assert r.status_code == 400
+    connection.set_tenant(school_a)

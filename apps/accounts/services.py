@@ -9,7 +9,7 @@ from django.contrib.auth.tokens import default_token_generator
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
-from django.db import connection, transaction
+from django.db import IntegrityError, connection, transaction
 from django.template.loader import render_to_string
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
@@ -192,7 +192,19 @@ def invite_staff(
         raise ValidationError(errors)
     user.full_clean(exclude=["password"], validate_constraints=True)
     with transaction.atomic():
-        user.save()
+        try:
+            with transaction.atomic():  # savepoint: keep the outer transaction usable
+                user.save()
+        except IntegrityError:
+            # A concurrent invite for the same identifier won the race.
+            raced = {}
+            if user.email and clash.filter(email=user.email).exists():
+                raced["email"] = "A staff member with this email already exists."
+            if user.phone and clash.filter(phone=user.phone).exists():
+                raced["phone"] = "A staff member with this phone number already exists."
+            raise ValidationError(
+                raced or {"email": "A staff member with these details already exists."}
+            ) from None
         set_roles(user, roles, by=by, request=request)
         record(
             "user.invited",
@@ -216,11 +228,12 @@ def resend_invite(user: User, *, by: User, base_url: str, request=None) -> None:
 
 
 def _lock_admins() -> list[int]:
-    """Serialise admin-count changes: lock the role's group row, then the admin rows."""
+    """Active admins with a usable password, serialised via a lock on the role's group row."""
     Group.objects.select_for_update().get_or_create(name=SCHOOL_ADMIN)
     return list(
         User.objects.select_for_update(of=("self",))
         .filter(is_active=True, kind=User.Kind.STAFF, groups__name=SCHOOL_ADMIN)
+        .exclude(password__startswith="!")  # only admins who have accepted their invite
         .order_by("pk")
         .values_list("pk", flat=True)
     )
@@ -243,6 +256,8 @@ def deactivate_staff(user: User, *, by: User, request=None) -> None:
 
     if user.pk == by.pk:
         raise ValidationError("You cannot deactivate yourself.")
+    if not user.is_active:
+        return
     with transaction.atomic():
         admins = _lock_admins()
         if user.pk in admins and len(admins) <= 1:
@@ -257,6 +272,8 @@ def deactivate_staff(user: User, *, by: User, request=None) -> None:
 def reactivate_staff(user: User, *, by: User, request=None) -> None:
     from apps.audit.services import record
 
+    if user.is_active:
+        return
     with transaction.atomic():
         user.is_active = True
         user.save(update_fields=["is_active"])

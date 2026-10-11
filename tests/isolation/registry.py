@@ -30,6 +30,9 @@ def _student_in_active_schema():
     return StudentFactory.create()
 
 
+# api:me covers anonymous refusal (school B's object is unreachable without a session);
+# per-schema session storage is covered by
+# tests/accounts/test_me_api.py::test_school_b_session_cookie_rejected_on_school_a.
 ISOLATION_CASES: list[IsolationCase] = [
     IsolationCase("api:me", "GET", url=lambda u: "/api/v1/me", make_obj=_student_in_active_schema),
 ]

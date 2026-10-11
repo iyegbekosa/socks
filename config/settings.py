@@ -84,6 +84,8 @@ MIDDLEWARE = [
 SESSION_COOKIE_AGE = 14 * 24 * 3600
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
+if env.bool("SECURE_PROXY_SSL", default=False):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 STAFF_IDLE_TIMEOUT_SECONDS = 1800
@@ -146,8 +148,6 @@ if not REDIS_URL:
     CELERY_TASK_ALWAYS_EAGER = True
     CELERY_TASK_EAGER_PROPAGATES = True
 
-# Dotted path of the SMS backend. Console in development; unset in production until the
-# real provider lands (P5), when send_sms raises ImproperlyConfigured.
 # Staff invite links expire after 72 hours (also the password-reset token lifetime).
 PASSWORD_RESET_TIMEOUT = 259200
 
@@ -162,6 +162,8 @@ EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
 EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@build2learn.local")
 
+# Dotted path of the SMS backend. Console in development; unset in production until the
+# real provider lands (P5), when send_sms raises ImproperlyConfigured.
 SMS_BACKEND = env("SMS_BACKEND", default="apps.core.sms.ConsoleSmsBackend" if DEBUG else None)
 
 AUTH_PASSWORD_VALIDATORS = [
