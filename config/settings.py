@@ -87,11 +87,26 @@ if REDIS_URL:
         "default": {
             "BACKEND": "django.core.cache.backends.redis.RedisCache",
             "LOCATION": REDIS_URL,
+            "KEY_FUNCTION": "django_tenants.cache.make_key",
         }
     }
 else:
     # Local development without Redis.
-    CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            # Prefixes every key with the active schema name (§5.6).
+            "KEY_FUNCTION": "django_tenants.cache.make_key",
+        }
+    }
+
+# Celery (§8.1). Eager mode is for tests only; never the default.
+CELERY_BROKER_URL = REDIS_URL or "memory://"
+CELERY_RESULT_BACKEND = REDIS_URL or "cache+memory://"
+CELERY_TASK_DEFAULT_QUEUE = "default"
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TIMEZONE = "Africa/Lagos"
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
