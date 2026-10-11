@@ -1,0 +1,31 @@
+{% extends "core/base.html" %}
+{% block title %}Subjects{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Subjects</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  <ul>
+    {% for s in subjects %}
+    <li>{{ s.name }} <span class="muted">{{ s.sections|join:", " }}</span>
+      {% if can_edit %}
+      <a href="{% url 'academics:subject_edit' s.pk %}">Edit</a>
+      <form method="post" action="{% url 'academics:subject_delete' s.pk %}" class="inline">{% csrf_token %}<button type="submit" class="link">Delete</button></form>
+      {% endif %}
+    </li>
+    {% empty %}<li class="muted">No subjects yet.</li>{% endfor %}
+  </ul>
+  {% if can_edit %}
+  <h2>Add a subject</h2>
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    <label for="{{ form.name.id_for_label }}">{{ form.name.label }}</label>{{ form.name }}
+    {% for e in form.name.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    <p>{{ form.sections.label }}</p>{{ form.sections }}
+    {% for e in form.sections.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    <button type="submit">Add subject</button>
+  </form>
+  {% endif %}
+  <p><a href="{% url 'academics:sessions' %}">Back</a></p>
+</div>
+{% endblock %}

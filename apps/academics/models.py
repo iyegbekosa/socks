@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
@@ -37,3 +38,92 @@ class Term(models.Model):
 
     def __str__(self) -> str:
         return f"{self.session.name} {self.get_number_display()}"
+
+
+SECTIONS = ["nursery", "primary", "jss", "sss"]
+SECTION_CHOICES = [
+    ("nursery", "Nursery"),
+    ("primary", "Primary"),
+    ("jss", "Junior Secondary"),
+    ("sss", "Senior Secondary"),
+]
+STREAM_CHOICES = [("science", "Science"), ("arts", "Arts"), ("commercial", "Commercial")]
+
+
+def normalise_display(text: str) -> str:
+    return "".join((text or "").split()).upper()
+
+
+class ClassLevel(models.Model):
+    name = models.CharField(max_length=40, unique=True)
+    section = models.CharField(max_length=10, choices=SECTION_CHOICES)
+    order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class ClassArm(models.Model):
+    level = models.ForeignKey(ClassLevel, on_delete=models.PROTECT, related_name="arms")
+    suffix = models.CharField(max_length=40)
+    stream = models.CharField(max_length=12, choices=STREAM_CHOICES, null=True, blank=True)  # noqa: DJ001 - None means no stream
+
+    class Meta:
+        ordering = ["level__order", "level__name", "suffix"]
+        constraints = [
+            models.UniqueConstraint(fields=["level", "suffix"], name="academics_arm_unique"),
+        ]
+
+    def __str__(self) -> str:
+        return self.display_name
+
+    @property
+    def display_name(self) -> str:
+        sep = "" if len(self.suffix) == 1 else " "
+        return f"{self.level.name}{sep}{self.suffix}"
+
+    @property
+    def normalised_display(self) -> str:
+        return normalise_display(self.level.name + self.suffix)
+
+    def clean(self) -> None:
+        errors: dict[str, str] = {}
+        self.suffix = (self.suffix or "").strip()
+        if not self.suffix:
+            errors["suffix"] = "Give the arm a name or letter, such as A or Gold."
+        if self.stream and self.level_id and self.level.section != "sss":
+            errors["stream"] = "Only senior secondary (SSS) arms can have a stream."
+        if self.suffix and self.level_id:
+            key = normalise_display(self.level.name + self.suffix)
+            others = ClassArm.objects.select_related("level").exclude(pk=self.pk)
+            for other in others:
+                if other.normalised_display == key:
+                    errors["suffix"] = f"That would look the same as {other.display_name}."
+                    break
+        if errors:
+            raise ValidationError(errors)
+
+    @classmethod
+    def find_by_display(cls, text: str) -> "ClassArm | None":
+        key = normalise_display(text)
+        if not key:
+            return None
+        for arm in cls.objects.select_related("level"):
+            if arm.normalised_display == key:
+                return arm
+        return None
+
+
+class Subject(models.Model):
+    name = models.CharField(max_length=80, unique=True)
+    code = models.SlugField(max_length=90, unique=True)
+    sections = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name

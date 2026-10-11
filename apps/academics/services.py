@@ -4,8 +4,17 @@ from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
+from django.db.models import ProtectedError, RestrictedError
+from django.utils.text import slugify
 
-from apps.academics.models import AcademicSession, Term
+from apps.academics.models import (
+    SECTIONS,
+    AcademicSession,
+    ClassArm,
+    ClassLevel,
+    Subject,
+    Term,
+)
 from apps.audit.services import record
 
 NAME_RE = re.compile(r"^(\d{4})/(\d{4})$")
@@ -120,3 +129,136 @@ def current_term() -> Term | None:
 def current_session() -> AcademicSession | None:
     term = current_term()
     return term.session if term else None
+
+
+# --- class structure and subjects ---------------------------------------------
+
+
+def _audit_structure(what: str, obj: Any, *, by: Any, request: Any, pk: int | None = None) -> None:
+    record(
+        "academics.structure_changed",
+        request=request,
+        actor=by,
+        obj=obj,
+        after={"what": what, "id": pk if pk is not None else obj.pk},
+    )
+
+
+def create_arm(
+    *, level: ClassLevel, suffix: str, stream: str | None = None, by: Any, request: Any = None
+) -> ClassArm:
+    with transaction.atomic():
+        academic_write_lock()
+        arm = ClassArm(level=level, suffix=(suffix or "").strip(), stream=stream or None)
+        arm.full_clean()
+        arm.save()
+        _audit_structure("arm_created", arm, by=by, request=request)
+    return arm
+
+
+def rename_arm(
+    arm: ClassArm,
+    *,
+    suffix: str,
+    stream: str | None = None,
+    by: Any,
+    request: Any = None,
+) -> ClassArm:
+    with transaction.atomic():
+        academic_write_lock()
+        arm.suffix = (suffix or "").strip()
+        arm.stream = stream or None
+        arm.full_clean()
+        arm.save(update_fields=["suffix", "stream"])
+        _audit_structure("arm_renamed", arm, by=by, request=request)
+    return arm
+
+
+def delete_arm(arm: ClassArm, *, by: Any, request: Any = None) -> None:
+    pk = arm.pk
+    try:
+        with transaction.atomic():
+            academic_write_lock()
+            label = arm.display_name
+            arm.delete()
+            record(
+                "academics.structure_changed",
+                request=request,
+                actor=by,
+                after={"what": "arm_deleted", "id": pk},
+            )
+    except (ProtectedError, RestrictedError) as exc:
+        raise ValidationError(
+            f"{label} has enrolments, so it cannot be deleted. Move or withdraw the students first."
+        ) from exc
+
+
+def _clean_sections(sections: Any) -> list[str]:
+    values = list(sections or [])
+    if not values or any(v not in SECTIONS for v in values):
+        raise ValidationError({"sections": "Choose at least one valid section."})
+    return [s for s in SECTIONS if s in values]
+
+
+def _other_subjects(exclude_pk: int | None) -> Any:
+    qs = Subject.objects.all()
+    return qs.exclude(pk=exclude_pk) if exclude_pk is not None else qs
+
+
+def _subject_code(name: str, exclude_pk: int | None = None) -> str:
+    base = slugify(name)[:80] or "subject"
+    code, n = base, 2
+    while _other_subjects(exclude_pk).filter(code=code).exists():
+        code, n = f"{base}-{n}", n + 1
+    return code
+
+
+def _check_subject_name(name: str, exclude_pk: int | None = None) -> str:
+    name = " ".join((name or "").split())
+    if not name:
+        raise ValidationError({"name": "Subject name is required."})
+    if _other_subjects(exclude_pk).filter(name__iexact=name).exists():
+        raise ValidationError({"name": f"{name} already exists."})
+    return name
+
+
+def create_subject(*, name: str, sections: Any, by: Any, request: Any = None) -> Subject:
+    with transaction.atomic():
+        academic_write_lock()
+        name = _check_subject_name(name)
+        subject = Subject(name=name, code=_subject_code(name), sections=_clean_sections(sections))
+        subject.full_clean()
+        subject.save()
+        _audit_structure("subject_created", subject, by=by, request=request)
+    return subject
+
+
+def update_subject(
+    subject: Subject, *, name: str, sections: Any, by: Any, request: Any = None
+) -> Subject:
+    with transaction.atomic():
+        academic_write_lock()
+        subject.name = _check_subject_name(name, subject.pk)
+        subject.sections = _clean_sections(sections)
+        subject.full_clean()
+        subject.save(update_fields=["name", "sections"])
+        _audit_structure("subject_updated", subject, by=by, request=request)
+    return subject
+
+
+def delete_subject(subject: Subject, *, by: Any, request: Any = None) -> None:
+    pk, label = subject.pk, subject.name
+    try:
+        with transaction.atomic():
+            academic_write_lock()
+            subject.delete()
+            record(
+                "academics.structure_changed",
+                request=request,
+                actor=by,
+                after={"what": "subject_deleted", "id": pk},
+            )
+    except (ProtectedError, RestrictedError) as exc:
+        raise ValidationError(
+            f"{label} has offerings, so it cannot be deleted. Remove its offerings first."
+        ) from exc

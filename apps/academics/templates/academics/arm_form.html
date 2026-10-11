@@ -1,0 +1,17 @@
+{% extends "core/base.html" %}
+{% block title %}Rename arm{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Rename {{ arm.display_name }}</h1>
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    {% for f in form %}
+    <label for="{{ f.id_for_label }}">{{ f.label }}</label>{{ f }}
+    {% for e in f.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    {% endfor %}
+    <button type="submit">Save</button>
+  </form>
+  <p><a href="{% url 'academics:structure' %}">Back</a></p>
+</div>
+{% endblock %}

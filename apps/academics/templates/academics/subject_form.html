@@ -1,0 +1,17 @@
+{% extends "core/base.html" %}
+{% block title %}Edit subject{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Edit {{ subject.name }}</h1>
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    <label for="{{ form.name.id_for_label }}">{{ form.name.label }}</label>{{ form.name }}
+    {% for e in form.name.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    <p>{{ form.sections.label }}</p>{{ form.sections }}
+    {% for e in form.sections.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    <button type="submit">Save</button>
+  </form>
+  <p><a href="{% url 'academics:subjects' %}">Back</a></p>
+</div>
+{% endblock %}

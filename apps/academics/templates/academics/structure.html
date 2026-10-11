@@ -1,0 +1,35 @@
+{% extends "core/base.html" %}
+{% block title %}Classes and arms{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Classes and arms</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% for level in levels %}
+  <h2>{{ level.name }} <span class="muted">({{ level.get_section_display }})</span></h2>
+  <ul>
+    {% for arm in level.arms.all %}
+    <li>{{ arm.display_name }}{% if arm.stream %} <span class="muted">{{ arm.get_stream_display }}</span>{% endif %}
+      {% if can_edit %}
+      <a href="{% url 'academics:arm_rename' arm.pk %}">Rename</a>
+      <form method="post" action="{% url 'academics:arm_delete' arm.pk %}" class="inline">{% csrf_token %}<button type="submit" class="link">Delete</button></form>
+      {% endif %}
+    </li>
+    {% empty %}<li class="muted">No arms yet.</li>{% endfor %}
+  </ul>
+  {% empty %}<p class="muted">No levels yet. Levels are created from the sections your school offers.</p>{% endfor %}
+  {% if can_edit and levels %}
+  <h2>Add an arm</h2>
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    {% for f in form %}
+    <label for="{{ f.id_for_label }}">{{ f.label }}</label>{{ f }}
+    {% if f.help_text %}<p class="muted">{{ f.help_text }}</p>{% endif %}
+    {% for e in f.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    {% endfor %}
+    <button type="submit">Add arm</button>
+  </form>
+  {% endif %}
+  <p><a href="{% url 'academics:sessions' %}">Back</a></p>
+</div>
+{% endblock %}
