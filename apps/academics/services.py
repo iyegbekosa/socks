@@ -401,7 +401,8 @@ PHONE_SHAPED_MESSAGE = "That would look like a phone number, which students coul
 
 def default_prefix() -> str:
     """Initials of the current school's name, letters only, at most 8 characters."""
-    name = getattr(connection.tenant, "name", "")  # type: ignore[attr-defined] or ""
+    tenant = getattr(connection, "tenant", None)
+    name = getattr(tenant, "name", "") or ""
     initials = "".join(
         ch for word in name.split() for ch in word[:1] if ch.isalpha() and ch.isascii()
     )
