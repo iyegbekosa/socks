@@ -51,6 +51,12 @@ def _set_pending(client, user, age=0):
         s.save()
 
 
+def _secret(device):
+    import base64
+
+    return base64.b32encode(device.bin_key).decode().rstrip("=")
+
+
 def _logged_in(client):
     return "_auth_user_id" in client.session
 
@@ -64,7 +70,7 @@ def test_setup_flow_enrols_and_logs_in(client_a):
     page = client_a.get(reverse("accounts:mfa_setup"))
     assert page.status_code == 200
     body = page.content.decode()
-    assert "<svg" in body and "School A" not in body.split("<svg")[0] or "<svg" in body
+    assert "<svg" in body and "</svg>" in body
     with schema_context("school_a"):
         device = TOTPDevice.objects.get(user=user)
         assert device.confirmed is False and device.name == "default"
@@ -87,11 +93,9 @@ def test_setup_flow_enrols_and_logs_in(client_a):
     assert _logged_in(client_a)
 
 
-def test_otpauth_uses_school_name_and_email(client_a):
-    user, _ = _bursar()
-    _password_login(client_a, user)
-    body = client_a.get(reverse("accounts:mfa_setup")).content.decode()
-    # The URI is encoded in the QR; check via the same helper used by the view.
+def test_otpauth_uri_label_issuer_and_phone_fallback(school_a):
+    from urllib.parse import quote
+
     from apps.accounts.views.mfa import _otpauth_uri
 
     class Req:
@@ -99,10 +103,63 @@ def test_otpauth_uses_school_name_and_email(client_a):
             name = "School A"
 
     with schema_context("school_a"):
-        dev = TOTPDevice.objects.get(user=user)
-        uri, _ = _otpauth_uri(Req, user, dev)
-    assert uri.startswith("otpauth://totp/School%20A:") and "issuer=School+A" in uri
-    assert "svg" in body
+        user = StaffFactory()
+        dev = TOTPDevice.objects.create(user=user, name="default", confirmed=False)
+        uri, secret = _otpauth_uri(Req, user, dev)
+        assert uri.startswith(f"otpauth://totp/School%20A:{quote(user.email)}?")
+        assert "issuer=School+A" in uri and f"secret={secret}" in uri
+        phone_only = StaffFactory(email="")
+        uri, _ = _otpauth_uri(Req, phone_only, dev)
+        assert f":{quote(phone_only.phone)}?" in uri
+
+
+def test_setup_secret_stable_within_entry_and_fresh_per_login(client_a):
+    user, _ = _bursar()
+    _password_login(client_a, user)
+    b1 = client_a.get(reverse("accounts:mfa_setup")).content.decode()
+    b2 = client_a.get(reverse("accounts:mfa_setup")).content.decode()
+    with schema_context("school_a"):
+        d1 = TOTPDevice.objects.get(user=user)
+    s1 = _secret(d1)
+    assert s1 in b1 and s1 in b2 and "<svg" in b1
+    # Abandon and log in again: a new secret, the old device is gone.
+    _password_login(client_a, user)
+    b3 = client_a.get(reverse("accounts:mfa_setup")).content.decode()
+    with schema_context("school_a"):
+        d2 = TOTPDevice.objects.get(user=user)
+        assert not TOTPDevice.objects.filter(pk=d1.pk).exists()
+    assert d2.pk != d1.pk and _secret(d2) in b3 and s1 not in b3
+    # A code from the old secret cannot confirm.
+    r = client_a.post(reverse("accounts:mfa_setup"), {"code": f"{totp(d1.bin_key):06d}"})
+    assert r.status_code == 200 and not _logged_in(client_a)
+    with schema_context("school_a"):
+        assert TOTPDevice.objects.get(user=user).confirmed is False
+
+
+def test_setup_post_with_confirmed_device_cannot_enrol(client_a):
+    user, device = _bursar(with_device=True)
+    _password_login(client_a, user)
+    r = client_a.post(reverse("accounts:mfa_setup"), {"code": f"{totp(device.bin_key):06d}"})
+    assert r["Location"] == reverse("accounts:mfa") and not _logged_in(client_a)
+    with schema_context("school_a"):
+        assert TOTPDevice.objects.filter(user=user).count() == 1
+
+
+def test_fifth_attempt_locks_out_with_audit_then_correct_code_refused(client_a):
+    from apps.accounts.views.mfa import mfa_limit
+
+    user, device = _bursar(with_device=True)
+    _password_login(client_a, user)
+    for _ in range(4):
+        mfa_limit.hit(f"mfa:user:{user.pk}")
+    r = client_a.post(reverse("accounts:mfa"), {"code": "000000"})
+    assert r["Location"] == reverse("accounts:login")
+    locks = _actions("auth.lockout")
+    assert len(locks) == 1 and locks[0].after == {"stage": "mfa"}
+    _password_login(client_a, user)
+    r = client_a.post(reverse("accounts:mfa"), {"code": f"{totp(device.bin_key):06d}"})
+    assert r.status_code == 429 and not _logged_in(client_a)
+    assert len(_actions("auth.lockout")) == 1
 
 
 def test_verify_flow_with_existing_device(client_a):

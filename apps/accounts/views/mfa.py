@@ -71,27 +71,46 @@ def _complete(request, user: User, device: TOTPDevice, *, enrolled: bool):
     mfa_limit.reset(_key(user))
     login(request, user)  # rotates the session key
     otp_login(request, device)
-    request.session.pop("mfa_pending", None)
     request.session["last_seen"] = int(time.time())
     if enrolled:
         record("auth.mfa_enrolled", request=request, actor=user, obj=user)
     record("auth.login", request=request, actor=user, obj=user)
+    request.session.pop("mfa_pending", None)
     return redirect(target)
 
 
 def _check_code(request, user: User, device: TOTPDevice):
-    """Validate the posted code. Returns (verified, error, response)."""
+    """Reserve an attempt, then validate the posted code.
+
+    Returns (verified, blocked, error, response).
+    """
     key = _key(user)
-    if mfa_limit.is_blocked(key):
-        return False, _blocked_message(key), None
+    count = mfa_limit.hit(key)  # reserve first, so concurrent guesses are counted
+    if count > mfa_limit.limit:
+        return False, True, _blocked_message(key), None
     token = "".join(request.POST.get("code", "").split())
     if token.isdigit() and device.verify_token(token):
-        return True, None, None
-    count = mfa_limit.hit(key)
+        return True, False, None, None
     record("auth.login_failed", request=request, actor=user, obj=user, after={"stage": "mfa"})
-    if count >= mfa_limit.limit:
-        return False, None, _login_redirect(request)
-    return False, INVALID_CODE, None
+    if count == mfa_limit.limit:
+        record("auth.lockout", request=request, actor=user, obj=user, after={"stage": "mfa"})
+        return False, False, None, _login_redirect(request)
+    return False, False, INVALID_CODE, None
+
+
+def _setup_device(request, user: User) -> TOTPDevice:
+    """The unconfirmed device bound to this pending entry; a fresh one per entry."""
+    pending = request.session["mfa_pending"]
+    device_id = pending.get("device_id")
+    if device_id is not None:
+        device = TOTPDevice.objects.filter(pk=device_id, user=user, confirmed=False).first()
+        if device is not None:
+            return device
+    TOTPDevice.objects.filter(user=user, confirmed=False).delete()
+    device = TOTPDevice.objects.create(user=user, name=DEVICE_NAME, confirmed=False)
+    pending["device_id"] = device.pk
+    request.session["mfa_pending"] = pending
+    return device
 
 
 def _otpauth_uri(request, user: User, device: TOTPDevice) -> tuple[str, str]:
@@ -109,13 +128,11 @@ def mfa_setup_view(request):
         return _login_redirect(request)
     if _confirmed_device(user) is not None:
         return redirect(reverse("accounts:mfa"))
-    device = TOTPDevice.objects.filter(user=user, confirmed=False).order_by("pk").first()
-    if device is None:
-        device = TOTPDevice.objects.create(user=user, name=DEVICE_NAME, confirmed=False)
+    device = _setup_device(request, user)
 
-    error = None
+    error, blocked = None, False
     if request.method == "POST":
-        ok, error, response = _check_code(request, user, device)
+        ok, blocked, error, response = _check_code(request, user, device)
         if response is not None:
             return response
         if ok:
@@ -129,7 +146,7 @@ def mfa_setup_view(request):
         request,
         "accounts/mfa_setup.html",
         {"qr_svg": qr_svg, "secret": secret, "error": error},
-        status=429 if error and error.startswith("Too many") else 200,
+        status=429 if blocked else 200,
     )
 
 
@@ -142,9 +159,9 @@ def mfa_verify_view(request):
     if device is None:
         return redirect(reverse("accounts:mfa_setup"))
 
-    error = None
+    error, blocked = None, False
     if request.method == "POST":
-        ok, error, response = _check_code(request, user, device)
+        ok, blocked, error, response = _check_code(request, user, device)
         if response is not None:
             return response
         if ok:
@@ -153,5 +170,5 @@ def mfa_verify_view(request):
         request,
         "accounts/mfa_verify.html",
         {"error": error},
-        status=429 if error and error.startswith("Too many") else 200,
+        status=429 if blocked else 200,
     )
