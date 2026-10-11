@@ -1,6 +1,7 @@
 """Tenant-aware Celery base task (§7.2): work runs in the school that enqueued it."""
 
 from celery import Task
+from celery.signals import task_postrun, task_prerun
 from django.db import connection
 from django_tenants.utils import get_public_schema_name, get_tenant_model, schema_context
 
@@ -85,13 +86,31 @@ class TenantTask(Task):
         if not self._school_exists(schema):
             raise UnknownTenantError(f"{self.name} targets unknown schema {schema!r}")
         with schema_context(schema):
-            # Logs (ContextFilter) and Sentry tags (before_send) read these contextvars.
-            tokens = [
-                (schema_name_var, schema_name_var.set(schema)),
-                (request_id_var, request_id_var.set(self.request.id or "-")),
-            ]
-            try:
-                return super().__call__(*args, **kwargs)
-            finally:
-                for var, token in reversed(tokens):
-                    var.reset(token)
+            return super().__call__(*args, **kwargs)
+
+
+# Context lives in prerun/postrun receivers, not in __call__: Sentry's Celery integration
+# wraps __call__ from outside, so a crash captured there would otherwise see "-".
+_context_tokens: dict[str, list] = {}
+
+
+@task_prerun.connect
+def _set_task_context(sender=None, task_id=None, task=None, **kwargs):
+    task = task or sender
+    if not isinstance(task, TenantTask):
+        return
+    schema = task._schema_from_request() or "-"
+    # Logs (ContextFilter) and Sentry tags (before_send) read these contextvars.
+    _context_tokens[task_id] = [
+        (schema_name_var, schema_name_var.set(schema)),
+        (request_id_var, request_id_var.set(task_id or "-")),
+    ]
+
+
+@task_postrun.connect
+def _reset_task_context(sender=None, task_id=None, task=None, **kwargs):
+    task = task or sender
+    if not isinstance(task, TenantTask):
+        return
+    for var, token in reversed(_context_tokens.pop(task_id, [])):
+        var.reset(token)

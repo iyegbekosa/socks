@@ -1,15 +1,25 @@
 import logging
+import re
 
 from pythonjsonlogger.json import JsonFormatter as _BaseJsonFormatter
 
 from apps.core.request_id import request_id_var, role_var, schema_name_var, user_id_var
 
-SENSITIVE_KEYS = ("password", "otp", "token", "secret", "card", "pin", "authorization")
+SENSITIVE_KEYS = frozenset({"password", "otp", "token", "secret", "card", "pin", "authorization"})
+_SEGMENT_SPLIT = re.compile(r"[_\-.]")
 REDACTED = "[REDACTED]"
 
 _STANDARD_ATTRS = frozenset(
     logging.LogRecord("", 0, "", 0, "", None, None).__dict__.keys() | {"message", "asctime"}
 )
+
+
+def is_sensitive_key(key: str) -> bool:
+    """True when a segment of the key (split on _ - .) is a sensitive word, digits allowed after."""
+    for segment in _SEGMENT_SPLIT.split(key.lower()):
+        if segment.rstrip("0123456789") in SENSITIVE_KEYS:
+            return True
+    return False
 
 
 class JsonFormatter(_BaseJsonFormatter):
@@ -30,6 +40,6 @@ class RedactFilter(logging.Filter):
         for key in list(record.__dict__):
             if key in _STANDARD_ATTRS:
                 continue
-            if any(word in key.lower() for word in SENSITIVE_KEYS):
+            if is_sensitive_key(key):
                 setattr(record, key, REDACTED)
         return True

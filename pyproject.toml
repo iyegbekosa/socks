@@ -28,6 +28,7 @@ dev = [
     "ruff",
     "mypy",
     "django-stubs",
+    "pgserver",  # embedded PostgreSQL for scripts/dev_postgres.py
 ]
 
 [tool.setuptools.packages.find]

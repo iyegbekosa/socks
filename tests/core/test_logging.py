@@ -118,3 +118,34 @@ def test_celery_setup_logging_signal_applies_django_logging():
     # And for real: the root handler ends up with the JSON formatter.
     setup_logging.send(sender=None, loglevel="INFO", logfile=None, format="", colorize=False)
     assert any(isinstance(h.formatter, JsonFormatter) for h in logging.getLogger().handlers)
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["password", "new_password", "password1", "otp", "otp_code", "card_number", "user_pin",
+     "api_token", "client_secret", "Authorization", "Auth-Token", "x.secret"],
+)  # fmt: skip
+def test_is_sensitive_key_true(key):
+    from apps.core.logging import is_sensitive_key
+
+    assert is_sensitive_key(key)
+
+
+@pytest.mark.parametrize(
+    "key", ["shipping", "mapping", "footprint", "discard", "pinned", "tokenizer", "username"]
+)
+def test_is_sensitive_key_false(key):
+    from apps.core.logging import is_sensitive_key
+
+    assert not is_sensitive_key(key)
+
+
+def test_redact_filter_keeps_innocent_keys():
+    logger = logging.getLogger("tests.redact2")
+    record = logger.makeRecord(
+        "tests.redact2", logging.INFO, "f", 1, "m", None, None,
+        extra={"shipping": "lagos", "api_token": "t"},
+    )  # fmt: skip
+    RedactFilter().filter(record)
+    assert record.shipping == "lagos"
+    assert record.api_token == "[REDACTED]"

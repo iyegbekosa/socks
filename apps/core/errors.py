@@ -1,3 +1,5 @@
+import math
+
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.http import Http404
 from rest_framework import exceptions
@@ -81,7 +83,7 @@ def api_exception_handler(exc, context):
         if code is None:
             code = str(exc.default_code).upper()
     if isinstance(exc, exceptions.Throttled) and exc.wait is not None:
-        headers["Retry-After"] = str(int(exc.wait))
+        headers["Retry-After"] = str(math.ceil(exc.wait))
     if isinstance(exc, exceptions.NotAuthenticated | exceptions.AuthenticationFailed):
         auth_header = getattr(exc, "auth_header", None)
         if auth_header:

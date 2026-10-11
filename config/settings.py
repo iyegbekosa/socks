@@ -16,6 +16,8 @@ CLOUDINARY_URL = env("CLOUDINARY_URL", default="")
 CLOUDINARY_ENV_PREFIX = env("CLOUDINARY_ENV_PREFIX", default="dev")
 SENTRY_DSN = env("SENTRY_DSN", default="")
 REDIS_URL = env("REDIS_URL", default="")
+PLATFORM_DOMAIN = env("PLATFORM_DOMAIN", default="localhost")
+PLATFORM_URL_TEMPLATE = env("PLATFORM_URL_TEMPLATE", default="http://{subdomain}.localhost:8000")
 
 SHARED_APPS = [
     "django_tenants",
@@ -100,7 +102,7 @@ else:
         }
     }
 
-# Celery (§8.1). Eager mode is for tests only; never the default.
+# Celery (§8.1). Without Redis there is no worker, so local dev runs tasks inline.
 CELERY_BROKER_URL = REDIS_URL or "memory://"
 CELERY_RESULT_BACKEND = REDIS_URL or "cache+memory://"
 CELERY_TASK_DEFAULT_QUEUE = "default"
@@ -109,6 +111,9 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TIMEZONE = "Africa/Lagos"
 # Workers keep Django's JSON LOGGING (see the setup_logging receiver in config/celery.py).
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False
+if not REDIS_URL:
+    CELERY_TASK_ALWAYS_EAGER = True
+    CELERY_TASK_EAGER_PROPAGATES = True
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -122,6 +127,7 @@ TIME_ZONE = "Africa/Lagos"
 USE_I18N = True
 USE_TZ = True
 
+FORMAT_MODULE_PATH = ["config.formats"]
 DATE_FORMAT = "d/m/Y"
 DATE_INPUT_FORMATS = ["%d/%m/%Y", "%Y-%m-%d"]
 

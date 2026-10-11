@@ -78,3 +78,12 @@ def test_unhandled_exception_gets_json_500(client_a, path):
             "request_id": response["X-Request-ID"],
         }
     }
+
+
+def test_retry_after_rounds_up():
+    from rest_framework.exceptions import Throttled
+
+    from apps.core.errors import api_exception_handler
+
+    response = api_exception_handler(Throttled(wait=7.2), {})
+    assert response["Retry-After"] == "8"

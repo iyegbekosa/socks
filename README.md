@@ -12,7 +12,6 @@ LocMem and the Celery broker to `memory://`.
 ```sh
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -e ".[dev]"
-uv pip install --python .venv/bin/python pgserver   # embedded PostgreSQL for dev_postgres.py
 
 .venv/bin/python scripts/dev_postgres.py
 # prints two lines, DATABASE_URL=... and PGHOST=...; copy them into .env
@@ -35,7 +34,8 @@ Then:
 
 ```sh
 .venv/bin/python manage.py migrate_schemas --shared
-.venv/bin/python manage.py seed_demo_schools   # public + greenfield + bluewater
+.venv/bin/python manage.py ensure_public_tenant
+.venv/bin/python manage.py seed_demo_schools   # also calls ensure_public_tenant; adds greenfield + bluewater
 .venv/bin/python manage.py runserver
 ```
 
@@ -67,6 +67,7 @@ Not tested on the maintainer's machine.
 cp .env.example .env
 docker compose up -d --build
 docker compose exec web python manage.py migrate_schemas --shared
+docker compose exec web python manage.py ensure_public_tenant
 docker compose exec web python manage.py seed_demo_schools
 ```
 
@@ -76,8 +77,8 @@ Mailpit (<http://localhost:8025>), the web server, a Celery worker and Celery Be
 ## Deploy prerequisites
 
 - **The public School row must exist** (schema `public`, with the platform's domain).
-  `seed_demo_schools` creates it, or create it the same way. Without it, unknown hosts cannot
-  fall back to the landing page.
+  Run `python manage.py ensure_public_tenant` (idempotent; uses `PLATFORM_DOMAIN`, default
+  `localhost`). Without it, unknown hosts cannot fall back to the landing page.
 - **Cloudinary console:** turn on *Settings → Security → "Allow delivery of PDF and ZIP
   files"*. Report cards and receipts are PDFs, and new accounts block them.
 - **Environment:** set `CLOUDINARY_URL`, `CLOUDINARY_ENV_PREFIX` (e.g. `prod`, which keeps
