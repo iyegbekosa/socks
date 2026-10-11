@@ -8,7 +8,8 @@ from django.urls import reverse
 from django_tenants.utils import schema_context
 
 from apps.audit.models import AuditEvent
-from tests.accounts.factories import DEFAULT_PASSWORD, StaffFactory, StudentFactory
+from tests.accounts.factories import DEFAULT_PASSWORD, StaffFactory
+from tests.students.factories import StudentProfileFactory
 
 pytestmark = pytest.mark.django_db
 NEW_PW = "Brand-new-pass-7731"
@@ -42,7 +43,7 @@ def _login(client, ident, pw):
 
 def test_student_full_flow(client_a, sms_outbox):
     with schema_context("school_a"):
-        s = StudentFactory()
+        s = StudentProfileFactory().user
     r = _request(client_a, s.admission_number)
     assert r.status_code == 302 and r["Location"] == reverse("accounts:reset_verify")
     assert len(sms_outbox) == 1 and sms_outbox[0].to == "+2348031234567"
@@ -81,7 +82,7 @@ def test_unknown_and_no_phone_identical(client_a, sms_outbox):
 
 def test_wrong_five_times_then_right_fails(client_a, sms_outbox):
     with schema_context("school_a"):
-        s = StudentFactory()
+        s = StudentProfileFactory().user
     _request(client_a, s.admission_number)
     code = _code(sms_outbox)
     wrong = "000000" if code != "000000" else "111111"
@@ -95,7 +96,7 @@ def test_wrong_five_times_then_right_fails(client_a, sms_outbox):
 
 def test_expired_code_fails(client_a, sms_outbox):
     with schema_context("school_a"):
-        s = StudentFactory()
+        s = StudentProfileFactory().user
     _request(client_a, s.admission_number)
     code = _code(sms_outbox)
     real = time.time
@@ -106,7 +107,7 @@ def test_expired_code_fails(client_a, sms_outbox):
 
 def test_new_request_replaces_code(client_a, sms_outbox):
     with schema_context("school_a"):
-        s = StudentFactory()
+        s = StudentProfileFactory().user
     with patch("secrets.randbelow", side_effect=[111111, 222222]):
         _request(client_a, s.admission_number)
         _request(client_a, s.admission_number)
@@ -116,7 +117,7 @@ def test_new_request_replaces_code(client_a, sms_outbox):
 
 def test_reissue_does_not_reset_guess_budget(client_a, sms_outbox):
     with schema_context("school_a"):
-        s = StudentFactory()
+        s = StudentProfileFactory().user
     _request(client_a, s.admission_number)
     wrong = "000000" if _code(sms_outbox) != "000000" else "111111"
     for _ in range(5):
@@ -142,7 +143,7 @@ def test_similar_password_does_not_enumerate(client_a, sms_outbox):
 
 def test_password_error_keeps_code_valid(client_a, sms_outbox):
     with schema_context("school_a"):
-        s = StudentFactory()
+        s = StudentProfileFactory().user
     _request(client_a, s.admission_number)
     code = _code(sms_outbox)
     r = _verify(client_a, code, pw="short")
@@ -153,7 +154,7 @@ def test_password_error_keeps_code_valid(client_a, sms_outbox):
 
 def test_success_pops_identifier_and_mfa_pending(client_a, sms_outbox):
     with schema_context("school_a"):
-        s = StudentFactory()
+        s = StudentProfileFactory().user
     _request(client_a, s.admission_number)
     session = client_a.session
     session["mfa_pending"] = {"user_id": 1}
@@ -174,7 +175,7 @@ def test_staff_reset_by_phone_identifier(client_a, sms_outbox):
 
 def test_inactive_user_gets_no_sms_and_same_page(client_a, sms_outbox):
     with schema_context("school_a"):
-        u = StudentFactory(is_active=False)
+        u = StudentProfileFactory(user__is_active=False).user
     pages = []
     for ident in (u.admission_number, "GFS/9999/0002"):
         client_a.cookies.clear()
@@ -186,7 +187,7 @@ def test_inactive_user_gets_no_sms_and_same_page(client_a, sms_outbox):
 
 def test_has_phone_vs_unknown_identical_request_page(client_a, sms_outbox):
     with schema_context("school_a"):
-        s = StudentFactory()
+        s = StudentProfileFactory().user
     a = client_a.post(reverse("accounts:reset"), {"identifier": s.admission_number})
     b = client_a.post(reverse("accounts:reset"), {"identifier": "GFS/9999/0003"})
     assert (a.status_code, a["Location"]) == (b.status_code, b["Location"])
@@ -197,7 +198,7 @@ def test_sms_unconfigured_is_uniform_and_stores_nothing(client_a, settings):
     settings.DEBUG = False
     settings.SMS_BACKEND = None
     with schema_context("school_a"):
-        s = StudentFactory()
+        s = StudentProfileFactory().user
     msg = "Password reset by SMS isn't available yet."
     out = []
     for ident in (s.admission_number, "GFS/9999/0004"):
@@ -212,7 +213,7 @@ def test_sms_unconfigured_is_uniform_and_stores_nothing(client_a, settings):
 
 def test_sixth_request_blocked(client_a, sms_outbox):
     with schema_context("school_a"):
-        s = StudentFactory()
+        s = StudentProfileFactory().user
     for _ in range(5):
         assert _request(client_a, s.admission_number).status_code == 302
     assert len(sms_outbox) == 5
@@ -228,7 +229,7 @@ def test_verify_without_session_redirects(client_a):
 
 def test_reset_clears_login_lockout(client_a, sms_outbox):
     with schema_context("school_a"):
-        s = StudentFactory()
+        s = StudentProfileFactory().user
     for _ in range(5):
         _login(client_a, s.admission_number, "wrong-pass")
     assert _login(client_a, s.admission_number, NEW_PW).status_code == 429

@@ -6,6 +6,7 @@ from apps.files.models import StoredFile
 from apps.tenancy.limits import PlanLimitExceeded, PlanLimits
 from apps.tenancy.models import Plan
 from tests.accounts.factories import StudentFactory
+from tests.students.factories import StudentProfileFactory
 
 pytestmark = pytest.mark.django_db
 
@@ -61,22 +62,37 @@ def test_usage_is_per_school(school_a, school_b):
         assert PlanLimits.for_current_school().storage_used_bytes() == 0
 
 
-def test_student_limit_basic(school_a):
+@pytest.fixture
+def tiny_plan(school_a):
+    plan = Plan.objects.create(
+        code="tiny", name="Tiny", max_students=3, storage_bytes=GIB, sms_credits_per_term=0
+    )
+    old = school_a.plan
+    school_a.plan = plan
+    school_a.save()
+    yield plan
+    school_a.plan = old
+    school_a.save()
+
+
+def test_student_limit(tiny_plan):
     with schema_context("school_a"):
-        StudentFactory.create_batch(299)
+        StudentProfileFactory.create_batch(2)
         limits = PlanLimits.for_current_school()
-        assert limits.student_count() == 299
+        assert limits.student_count() == 2
         limits.check_can_add_students()
-        with pytest.raises(PlanLimitExceeded):
+        with pytest.raises(PlanLimitExceeded) as exc:
             limits.check_can_add_students(2)
-        StudentFactory()
+        assert "up to 3 students" in exc.value.message
+        StudentProfileFactory()
         with pytest.raises(PlanLimitExceeded):
             limits.check_can_add_students()
 
 
-def test_inactive_students_not_counted(school_a):
+def test_withdrawn_and_profileless_students_not_counted(school_a):
     with schema_context("school_a"):
-        StudentFactory(is_active=False)
+        StudentProfileFactory(status="withdrawn")
+        StudentFactory()
         assert PlanLimits.for_current_school().student_count() == 0
 
 
@@ -85,7 +101,7 @@ def test_premium_never_raises(school_a):
     school_a.save()
     try:
         with schema_context("school_a"):
-            StudentFactory.create_batch(301)
+            StudentProfileFactory.create_batch(2)
             PlanLimits.for_current_school().check_can_add_students(5000)
     finally:
         school_a.plan = None

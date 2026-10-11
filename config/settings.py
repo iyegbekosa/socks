@@ -46,6 +46,7 @@ TENANT_APPS = [
     "apps.files",
     "apps.branding",
     "apps.academics",
+    "apps.students",
     "django_otp",
     "django_otp.plugins.otp_totp",
 ]

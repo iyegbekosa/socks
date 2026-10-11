@@ -294,7 +294,7 @@ def _check_teacher(teacher: Any) -> None:
         raise ValidationError({"teacher": "Choose an active staff member who is a teacher."})
 
 
-def _check_session_open(session: AcademicSession) -> None:
+def check_session_open(session: AcademicSession) -> None:
     if session.end_date < timezone.localdate():
         raise ValidationError(
             {"session": f"Session {session.name} has ended, so it can no longer be changed."}
@@ -316,7 +316,7 @@ def assign_offering(
         academic_write_lock()
         if teacher is not None:
             _check_teacher(teacher)
-        _check_session_open(session)
+        check_session_open(session)
         if arm.level.section not in (subject.sections or []):
             raise ValidationError(
                 {"subject": f"{subject.name} is not taught in {arm.level.get_section_display()}."}
@@ -349,7 +349,7 @@ def assign_form_teacher(
     with transaction.atomic():
         academic_write_lock()
         _check_teacher(teacher)
-        _check_session_open(session)
+        check_session_open(session)
         form_teacher, _ = FormTeacher.objects.update_or_create(
             arm=arm, session=session, defaults={"teacher": teacher}
         )
@@ -374,7 +374,7 @@ def remove_form_teacher(
 ) -> None:
     with transaction.atomic():
         academic_write_lock()
-        _check_session_open(session)
+        check_session_open(session)
         deleted, _ = FormTeacher.objects.filter(arm=arm, session=session).delete()
         if deleted:
             record(

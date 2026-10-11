@@ -37,17 +37,24 @@ def _require_verified(verified: bool) -> None:
 
 
 def create_student_user(
-    *, admission_number: str, full_name: str, recovery_phone: str | None, password: str
+    *, admission_number: str, first_name: str, last_name: str, password: str | None
 ) -> User:
-    first, _, last = full_name.strip().partition(" ")
+    """Internal helper for ``apps.students.services.admit_student``: the student's login.
+
+    ``password`` is a one-time password (stored hashed); ``None`` leaves the password
+    unusable until one is issued. Either way the student must change it at first login.
+    """
     user = User(
         kind=User.Kind.STUDENT,
         admission_number=admission_number,
-        recovery_phone=recovery_phone,
-        first_name=first,
-        last_name=last.strip(),
+        first_name=first_name,
+        last_name=last_name,
+        must_change_password=True,
     )
-    user.set_password(password)
+    if password is None:
+        user.set_unusable_password()
+    else:
+        user.set_password(password)
     user.full_clean(exclude=["password"])
     user.save()
     return user
@@ -86,8 +93,12 @@ def _code_digest(user: User, code: str) -> str:
 
 
 def reset_phone_for(user: User) -> str | None:
-    """Staff reset codes go to their own phone; students' go to the guardian's phone."""
-    phone = user.recovery_phone if user.kind == User.Kind.STUDENT else user.phone
+    """Staff reset codes go to their own phone; students' go to the main guardian's phone."""
+    if user.kind == User.Kind.STUDENT:
+        student = getattr(user, "student", None)  # reverse OneToOne; None without a profile
+        phone = student.guardian_phone if student is not None else None
+    else:
+        phone = user.phone
     return phone or None
 
 

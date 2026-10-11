@@ -1,28 +1,17 @@
-import io
 import logging
-import os
 
 from django import forms
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import transaction
-from PIL import Image, UnidentifiedImageError
 
 from apps.branding.models import COLOR_VALIDATOR, Branding, public_storage
+from apps.core.images import clean_image
 from apps.tenancy.limits import PlanLimitExceeded
 
 logger = logging.getLogger(__name__)
 MAX_LOGO_BYTES = 1_048_576
 MAX_LOGO_SIDE = 4096  # pixels; a tiny compressed file can declare a huge canvas
 EXT_FORMATS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
-LOGO_EXTENSIONS = set(EXT_FORMATS)
-_IMAGE_ERRORS = (
-    UnidentifiedImageError,
-    OSError,
-    SyntaxError,
-    ValueError,
-    Image.DecompressionBombError,
-    Image.DecompressionBombWarning,
-)
 
 
 def _delete_old_logo(storage, name: str) -> None:
@@ -46,41 +35,17 @@ class BrandingForm(forms.ModelForm):
         logo = self.cleaned_data.get("logo")
         if not logo or not hasattr(logo, "size") or not hasattr(logo, "content_type"):
             return logo  # unchanged, or cleared
-        ext = os.path.splitext(logo.name)[1].lower()
-        if ext not in LOGO_EXTENSIONS:
-            raise forms.ValidationError("Logo must be a .png, .jpg, .jpeg or .webp file.")
-        if logo.size > MAX_LOGO_BYTES:
-            raise forms.ValidationError("Logo must be 1 MB or smaller.")
-        logo.seek(0)
-        raw = logo.read()
-        logo.seek(0)
-        expected = EXT_FORMATS[ext]
-        try:
-            Image.open(io.BytesIO(raw)).verify()
-            img = Image.open(io.BytesIO(raw))
-            if img.format != expected:
-                raise forms.ValidationError("The file content does not match its extension.")
-            # Image.open only reads the header: refuse big canvases before decoding pixels.
-            width, height = img.size
-            if width > MAX_LOGO_SIDE or height > MAX_LOGO_SIDE:
-                raise forms.ValidationError(
-                    f"Logo must be at most {MAX_LOGO_SIDE}×{MAX_LOGO_SIDE} pixels."
-                )
-            img.load()
-            clean = io.BytesIO()
-            options = {"quality": 90} if expected in ("JPEG", "WEBP") else {}
-            # Re-encode from pixels only: drops metadata and any trailing/embedded payload.
-            fresh = img.copy()
-            fresh.info = {k: v for k, v in img.info.items() if k == "transparency"}
-            fresh.save(clean, expected, **options)
-        except forms.ValidationError:
-            raise
-        except _IMAGE_ERRORS:
-            raise forms.ValidationError("That file is not a valid image.") from None
-        data = clean.getvalue()
-        if len(data) > MAX_LOGO_BYTES:
-            raise forms.ValidationError("Logo must be 1 MB or smaller.")
-        return SimpleUploadedFile(logo.name, data, content_type=logo.content_type)
+        clean = clean_image(
+            logo,
+            max_bytes=MAX_LOGO_BYTES,
+            allowed=EXT_FORMATS,
+            max_pixels=MAX_LOGO_SIDE * MAX_LOGO_SIDE,
+            output="same",
+            max_side=None,
+            quality=90,
+            label="Logo",
+        )
+        return SimpleUploadedFile(logo.name, clean.read(), content_type=logo.content_type)
 
     def save_with_quota(self):
         """Save, turning a storage-quota failure into a form error. Returns the instance or None."""

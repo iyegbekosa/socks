@@ -7,6 +7,7 @@ from django_tenants.utils import schema_context
 
 from apps.accounts.services import create_student_user
 from tests.accounts.factories import DEFAULT_PASSWORD, StaffFactory, StudentFactory
+from tests.students.factories import StudentProfileFactory
 
 pytestmark = pytest.mark.django_db
 
@@ -42,9 +43,9 @@ def test_student_login_loose_admission(school_a):
         assert authenticate(identifier=" gfs/2026/0042 ", password=DEFAULT_PASSWORD) == s
 
 
-def test_student_cannot_login_by_recovery_phone(school_a):
+def test_student_cannot_login_by_guardian_phone(school_a):
     with schema_context("school_a"):
-        StudentFactory(recovery_phone="0803 123 4567")
+        StudentProfileFactory(guardian_phone="0803 123 4567")
         assert authenticate(identifier="+2348031234567", password=DEFAULT_PASSWORD) is None
 
 
@@ -84,25 +85,22 @@ def test_create_student_user(school_a):
     with schema_context("school_a"):
         s = create_student_user(
             admission_number=" gfs/2026/0777 ",
-            full_name="Ada Obi Eze",
-            recovery_phone="0803 123 4567",
+            first_name="Ada",
+            last_name="Obi Eze",
             password=DEFAULT_PASSWORD,
         )
         assert s.kind == "student" and s.admission_number == "GFS/2026/0777"
-        assert s.recovery_phone == "+2348031234567"
         assert s.first_name == "Ada" and s.last_name == "Obi Eze"
         assert s.password.startswith("argon2$")
+        assert s.must_change_password is True
 
 
-def test_create_student_user_spaced_recovery_phone(school_a):
+def test_create_student_user_without_password(school_a):
     with schema_context("school_a"):
         s = create_student_user(
-            admission_number="GFS/2026/0800",
-            full_name="Ada Eze",
-            recovery_phone="+234 803 123 4567",
-            password=DEFAULT_PASSWORD,
+            admission_number="GFS/2026/0800", first_name="Ada", last_name="Eze", password=None
         )
-        assert s.recovery_phone == "+2348031234567"
+        assert not s.has_usable_password()
 
 
 def test_full_clean_long_formatted_phone(school_a):
@@ -162,8 +160,8 @@ def test_kind_identifier_rules_db_level(school_a):
 
 def test_guardian_phone_does_not_block_staff_invite(school_a):
     with schema_context("school_a"):
-        StudentFactory(recovery_phone="0803 123 4567")
-        StudentFactory(recovery_phone="0803 123 4567")
+        StudentProfileFactory(guardian_phone="0803 123 4567")
+        StudentProfileFactory(guardian_phone="0803 123 4567")
         s = StaffFactory(phone="+2348031234567")
         assert s.pk
 

@@ -46,9 +46,10 @@ class PlanLimits:
             raise PlanLimitExceeded("Storage limit for your plan has been reached.")
 
     def student_count(self) -> int:
-        from django.contrib.auth import get_user_model
+        # Lazy: apps.students is tenant-only, this module is also imported in the public schema.
+        from apps.students.models import Student
 
-        return get_user_model().objects.filter(kind="student", is_active=True).count()
+        return Student.objects.filter(status=Student.Status.ACTIVE).count()
 
     def check_can_add_students(self, count: int = 1) -> None:
         maximum = self.plan.max_students

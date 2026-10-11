@@ -33,7 +33,6 @@ class StudentFactory(factory.django.DjangoModelFactory):
     email = ""
     phone = None
     admission_number = factory.Sequence(lambda n: f"GFS/2026/{n:04d}")
-    recovery_phone = "+2348031234567"
     password = factory.PostGenerationMethodCall("set_password", DEFAULT_PASSWORD)
 
     @factory.post_generation

@@ -19,7 +19,8 @@ class User(AbstractUser):
     kind = models.CharField(max_length=10, choices=Kind.choices, default=Kind.STAFF)
     phone = models.CharField(max_length=16, unique=True, null=True, blank=True)  # noqa: DJ001
     admission_number = models.CharField(max_length=40, unique=True, null=True, blank=True)  # noqa: DJ001
-    recovery_phone = models.CharField(max_length=16, null=True, blank=True)  # noqa: DJ001
+    # Set when a one-time password is issued; the user must choose their own at next login.
+    must_change_password = models.BooleanField(default=False)
 
     class Meta(AbstractUser.Meta):
         constraints = [
@@ -41,7 +42,6 @@ class User(AbstractUser):
     _NORMALISERS = {
         "email": lambda v: (v or "").strip().lower(),
         "phone": lambda v: normalise_ng_phone(v) if v else None,
-        "recovery_phone": lambda v: normalise_ng_phone(v) if v else None,
         "admission_number": lambda v: normalise_admission_number(v or "") or None,
     }
 
