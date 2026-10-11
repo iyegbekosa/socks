@@ -33,7 +33,9 @@ EXEMPT_ROUTES: set[str] = {"healthz"}
 def _walk(patterns, prefix: str = "", namespace: str = "") -> Iterator[tuple[str, str | None]]:
     """Yield (full route string, namespaced route name or None) per leaf pattern."""
     for entry in patterns:
-        route = prefix + str(entry.pattern)
+        # re_path patterns stringify as "^api/v1/...": strip the anchor per segment so
+        # regex routes are checked against API_PREFIX like path() routes.
+        route = prefix + str(entry.pattern).removeprefix("^")
         if isinstance(entry, URLResolver):
             ns = namespace
             if entry.namespace:

@@ -44,6 +44,14 @@ def test_guard_reports_unregistered_and_unnamed_routes():
     assert any("api/v1/anonymous/" in m for m in missing)
 
 
+def test_guard_reports_re_path_routes():
+    missing = unregistered_api_routes(
+        "tests.isolation.urlconf_unregistered", registered={"registered-route"}
+    )
+    assert "regex-route" in missing
+    assert "nested-regex" in missing
+
+
 def test_exempt_routes_start_with_healthz():
     assert "healthz" in EXEMPT_ROUTES
 

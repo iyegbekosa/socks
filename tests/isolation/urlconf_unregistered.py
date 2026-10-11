@@ -1,7 +1,7 @@
 """Test-only URLConf used to prove the registry guard reports missing routes."""
 
 from django.http import HttpResponse
-from django.urls import include, path
+from django.urls import include, path, re_path
 
 
 def _view(request):
@@ -23,4 +23,6 @@ urlpatterns = [
     path("healthz", _view, name="healthz"),
     path("api/v1/", include(_v1)),
     path("other/", _view, name="not-under-api"),
+    re_path(r"^api/v1/regex-route/$", _view, name="regex-route"),
+    re_path(r"^api/", include([re_path(r"^v1/nested-regex/$", _view, name="nested-regex")])),
 ]
