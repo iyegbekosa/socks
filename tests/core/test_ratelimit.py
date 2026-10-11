@@ -40,3 +40,15 @@ def test_schools_count_separately(school_a, school_b):
         assert rl.is_blocked("k")
     with schema_context("school_b"):
         assert not rl.is_blocked("k")
+
+
+def test_release_gives_back_a_hit():
+    rl = RateLimit("t")
+    rl.hit("k")
+    rl.hit("k")
+    rl.release("k")
+    assert rl.count("k") == 1
+    rl.release("k")
+    assert rl.count("k") == 0
+    rl.release("k")  # no-op when absent
+    assert rl.count("k") == 0

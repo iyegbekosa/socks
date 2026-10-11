@@ -19,14 +19,11 @@ from apps.core.request_id import client_ip
 GENERIC_ERROR = "Those details don't match an account. Check them and try again."
 
 id_limit = RateLimit("login:id")
-ip_limit = RateLimit("login:ip")
+ip_limit = RateLimit("login:ip", limit=settings.LOGIN_IP_FAILURE_LIMIT)
 
 
 def _normalised(raw: str) -> str:
-    try:
-        return classify_identifier(raw)[1]
-    except ValueError:
-        return (raw or "").strip().lower()
+    return classify_identifier(raw)[1]
 
 
 def _safe_next(request) -> str:
@@ -73,19 +70,25 @@ def login_view(request):
     ip = client_ip(request)
     ip_key = f"login:ip:{ip}" if ip else None
 
+    # Reserve first: count this attempt on both keys before checking the password.
+    id_count = id_limit.hit(id_key)
+    ip_count = ip_limit.hit(ip_key) if ip_key else 0
     waits = []
-    if id_limit.is_blocked(id_key):
+    if id_count > id_limit.limit:
         waits.append(id_limit.retry_after(id_key))
-    if ip_key and ip_limit.is_blocked(ip_key):
+    if ip_key and ip_count > ip_limit.limit:
         waits.append(ip_limit.retry_after(ip_key))
     if waits:
+        # Refused: give back the hit on whichever key was not itself over its limit.
+        if ip_key and ip_count <= ip_limit.limit:
+            ip_limit.release(ip_key)
+        if id_count <= id_limit.limit:
+            id_limit.release(id_key)
         minutes = max(1, math.ceil(max(waits) / 60))
         return _render(request, form, error=_locked_message(minutes), status=429)
 
     user = authenticate(request, identifier=raw, password=password)
     if user is None:
-        id_count = id_limit.hit(id_key)
-        ip_count = ip_limit.hit(ip_key) if ip_key else 0
         record("auth.login_failed", request=request, after={"identifier": ident})
         if id_count == id_limit.limit or ip_count == ip_limit.limit:
             record(
@@ -99,7 +102,13 @@ def login_view(request):
         return _render(request, form, error=GENERIC_ERROR)
 
     id_limit.reset(id_key)
+    if ip_key:
+        ip_limit.release(ip_key)
     if user.requires_mfa:
+        if request.user.is_authenticated:
+            logout(request)
+        else:
+            request.session.cycle_key()
         request.session["mfa_pending"] = {"user_id": user.pk, "at": int(time.time())}
         return redirect(reverse("accounts:mfa"))
 

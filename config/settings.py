@@ -47,7 +47,10 @@ TENANT_APPS = [
 INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
 
 # Header carrying the real client IP behind a proxy, e.g. "HTTP_CF_CONNECTING_IP".
-CLIENT_IP_HEADER: str | None = None
+# Required in production behind Cloudflare or a proxy, e.g. HTTP_CF_CONNECTING_IP.
+CLIENT_IP_HEADER: str | None = env("CLIENT_IP_HEADER", default=None)
+# Anti-spraying limit: failed logins per client IP per 900 s (per identifier it is 5).
+LOGIN_IP_FAILURE_LIMIT = 50
 
 AUTH_USER_MODEL = "accounts.User"
 AUTHENTICATION_BACKENDS = ["apps.accounts.backends.IdentifierBackend"]

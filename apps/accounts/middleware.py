@@ -3,8 +3,12 @@ import time
 from django.conf import settings
 from django.contrib.auth import logout
 from django.contrib.auth.views import redirect_to_login
+from django.http import JsonResponse
 
 from apps.audit.services import record
+from apps.core.request_id import get_request_id
+
+LAST_SEEN_WRITE_INTERVAL = 60
 
 
 class StaffIdleTimeoutMiddleware:
@@ -28,6 +32,19 @@ class StaffIdleTimeoutMiddleware:
                 )
                 next_url = request.get_full_path()
                 logout(request)
+                if request.path.startswith("/api/"):
+                    return JsonResponse(
+                        {
+                            "error": {
+                                "code": "NOT_AUTHENTICATED",
+                                "message": "Your session expired. Please log in again.",
+                                "details": [],
+                                "request_id": get_request_id(),
+                            }
+                        },
+                        status=401,
+                    )
                 return redirect_to_login(next_url, str(settings.LOGIN_URL))
-            request.session["last_seen"] = now
+            if last_seen is None or now - int(last_seen) >= LAST_SEEN_WRITE_INTERVAL:
+                request.session["last_seen"] = now
         return self.get_response(request)

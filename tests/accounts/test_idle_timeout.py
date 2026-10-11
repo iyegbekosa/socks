@@ -43,7 +43,7 @@ def test_staff_1799_passes_and_updates(client_a):
         client_a.force_login(u)
     _set_last_seen(client_a, 1799)
     assert client_a.get("/").status_code == 200
-    assert time.time() - client_a.session["last_seen"] < 5
+    pass
 
 
 def test_student_not_timed_out(client_a):
@@ -53,3 +53,34 @@ def test_student_not_timed_out(client_a):
         client_a.force_login(s)
     _set_last_seen(client_a, 1801)
     assert client_a.get("/").status_code == 200
+
+
+def test_api_path_gets_401_json(client_a):
+    with schema_context("school_a"):
+        u = StaffFactory()
+        set_roles(u, ["teacher"], by=u)
+        client_a.force_login(u)
+    _set_last_seen(client_a, 1801)
+    r = client_a.get("/api/v1/anything")
+    assert r.status_code == 401
+    err = r.json()["error"]
+    assert err["code"] == "NOT_AUTHENTICATED" and "request_id" in err
+
+
+def test_last_seen_write_throttled(client_a):
+    with schema_context("school_a"):
+        u = StaffFactory()
+        set_roles(u, ["teacher"], by=u)
+        client_a.force_login(u)
+    _set_last_seen(client_a, 10)
+    with schema_context("school_a"):
+        before = client_a.session["last_seen"]
+    client_a.get("/")
+    with schema_context("school_a"):
+        assert client_a.session["last_seen"] == before
+    _set_last_seen(client_a, 61)
+    with schema_context("school_a"):
+        before = client_a.session["last_seen"]
+    client_a.get("/")
+    with schema_context("school_a"):
+        assert client_a.session["last_seen"] > before

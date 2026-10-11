@@ -42,5 +42,13 @@ class RateLimit:
             return 0 if not self.is_blocked(key) else self.window
         return max(1, min(self.window, math.ceil(expires - time.time())))
 
+    def release(self, key: str) -> None:
+        """Give back one hit (used when an attempt turns out to be legitimate)."""
+        try:
+            if int(cache.decr(self._count_key(key))) <= 0:
+                self.reset(key)
+        except ValueError:  # already expired
+            pass
+
     def reset(self, key: str) -> None:
         cache.delete_many([self._count_key(key), self._expiry_key(key)])

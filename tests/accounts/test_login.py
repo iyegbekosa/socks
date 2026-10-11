@@ -110,12 +110,96 @@ def test_lockout_by_identifier(client_a):
     assert len(_actions("auth.lockout")) == 1
 
 
-def test_lockout_by_ip(client_a):
-    for i in range(5):
-        assert _post(client_a, f"nobody{i}@school.ng", "bad").status_code == 200
+def _fail_from_ip(client, n):
+    for i in range(n):
+        assert _post(client, f"nobody{i}@school.ng", "bad").status_code == 200
+
+
+def test_49_ip_failures_do_not_block_correct_user(client_a):
     with schema_context("school_a"):
         u = _teacher()
+    _fail_from_ip(client_a, 49)
+    assert _post(client_a, u.email).status_code == 302
+    assert _actions("auth.lockout") == []
+
+
+def test_50_ip_failures_block_with_single_ip_lockout(client_a):
+    with schema_context("school_a"):
+        u = _teacher()
+    _fail_from_ip(client_a, 50)
     assert _post(client_a, u.email).status_code == 429
+    lockouts = _actions("auth.lockout")
+    assert len(lockouts) == 1 and lockouts[0].after["by"] == "ip"
+
+
+def test_success_gives_back_ip_hit(client_a):
+    from apps.accounts.views.login import ip_limit
+
+    with schema_context("school_a"):
+        u = _teacher()
+    _fail_from_ip(client_a, 3)
+    _post(client_a, u.email)
+    assert ip_limit.count("login:ip:127.0.0.1") == 3
+
+
+def test_mfa_pending_rotates_session(client_a):
+    with schema_context("school_a"):
+        old = _teacher()
+        bursar = StaffFactory()
+        set_roles(bursar, ["bursar"], by=bursar)
+    _post(client_a, old.email)
+    assert "_auth_user_id" in client_a.session
+    _post(client_a, bursar.email)
+    assert "_auth_user_id" not in client_a.session
+    assert "mfa_pending" in client_a.session
+
+
+def test_mfa_pending_cycles_anonymous_session_key(client_a):
+    with schema_context("school_a"):
+        bursar = StaffFactory()
+        set_roles(bursar, ["bursar"], by=bursar)
+    client_a.get(reverse("accounts:login"))
+    client_a.session["x"] = 1  # ensure a session exists
+    s = client_a.session
+    s["x"] = 1
+    s.save()
+    before = client_a.session.session_key
+    _post(client_a, bursar.email)
+    assert client_a.session.session_key != before
+
+
+def _strip(r, *values):
+    import re
+
+    body = r.content.decode()
+    body = re.sub(r'name="csrfmiddlewaretoken" value="[^"]+"', "", body)
+    for v in values:
+        body = body.replace(v, "")
+    return re.sub(r'value=""', "", body)
+
+
+def test_failure_pages_identical(client_a):
+    with schema_context("school_a"):
+        u = _teacher()
+        inactive = _teacher(is_active=False)
+    pages = [
+        _strip(_post(client_a, "ghost@school.ng"), "ghost@school.ng"),
+        _strip(_post(client_a, u.email, "wrong"), u.email),
+        _strip(_post(client_a, inactive.email), inactive.email),
+    ]
+    assert pages[0] == pages[1] == pages[2]
+
+
+def test_lockout_pages_identical_known_and_unknown(client_a):
+    with schema_context("school_a"):
+        u = _teacher()
+    for ident in (u.email, "ghost@school.ng"):
+        for _ in range(5):
+            _post(client_a, ident, "bad")
+    known = _post(client_a, u.email)
+    unknown = _post(client_a, "ghost@school.ng")
+    assert known.status_code == unknown.status_code == 429
+    assert _strip(known, u.email) == _strip(unknown, "ghost@school.ng")
 
 
 def test_success_resets_identifier_key(client_a):

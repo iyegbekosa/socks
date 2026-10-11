@@ -79,6 +79,9 @@ Mailpit (<http://localhost:8025>), the web server, a Celery worker and Celery Be
 - **The public School row must exist** (schema `public`, with the platform's domain).
   Run `python manage.py ensure_public_tenant` (idempotent; uses `PLATFORM_DOMAIN`, default
   `localhost`). Without it, unknown hosts cannot fall back to the landing page.
+- **`CLIENT_IP_HEADER` is required in production** behind Cloudflare or any proxy (e.g.
+  `HTTP_CF_CONNECTING_IP`). Without it every visitor shares the proxy's IP, and the per-IP
+  login limit (`LOGIN_IP_FAILURE_LIMIT`, 50 failures / 15 min) would hit the whole platform.
 - **Cloudinary console:** turn on *Settings → Security → "Allow delivery of PDF and ZIP
   files"*. Report cards and receipts are PDFs, and new accounts block them.
 - **Environment:** set `CLOUDINARY_URL`, `CLOUDINARY_ENV_PREFIX` (e.g. `prod`, which keeps
