@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import UTC, date, timedelta
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -290,3 +290,97 @@ def test_structure_links_to_arm_detail(world, client_a):
     with schema_context("school_a"):
         login_verified(client_a, make_staff("school_admin"))
     assert url(world["jss_arm"]) in client_a.get(reverse("academics:structure")).content.decode()
+
+
+# --- fix round 1 -------------------------------------------------------------
+
+
+def test_post_with_one_bad_row_saves_nothing(world, client_a):
+    with schema_context("school_a"):
+        login_verified(client_a, make_staff("school_admin"))
+        subj3 = Subject.objects.create(name="Civic", code="civic", sections=["jss"])
+        student = StudentFactory()
+    arm, t = world["jss_arm"], world["teacher"]
+    data = {
+        "form_teacher": t.pk,
+        f"teacher_{world['basic'].pk}": t.pk,
+        f"teacher_{world['maths'].pk}": t.pk,
+        f"teacher_{subj3.pk}": student.pk,
+    }
+    resp = client_a.post(url(arm), data)
+    assert resp.status_code == 200
+    assert "choose an active teacher" in resp.content.decode()
+    with schema_context("school_a"):
+        assert not FormTeacher.objects.exists()
+        assert not SubjectOffering.objects.exists()
+        assert not audits("academics.offering_assigned")
+        assert not audits("academics.form_teacher_assigned")
+
+
+def test_tampered_subject_outside_section_changes_nothing(world, client_a):
+    with schema_context("school_a"):
+        login_verified(client_a, make_staff("school_admin"))
+    resp = client_a.post(
+        url(world["sss_arm"]), {f"teacher_{world['basic'].pk}": world["teacher"].pk}
+    )
+    assert resp.status_code == 302
+    with schema_context("school_a"):
+        assert not SubjectOffering.objects.exists()
+
+
+def _freeze(monkeypatch, utc_dt):
+    from django.utils import timezone
+
+    monkeypatch.setattr(timezone, "now", lambda: utc_dt)
+
+
+def _with_end(world, end):
+    with schema_context("school_a"):
+        AcademicSession.objects.filter(pk=world["future"].pk).update(end_date=end)
+        world["future"].refresh_from_db()
+
+
+def _try(world):
+    return assign_form_teacher(
+        arm=world["jss_arm"],
+        session=world["future"],
+        teacher=world["teacher"],
+        by=world["teacher"],
+    )
+
+
+def test_session_end_boundary_uses_local_date(world, monkeypatch):
+    from datetime import datetime
+
+    # 12:00 UTC on 2026-10-11 is 13:00 in Lagos, same day.
+    _freeze(monkeypatch, datetime(2026, 10, 11, 12, 0, tzinfo=UTC))
+    _with_end(world, date(2026, 10, 11))
+    with schema_context("school_a"):
+        _try(world)  # end_date == today: allowed
+    _with_end(world, date(2026, 10, 10))
+    with schema_context("school_a"), pytest.raises(ValidationError):
+        _try(world)  # yesterday: refused
+    # 23:30 UTC on the 10th is already 00:30 on the 11th in Lagos.
+    _freeze(monkeypatch, datetime(2026, 10, 10, 23, 30, tzinfo=UTC))
+    _with_end(world, date(2026, 10, 10))
+    with schema_context("school_a"), pytest.raises(ValidationError):
+        _try(world)
+    _with_end(world, date(2026, 10, 11))
+    with schema_context("school_a"):
+        _try(world)
+
+
+def test_delete_arm_with_offering_or_form_teacher_refused(world):
+    from apps.academics.services import delete_arm
+
+    t = world["teacher"]
+    with schema_context("school_a"):
+        assign_offering(
+            subject=world["maths"], arm=world["jss_arm"], session=world["current"], teacher=t, by=t
+        )
+        assign_form_teacher(arm=world["sss_arm"], session=world["current"], teacher=t, by=t)
+        for arm in (world["jss_arm"], world["sss_arm"]):
+            with pytest.raises(ValidationError) as exc:
+                delete_arm(arm, by=t)
+            assert "assignments" in str(exc.value)
+            assert ClassArm.objects.filter(pk=arm.pk).exists()

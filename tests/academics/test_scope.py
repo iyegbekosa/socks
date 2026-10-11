@@ -68,3 +68,15 @@ def test_none_session_student_and_inactive_get_nothing(world):
         t.is_active = False
         t.save()
         assert not arms_taught_by(t, world["s2"]).exists()
+
+
+def test_losing_teacher_role_empties_scope(world):
+    from apps.accounts.roles import set_roles as _set
+
+    with schema_context("school_a"):
+        t = world["t"]
+        FormTeacher.objects.create(arm=world["arms"][0], session=world["s2"], teacher=t)
+        assert arms_taught_by(t, world["s2"]).exists()
+        _set(t, ["school_admin"], by=t)
+        assert FormTeacher.objects.filter(teacher=t).exists()
+        assert not arms_taught_by(t, world["s2"]).exists()

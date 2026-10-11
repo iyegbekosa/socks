@@ -1,7 +1,7 @@
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
@@ -17,6 +17,7 @@ from apps.academics.models import (
     Term,
 )
 from apps.academics.services import (
+    academic_write_lock,
     assign_form_teacher,
     assign_offering,
     current_session,
@@ -206,67 +207,88 @@ def arm_detail(request, arm_id):
     teachers = list(_active_teachers())
     by_id = {t.pk: t for t in teachers}
     subjects_here = [s for s in Subject.objects.all() if arm.level.section in (s.sections or [])]
-    existing = {o.subject_id: o for o in SubjectOffering.objects.filter(arm=arm, session=session)}
-    form_teacher = FormTeacher.objects.filter(arm=arm, session=session).first()
 
-    def pick(raw: str | None):
-        """Return (ok, teacher) for a posted teacher id; blank means no teacher."""
+    def pick(raw: str | None, errors: list[str], label: str):
+        """Return the chosen teacher; blank means none. Bad choices add an error."""
         raw = (raw or "").strip()
         if not raw:
-            return True, None
+            return None
         try:
             teacher = by_id.get(int(raw))
         except ValueError:
-            return False, None
-        return teacher is not None, teacher
+            teacher = None
+        if teacher is None:
+            errors.append(f"{label}: choose an active teacher from the list.")
+        return teacher
 
     if request.method == "POST":
         try:
-            changed = 0
-            ok, new_ft = pick(request.POST.get("form_teacher"))
-            if not ok:
-                raise ValidationError("Choose a teacher from the list.")
-            old_ft_id = form_teacher.teacher_id if form_teacher else None
-            if (new_ft.pk if new_ft else None) != old_ft_id:
-                if new_ft is None:
-                    remove_form_teacher(arm=arm, session=session, by=request.user, request=request)
-                else:
-                    assign_form_teacher(
-                        arm=arm, session=session, teacher=new_ft, by=request.user, request=request
-                    )
-                changed += 1
-            for subject in subjects_here:
-                ok, teacher = pick(request.POST.get(f"teacher_{subject.pk}"))
-                if not ok:
-                    raise ValidationError("Choose a teacher from the list.")
-                compulsory = f"compulsory_{subject.pk}" in request.POST
-                old = existing.get(subject.pk)
-                if old is None and teacher is None:
-                    continue
-                if (
-                    old is not None
-                    and old.teacher_id == (teacher.pk if teacher else None)
-                    and old.is_compulsory == compulsory
+            with transaction.atomic():
+                academic_write_lock()
+                # Re-read under the lock so the diff below is against current data.
+                existing = {
+                    o.subject_id: o
+                    for o in SubjectOffering.objects.filter(arm=arm, session=session)
+                }
+                current_ft = FormTeacher.objects.filter(arm=arm, session=session).first()
+                errors: list[str] = []
+                new_ft = pick(request.POST.get("form_teacher"), errors, "Form teacher")
+                plans = []
+                for subject in subjects_here:
+                    teacher = pick(request.POST.get(f"teacher_{subject.pk}"), errors, subject.name)
+                    compulsory = f"compulsory_{subject.pk}" in request.POST
+                    old = existing.get(subject.pk)
+                    if old is None and teacher is None:
+                        continue
+                    if (
+                        old is not None
+                        and old.teacher_id == (teacher.pk if teacher else None)
+                        and old.is_compulsory == compulsory
+                    ):
+                        continue
+                    plans.append((subject, teacher, compulsory))
+                if errors:
+                    raise ValidationError(errors)
+                changed = 0
+                if (new_ft.pk if new_ft else None) != (
+                    current_ft.teacher_id if current_ft else None
                 ):
-                    continue
-                assign_offering(
-                    subject=subject,
-                    arm=arm,
-                    session=session,
-                    teacher=teacher,
-                    is_compulsory=compulsory,
-                    by=request.user,
-                    request=request,
-                )
-                changed += 1
+                    if new_ft is None:
+                        remove_form_teacher(
+                            arm=arm, session=session, by=request.user, request=request
+                        )
+                    else:
+                        assign_form_teacher(
+                            arm=arm,
+                            session=session,
+                            teacher=new_ft,
+                            by=request.user,
+                            request=request,
+                        )
+                    changed += 1
+                for subject, teacher, compulsory in plans:
+                    assign_offering(
+                        subject=subject,
+                        arm=arm,
+                        session=session,
+                        teacher=teacher,
+                        is_compulsory=compulsory,
+                        by=request.user,
+                        request=request,
+                    )
+                    changed += 1
         except ValidationError as exc:
-            messages.error(request, " ".join(exc.messages))
+            # The transaction rolled back: nothing was saved. Show the errors on this page.
+            for message in exc.messages:
+                messages.error(request, message)
         except IntegrityError:
             messages.error(request, CONFLICT_MESSAGE)
         else:
             messages.success(request, "Saved." if changed else "Nothing changed.")
-        return redirect("academics:arm_detail", arm_id=arm.pk)
+            return redirect("academics:arm_detail", arm_id=arm.pk)
 
+    existing = {o.subject_id: o for o in SubjectOffering.objects.filter(arm=arm, session=session)}
+    form_teacher = FormTeacher.objects.filter(arm=arm, session=session).first()
     rows = []
     for subject in subjects_here:
         off = existing.get(subject.pk)

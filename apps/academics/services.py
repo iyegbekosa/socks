@@ -5,6 +5,7 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.db.models import ProtectedError, RestrictedError
+from django.utils import timezone
 from django.utils.text import slugify
 
 from apps.academics.models import (
@@ -288,7 +289,7 @@ def _check_teacher(teacher: Any) -> None:
 
 
 def _check_session_open(session: AcademicSession) -> None:
-    if session.end_date < date.today():
+    if session.end_date < timezone.localdate():
         raise ValidationError(
             {"session": f"Session {session.name} has ended, so it can no longer be changed."}
         )

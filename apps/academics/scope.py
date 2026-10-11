@@ -3,6 +3,7 @@ from typing import Any
 from django.db.models import Q, QuerySet
 
 from apps.academics.models import AcademicSession, ClassArm
+from apps.accounts.roles import TEACHER
 
 
 def arms_taught_by(user: Any, session: AcademicSession | None) -> "QuerySet[ClassArm]":
@@ -12,6 +13,7 @@ def arms_taught_by(user: Any, session: AcademicSession | None) -> "QuerySet[Clas
         or user is None
         or not getattr(user, "is_active", False)
         or getattr(user, "kind", None) != "staff"
+        or not user.has_role(TEACHER)
     ):
         return ClassArm.objects.none()
     return ClassArm.objects.filter(
