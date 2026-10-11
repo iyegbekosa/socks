@@ -79,9 +79,14 @@ Mailpit (<http://localhost:8025>), the web server, a Celery worker and Celery Be
 - **The public School row must exist** (schema `public`, with the platform's domain).
   Run `python manage.py ensure_public_tenant` (idempotent; uses `PLATFORM_DOMAIN`, default
   `localhost`). Without it, unknown hosts cannot fall back to the landing page.
-- **`CLIENT_IP_HEADER` is required in production** behind Cloudflare or any proxy (e.g.
-  `HTTP_CF_CONNECTING_IP`). Without it every visitor shares the proxy's IP, and the per-IP
-  login limit (`LOGIN_IP_FAILURE_LIMIT`, 50 failures / 15 min) would hit the whole platform.
+- **`CLIENT_IP_HEADER` is required in production** behind Cloudflare or any proxy, and it
+  must name a header **the proxy overwrites** on every request, e.g. `HTTP_CF_CONNECTING_IP`
+  behind Cloudflare. Never point it at `HTTP_X_FORWARDED_FOR` as-is: clients can send their
+  own `X-Forwarded-For`, and a proxy that appends to it leaves the client's forged values in
+  front. For a comma-separated value the app takes the **rightmost** valid IP (the one the
+  nearest proxy added), never the first. Without the setting every visitor shares the
+  proxy's IP, and the per-IP login limit (`LOGIN_IP_FAILURE_LIMIT`, 50 failures / 15 min)
+  would hit the whole platform.
 - **`SECURE_PROXY_SSL=true`** when TLS ends at a proxy that sets `X-Forwarded-Proto`.
   Without it, Django sees plain http and staff invite links in emails and SMS are built
   as `http://` instead of `https://`.
@@ -90,3 +95,25 @@ Mailpit (<http://localhost:8025>), the web server, a Celery worker and Celery Be
 - **Environment:** set `CLOUDINARY_URL`, `CLOUDINARY_ENV_PREFIX` (e.g. `prod`, which keeps
   environments apart in one Cloudinary account) and `SENTRY_DSN`, along with `SECRET_KEY`,
   `DEBUG=false`, `ALLOWED_HOSTS`, `DATABASE_URL` and `REDIS_URL`.
+- **`REDIS_URL` is mandatory when `DEBUG=false`.** Settings refuse to load without it
+  (`ImproperlyConfigured`), because Celery would otherwise run every task inline in the web
+  request.
+- **Platform URLs:** `PLATFORM_DOMAIN` is the bare domain schools live under (e.g.
+  `build2learn.ng`, so a school is `greenfield.build2learn.ng`); `ensure_public_tenant` and
+  signup use it. `PLATFORM_URL_TEMPLATE` builds the links in invite emails and on the signup
+  status page, e.g. `PLATFORM_URL_TEMPLATE=https://{subdomain}.build2learn.ng`.
+  `python manage.py check --deploy` fails (`core.E001`) if it contains `localhost` or does
+  not start with `https://`.
+- **Email (invites, signup):** `EMAIL_HOST`, `EMAIL_PORT` (default 587), `EMAIL_HOST_USER`,
+  `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS` (default true) and `DEFAULT_FROM_EMAIL`. With
+  `DEBUG=false` the SMTP backend is used.
+- **SMS:** `SMS_BACKEND` is unset in production until the real provider lands in P5. Until
+  then **password reset by SMS is unavailable in production** (the reset page says so), and
+  invites go by email only. Do not set it to the console backend in production.
+- **Celery worker queues:** the worker must consume all four queues, highest priority first:
+  `celery -A config worker -Q payments,notifications,default,reports` (as in
+  `docker-compose.yml`). Tasks are routed to these queues (SMS goes to `notifications`); a
+  worker pool that misses one leaves those tasks queued forever.
+- **`SIGNUP_GLOBAL_DAILY_LIMIT`** (default 50): platform-wide cap on valid self-service
+  signups per 24 hours. When it is hit, signup shows a "try again later" page and logs a
+  WARNING (`Global signup cap reached`); raise it if real demand needs more.

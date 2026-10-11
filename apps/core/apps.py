@@ -22,4 +22,6 @@ class CoreConfig(AppConfig):
     label = "core"
 
     def ready(self) -> None:
+        from apps.core import checks  # noqa: F401  (registers the deploy checks)
+
         configure_cloudinary(settings.CLOUDINARY_URL)
