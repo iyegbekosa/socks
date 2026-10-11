@@ -1,0 +1,24 @@
+{% extends "core/base.html" %}
+{% block title %}New session{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>New academic session</h1>
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    <label for="{{ form.name.id_for_label }}">{{ form.name.label }}</label>
+    {{ form.name }}
+    <p class="muted">{{ form.name.help_text }}</p>
+    {% for e in form.name.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    {% for i, start, end in form.term_rows %}
+    <h2>Term {{ i }}</h2>
+    <label for="{{ start.id_for_label }}">Start</label>{{ start }}
+    {% for e in start.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    <label for="{{ end.id_for_label }}">End</label>{{ end }}
+    {% for e in end.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    {% endfor %}
+    <button type="submit">Create session</button>
+  </form>
+  <p><a href="{% url 'academics:sessions' %}">Back</a></p>
+</div>
+{% endblock %}
