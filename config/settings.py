@@ -20,8 +20,9 @@ PLATFORM_DOMAIN = env("PLATFORM_DOMAIN", default="localhost")
 PLATFORM_URL_TEMPLATE = env("PLATFORM_URL_TEMPLATE", default="http://{subdomain}.localhost:8000")
 
 SHARED_APPS = [
-    "django_tenants",
+    # apps.tenancy must precede django_tenants: its migrate_schemas command overrides the stock one.
     "apps.tenancy",
+    "django_tenants",
     "apps.core",
     # accounts is shared too: AUTH_USER_MODEL must exist in the public schema
     # (auth/admin tables there reference it) and in every school schema.

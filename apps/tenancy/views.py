@@ -2,7 +2,7 @@ import logging
 
 from django.conf import settings
 from django.core import signing
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.http import Http404, HttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -19,10 +19,24 @@ logger = logging.getLogger(__name__)
 STATUS_SALT = "signup-status"
 STATUS_MAX_AGE = 86400
 _signup_limit = RateLimit("signup", limit=5, window=3600)
+_global_limit = RateLimit("signup_global", limit=50, window=86400)
+GLOBAL_KEY = "all"
+BUSY_MESSAGE = "We're getting a lot of signups — please try again later or contact us."
 
 
 def landing(request):
     return render(request, "tenancy/landing.html")
+
+
+def _too_many(request, message: str, limiter: RateLimit, key: str) -> HttpResponse:
+    response = render(
+        request,
+        "tenancy/signup.html",
+        {"form": SignupForm(), "blocked": message},
+        status=429,
+    )
+    response["Retry-After"] = str(limiter.retry_after(key))
+    return response
 
 
 def signup(request):
@@ -30,24 +44,39 @@ def signup(request):
         return render(request, "tenancy/signup.html", {"form": SignupForm()})
 
     # Reserve first: every POST counts, valid or not (cheap defence against schema spam).
+    if _global_limit.hit(GLOBAL_KEY) > _global_limit.limit:
+        return _too_many(request, BUSY_MESSAGE, _global_limit, GLOBAL_KEY)
     ip = client_ip(request)
     if ip is not None and _signup_limit.hit(ip) > _signup_limit.limit:
-        response = render(
+        return _too_many(
             request,
-            "tenancy/signup.html",
-            {
-                "form": SignupForm(),
-                "blocked": "Too many sign-up attempts from your network. Please try again later.",
-            },
-            status=429,
+            "Too many sign-up attempts from your network. Please try again later.",
+            _signup_limit,
+            ip,
         )
-        response["Retry-After"] = str(_signup_limit.retry_after(ip))
-        return response
 
     form = SignupForm(request.POST)
     if not form.is_valid():
         return render(request, "tenancy/signup.html", {"form": form}, status=200)
     data = form.cleaned_data
+    try:
+        school = _create_school(data)
+    except IntegrityError:  # a concurrent signup took the same subdomain
+        form.add_error("subdomain", "This web address is already taken.")
+        return render(request, "tenancy/signup.html", {"form": form})
+    try:
+        provision_school.delay(school.pk)
+    except Exception:
+        # Eager mode surfaces task errors here; a queue outage must not leave it "pending".
+        logger.exception("Provisioning task raised", extra={"school_id": school.pk})
+        School.objects.filter(pk=school.pk, provisioning_status="pending").update(
+            provisioning_status="failed"
+        )
+    token = signing.dumps(school.pk, salt=STATUS_SALT)
+    return redirect(reverse("signup_status", args=[token]))
+
+
+def _create_school(data) -> School:
     with transaction.atomic():
         school = School(
             schema_name=schema_name_for(data["subdomain"]),
@@ -61,13 +90,7 @@ def signup(request):
         )
         school.auto_create_schema = False  # the provisioning task creates the schema
         school.save()
-    try:
-        provision_school.delay(school.pk)
-    except Exception:
-        # Eager mode surfaces task errors here; the task has already marked the school failed.
-        logger.exception("Provisioning task raised", extra={"school_id": school.pk})
-    token = signing.dumps(school.pk, salt=STATUS_SALT)
-    return redirect(reverse("signup_status", args=[token]))
+    return school
 
 
 def signup_status(request, token: str):

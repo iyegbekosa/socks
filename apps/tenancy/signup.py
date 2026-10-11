@@ -42,7 +42,7 @@ def validate_subdomain(value: str) -> str:
     sub = (value or "").strip().lower()
     if not 3 <= len(sub) <= 30:
         raise ValidationError("Use between 3 and 30 characters.")
-    if not _SUBDOMAIN_RE.match(sub):
+    if not _SUBDOMAIN_RE.fullmatch(sub):
         raise ValidationError(
             "Use letters, numbers and hyphens only, starting with a letter and not ending "
             "with a hyphen."

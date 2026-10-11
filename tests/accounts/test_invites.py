@@ -188,3 +188,39 @@ def test_school_a_link_rejected_on_school_b(
     r = client_b.get(link.replace("school-a.localhost", "school-b.localhost"))
     assert r.status_code == 400
     connection.set_tenant(school_a)
+
+
+def test_invite_sms_runs_in_school_schema(school_a, settings):
+    """Simulate a worker's autocommit: on_commit fires inside tenant_context, the SMS task
+    runs in the school's schema."""
+    from django.db import connection
+    from django_tenants.utils import tenant_context
+
+    from apps.core import sms
+
+    settings.SMS_BACKEND = "apps.core.sms.LocmemSmsBackend"
+    sms.outbox.clear()
+    seen = []
+    original = sms.LocmemSmsBackend.send
+
+    def spy(self, to, body):
+        seen.append(connection.schema_name)
+        original(self, to, body)
+
+    with (
+        tenant_context(school_a),
+        patch.object(sms.LocmemSmsBackend, "send", spy),
+        patch("apps.accounts.services.transaction.on_commit", lambda fn: fn()),
+    ):
+        invite_staff(
+            full_name="Sms Person",
+            email=None,
+            phone="0803 555 0101",
+            roles=["teacher"],
+            by=None,
+            base_url=BASE,
+            send_sms=True,
+        )
+    assert len(sms.outbox) == 1
+    assert seen == ["school_a"]
+    sms.outbox.clear()

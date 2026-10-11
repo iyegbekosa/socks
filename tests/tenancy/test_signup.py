@@ -3,7 +3,7 @@ from unittest import mock
 import pytest
 from django.core import mail, signing
 from django.db import connection
-from django_tenants.utils import schema_context
+from django_tenants.utils import schema_context, tenant_context
 
 from apps.tenancy.models import Domain, Plan, School
 from apps.tenancy.provisioning import provision_school
@@ -94,7 +94,9 @@ def test_valid_signup_provisions_school(client, post, payload):
     assert mail.outbox[0].to == ["ada@example.com"]
     assert "http://newschool.localhost:8000/" in mail.outbox[0].body
     # The new host routes to the new schema.
-    assert client.get("/accounts/login/", HTTP_HOST="newschool.localhost").status_code == 200
+    login = client.get("/accounts/login/", HTTP_HOST="newschool.localhost")
+    assert login.status_code == 200
+    assert b"New School" in login.content
 
 
 @pytest.mark.parametrize(
@@ -185,6 +187,101 @@ def test_status_token_bad_or_expired_is_404(client, db):
         assert client.get(f"/signup/status/{token}/", HTTP_HOST=PUBLIC_HOST).status_code == 404
 
 
-def test_zz_rolled_back_schemas_are_gone(db):
-    """Runs after the provisioning tests: their schemas must not outlive the test transaction."""
-    assert "newschool" not in schemas()
+@pytest.fixture(scope="module", autouse=True)
+def _no_leftover_schemas(django_db_blocker):
+    """After the module, none of the schemas these tests create may remain (rollback worked)."""
+    yield
+    with django_db_blocker.unblock():
+        assert not {"newschool", "pendingschool"} & schemas()
+
+
+def test_school_a_collision_variants(client, post, payload, school_a):
+    payload["subdomain"] = "School-A"  # lowercases onto school_a's schema and domain
+    resp = post(client, payload)
+    assert "taken" in str(resp.context["form"].errors["subdomain"])
+    payload["subdomain"] = "school_a"  # the regex rejects underscores
+    assert "subdomain" in post(client, payload).context["form"].errors
+    assert not School.objects.filter(name="New School").exists()
+
+
+def test_delay_failure_marks_failed(client, post, payload):
+    with mock.patch.object(provision_school, "delay", side_effect=RuntimeError("queue down")):
+        resp = post(client, payload)
+    assert resp.status_code == 302
+    assert School.objects.get(schema_name="newschool").provisioning_status == "failed"
+    assert b"contact you" in client.get(resp["Location"], HTTP_HOST=PUBLIC_HOST).content
+
+
+def test_global_cap_returns_429(client, post, payload):
+    from apps.tenancy.views import GLOBAL_KEY, _global_limit
+
+    for _ in range(50):
+        _global_limit.hit(GLOBAL_KEY)
+    resp = post(client, payload)
+    assert resp.status_code == 429
+    assert "lot of signups" in resp.content.decode()
+    assert not School.objects.filter(schema_name="newschool").exists()
+
+
+def test_signup_sends_no_sms(client, post, payload, settings, sms_outbox):
+    settings.SMS_BACKEND = "apps.core.sms.LocmemSmsBackend"
+    post(client, payload)
+    assert sms_outbox == []
+    assert len(mail.outbox) == 1
+    with schema_context("newschool"):
+        from apps.accounts.models import User
+
+        assert User.objects.get(email="ada@example.com").phone == "+2348031234567"
+
+
+def test_retry_after_partial_failure_sends_one_invite(client, post, payload, transaction_capture):
+    # Fire on-commit hooks immediately, as a worker's autocommit does, so the failure happens
+    # inside the task.
+    with (
+        mock.patch("apps.accounts.services.send_mail", side_effect=RuntimeError("smtp down")),
+        mock.patch("apps.accounts.services.transaction.on_commit", lambda fn: fn()),
+    ):
+        post(client, payload)
+    school = School.objects.get(schema_name="newschool")
+    assert school.provisioning_status == "failed"
+    assert mail.outbox == []
+    with schema_context("newschool"):
+        from apps.accounts.models import User
+
+        # The failed send rolled the invite back, so the retry creates the user afresh.
+        assert User.objects.filter(email="ada@example.com").count() == 0
+    with transaction_capture(client):
+        provision_school(school.pk)
+    school.refresh_from_db()
+    assert school.provisioning_status == "ready"
+    assert len(mail.outbox) == 1
+    assert Domain.objects.filter(domain="newschool.localhost").count() == 1
+
+
+@pytest.fixture
+def transaction_capture(django_capture_on_commit_callbacks):
+    return lambda _c: django_capture_on_commit_callbacks(execute=True)
+
+
+def test_migrate_schemas_skips_pending_school(db, caplog):
+    from django.core.management import call_command
+
+    school = School(schema_name="pendingschool", name="Pending", provisioning_status="pending")
+    school.auto_create_schema = False
+    school.save()
+    assert "pendingschool" not in schemas()
+    call_command("migrate_schemas", tenant=True, interactive=False, verbosity=0)
+    assert "pendingschool" not in schemas()
+    assert "skipping pendingschool" in caplog.text
+
+
+def test_rerun_resends_invite_to_unaccepted_contact(client, post, payload, transaction_capture):
+    from apps.tenancy.provisioning import _invite_contact
+
+    post(client, payload)
+    assert len(mail.outbox) == 1
+    school = School.objects.get(schema_name="newschool")
+    with tenant_context(school), transaction_capture(client):
+        _invite_contact(school, "http://newschool.localhost:8000", resend=True)
+    assert len(mail.outbox) == 2
+    assert "/accounts/invite/" in mail.outbox[1].body

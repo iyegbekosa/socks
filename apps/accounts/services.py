@@ -124,9 +124,9 @@ def invite_link(user: User, base_url: str) -> str:
     return f"{base_url.rstrip('/')}/accounts/invite/{uid}/{token}/"
 
 
-def _send_invite_on_commit(user: User, base_url: str) -> None:
+def _send_invite_on_commit(user: User, base_url: str, *, send_sms: bool = True) -> None:
     """Queue the invite email/SMS for after the surrounding transaction commits."""
-    from apps.core.sms import send_sms, sms_configured
+    from apps.core import sms
 
     school_name = connection.tenant.name  # type: ignore[attr-defined]
     link = invite_link(user, base_url)
@@ -145,8 +145,8 @@ def _send_invite_on_commit(user: User, base_url: str) -> None:
                 None,
                 [email],
             )
-        if phone and sms_configured():
-            send_sms(
+        if send_sms and phone and sms.sms_configured():
+            sms.send_sms(
                 phone,
                 f"{school_name}: you've been invited to the staff portal. "
                 f"Set your password: {link}",
@@ -164,6 +164,7 @@ def invite_staff(
     by: User | None,
     base_url: str,
     request=None,
+    send_sms: bool = True,
 ) -> User:
     from apps.audit.services import record
 
@@ -213,18 +214,20 @@ def invite_staff(
             obj=user,
             after={"roles": roles},
         )
-        _send_invite_on_commit(user, base_url)
+        _send_invite_on_commit(user, base_url, send_sms=send_sms)
     return user
 
 
-def resend_invite(user: User, *, by: User, base_url: str, request=None) -> None:
+def resend_invite(
+    user: User, *, by: User | None, base_url: str, request=None, send_sms: bool = True
+) -> None:
     from apps.audit.services import record
 
     if user.kind != User.Kind.STAFF or not user.is_active or user.has_usable_password():
         raise ValidationError("An invite can only be resent while the password is not set.")
     with transaction.atomic():
         record("user.invited", request=request, actor=by, obj=user, after={"resent": True})
-        _send_invite_on_commit(user, base_url)
+        _send_invite_on_commit(user, base_url, send_sms=send_sms)
 
 
 def _lock_admins() -> list[int]:
