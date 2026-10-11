@@ -34,6 +34,7 @@ def _invite(capture, **kw):
         "roles": ["teacher"],
         "by": None,
         "base_url": BASE,
+        "verified": False,
     }
     args.update(kw)
     with capture(execute=True):
@@ -219,6 +220,7 @@ def test_invite_sms_runs_in_school_schema(school_a, settings):
             roles=["teacher"],
             by=None,
             base_url=BASE,
+            verified=False,
             send_sms=True,
         )
     assert len(sms.outbox) == 1

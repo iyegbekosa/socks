@@ -16,7 +16,23 @@ from django.utils.http import urlsafe_base64_encode
 
 from apps.accounts.identifiers import classify_identifier
 from apps.accounts.models import User
-from apps.accounts.roles import SCHOOL_ADMIN, set_roles
+from apps.accounts.roles import MFA_REQUIRED_ROLES, SCHOOL_ADMIN, set_roles
+
+MFA_VERIFICATION_REQUIRED = "This change needs a two-factor-verified admin."
+
+
+class MfaVerificationRequired(ValidationError):
+    """An MFA-sensitive staff change was attempted from a session without a verified OTP."""
+
+    def __init__(self) -> None:
+        super().__init__(MFA_VERIFICATION_REQUIRED)
+
+
+def _require_verified(verified: bool) -> None:
+    # Granting/removing MFA roles, inviting into them and resetting MFA must come from a
+    # session that passed a TOTP check, or an MFA-free proprietor could escalate to admin.
+    if not verified:
+        raise MfaVerificationRequired()
 
 
 def create_student_user(
@@ -36,12 +52,16 @@ def create_student_user(
     return user
 
 
-def reset_mfa(user: User, *, by: User, request=None) -> None:
-    """Delete all of ``user``'s TOTP devices so they enrol again at next login."""
+def reset_mfa(user: User, *, by: User, verified: bool, request=None) -> None:
+    """Delete all of ``user``'s TOTP devices so they enrol again at next login.
+
+    ``verified``: the acting session passed a TOTP check (``request.user.is_verified()``).
+    """
     from django_otp.plugins.otp_totp.models import TOTPDevice
 
     from apps.audit.services import record
 
+    _require_verified(verified)
     TOTPDevice.objects.filter(user=user).delete()
     record("auth.mfa_reset", request=request, actor=by, obj=user)
 
@@ -163,11 +183,16 @@ def invite_staff(
     roles: Iterable[str],
     by: User | None,
     base_url: str,
+    verified: bool,
     request=None,
     send_sms: bool = True,
 ) -> User:
+    """``verified``: the acting session passed a TOTP check; required for MFA roles.
+    Platform provisioning (``by=None``) passes True."""
     from apps.audit.services import record
 
+    if set(roles) & MFA_REQUIRED_ROLES:
+        _require_verified(verified)
     email = (email or "").strip().lower()
     phone = (phone or "").strip() or None
     if not email and not phone:
@@ -242,10 +267,16 @@ def _lock_admins() -> list[int]:
     )
 
 
-def update_staff_roles(user: User, roles: Iterable[str], *, by: User, request=None) -> None:
+def update_staff_roles(
+    user: User, roles: Iterable[str], *, by: User, verified: bool, request=None
+) -> None:
+    """``verified``: the acting session passed a TOTP check; required to add or remove any
+    MFA role (school_admin, principal, bursar)."""
     wanted = set(roles)
     with transaction.atomic():
         admins = _lock_admins()
+        if (set(user.roles) ^ wanted) & MFA_REQUIRED_ROLES:
+            _require_verified(verified)
         if SCHOOL_ADMIN not in wanted and user.pk in admins and len(admins) <= 1:
             raise ValidationError(
                 "This is the last active school administrator. Make someone else an "

@@ -57,6 +57,7 @@ def _invite_contact(school: School, base_url: str, *, resend: bool) -> None:
         roles=FIRST_USER_ROLES,
         by=None,
         base_url=base_url,
+        verified=True,  # platform action, not a staff session
         send_sms=False,  # public signup must not be able to trigger SMS to arbitrary numbers
     )
 

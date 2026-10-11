@@ -10,6 +10,7 @@ from django.views.decorators.cache import never_cache
 from apps.accounts.models import User
 from apps.accounts.roles import PROPRIETOR, SCHOOL_ADMIN, STAFF_ROLES, require_roles
 from apps.accounts.services import (
+    MfaVerificationRequired,
     deactivate_staff,
     invite_staff,
     reactivate_staff,
@@ -49,6 +50,11 @@ class RolesForm(forms.Form):
     )
 
 
+def _verified(request) -> bool:
+    is_verified = getattr(request.user, "is_verified", None)  # set by OTPMiddleware
+    return bool(is_verified and is_verified())
+
+
 def _base_url(request) -> str:
     return request.build_absolute_uri("/").rstrip("/")
 
@@ -82,6 +88,7 @@ def staff_list_view(request):
 @require_roles(SCHOOL_ADMIN, PROPRIETOR)
 def staff_invite_view(request):
     form = InviteForm(request.POST or None)
+    status = 200
     if request.method == "POST" and form.is_valid():
         d = form.cleaned_data
         try:
@@ -92,14 +99,19 @@ def staff_invite_view(request):
                 roles=d["roles"],
                 by=request.user,
                 base_url=_base_url(request),
+                verified=_verified(request),
                 request=request,
             )
         except ValidationError as exc:
             _attach(form, exc)
+            if isinstance(exc, MfaVerificationRequired):
+                status = 403
         else:
             messages.success(request, "Invite sent.")
             return redirect(reverse("staff:list"))
-    return render(request, "accounts/staff_form.html", {"form": form, "invite": True})
+    return render(
+        request, "accounts/staff_form.html", {"form": form, "invite": True}, status=status
+    )
 
 
 @never_cache
@@ -108,6 +120,7 @@ def staff_edit_view(request, pk: int):
     target = get_object_or_404(User, pk=pk, kind=User.Kind.STAFF)
     roles_form = RolesForm(initial={"roles": sorted(target.roles)})
     errors: list[str] = []
+    status = 200
 
     if request.method == "POST":
         action = request.POST.get("action", "")
@@ -118,7 +131,11 @@ def staff_edit_view(request, pk: int):
                     if not roles_form.is_valid():
                         raise ValidationError("Choose valid roles.")
                     update_staff_roles(
-                        target, roles_form.cleaned_data["roles"], by=request.user, request=request
+                        target,
+                        roles_form.cleaned_data["roles"],
+                        by=request.user,
+                        verified=_verified(request),
+                        request=request,
                     )
                     messages.success(request, "Roles updated.")
                 elif action == "deactivate":
@@ -133,7 +150,7 @@ def staff_edit_view(request, pk: int):
                     )
                     messages.success(request, "Invite sent again.")
                 elif action == "reset_mfa":
-                    reset_mfa(target, by=request.user, request=request)
+                    reset_mfa(target, by=request.user, verified=_verified(request), request=request)
                     messages.success(
                         request, "Two-factor reset. They will set it up at next login."
                     )
@@ -141,6 +158,8 @@ def staff_edit_view(request, pk: int):
                     raise Http404
         except ValidationError as exc:
             errors = exc.messages
+            if isinstance(exc, MfaVerificationRequired):
+                status = 403
             target.refresh_from_db()
             roles_form = RolesForm(initial={"roles": sorted(target.roles)})
         else:
@@ -155,5 +174,5 @@ def staff_edit_view(request, pk: int):
             "errors": errors,
             "pending": not target.has_usable_password(),
         },
-        status=200,
+        status=status,
     )

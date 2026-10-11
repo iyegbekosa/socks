@@ -31,6 +31,15 @@ def _login(client, roles):
     return u
 
 
+def _login_verified_proprietor(client):
+    """A proprietor who also holds an MFA role and has passed a TOTP check."""
+    with schema_context("school_a"):
+        u = StaffFactory()
+        set_roles(u, ["proprietor", "principal"], by=u)
+    login_verified(client, u)
+    return u
+
+
 def _admin():
     with schema_context("school_a"):
         a = StaffFactory()
@@ -83,7 +92,7 @@ def test_edit_404_for_student_or_missing(client_a):
 
 
 def test_roles_edit_audited(client_a):
-    actor = _login(client_a, ["proprietor"])
+    actor = _login_verified_proprietor(client_a)
     with schema_context("school_a"):
         t = StaffFactory()
     r = _post(client_a, t, action="roles", roles=["teacher", "bursar"])
@@ -109,7 +118,7 @@ def test_csrf_enforced_on_post(school_a):
 
 def test_cannot_remove_last_admin_role(client_a):
     a = _only_admin()
-    _login(client_a, ["proprietor"])
+    _login_verified_proprietor(client_a)
     r = _post(client_a, a, action="roles", roles=["teacher"])
     assert r.status_code == 200 and b"last" in r.content.lower()
     with schema_context("school_a"):
@@ -119,7 +128,7 @@ def test_cannot_remove_last_admin_role(client_a):
 def test_can_remove_admin_role_when_another_exists(client_a):
     a = _only_admin()
     _admin()
-    _login(client_a, ["proprietor"])
+    _login_verified_proprietor(client_a)
     assert _post(client_a, a, action="roles", roles=["teacher"]).status_code == 302
     with schema_context("school_a"):
         assert "school_admin" not in User.objects.get(pk=a.pk).roles
@@ -186,7 +195,7 @@ def test_resend_invite(client_a, django_capture_on_commit_callbacks, sms_outbox)
 
 
 def test_reset_mfa(client_a):
-    _login(client_a, ["proprietor"])
+    _login_verified_proprietor(client_a)
     with schema_context("school_a"):
         t = StaffFactory()
         TOTPDevice.objects.create(user=t, name="default", confirmed=True)
@@ -253,7 +262,7 @@ def test_pending_admin_does_not_count_as_a_second_admin(client_a):
         pending.set_unusable_password()
         pending.save()
         set_roles(pending, ["school_admin"], by=a)
-    _login(client_a, ["proprietor"])
+    _login_verified_proprietor(client_a)
     r = _post(client_a, a, action="roles", roles=["teacher"])
     assert r.status_code == 200 and b"last" in r.content.lower()
     r = _post(client_a, a, action="deactivate")
@@ -265,7 +274,7 @@ def test_pending_admin_does_not_count_as_a_second_admin(client_a):
 
 def test_roles_form_after_rejection_shows_stored_roles(client_a):
     a = _only_admin()
-    _login(client_a, ["proprietor"])
+    _login_verified_proprietor(client_a)
     r = _post(client_a, a, action="roles", roles=["teacher"])
     html = r.content.decode()
     assert re.search(r'value="school_admin"[^>]*checked', html)
@@ -280,3 +289,117 @@ def test_noop_state_changes_record_nothing(client_a):
     assert _post(client_a, inactive, action="deactivate").status_code == 302
     assert _post(client_a, active, action="reactivate").status_code == 302
     assert not _actions("user.deactivated") and not _actions("user.reactivated")
+
+
+# --- MFA-sensitive actions need an OTP-verified session -----------------------------------
+
+NEEDS_2FA = "This change needs a two-factor-verified admin."
+
+
+def _invite_post(client, roles, email):
+    return client.post(
+        reverse("staff:invite"),
+        {"full_name": "New Person", "email": email, "phone": "", "roles": roles},
+    )
+
+
+def test_unverified_proprietor_cannot_grant_mfa_roles(client_a):
+    me = _login(client_a, ["proprietor"])
+    with schema_context("school_a"):
+        t = StaffFactory()
+        set_roles(t, ["teacher"], by=t)
+    for target, roles in ((me, ["proprietor", "school_admin"]), (t, ["teacher", "school_admin"])):
+        r = _post(client_a, target, action="roles", roles=roles)
+        assert r.status_code == 403 and NEEDS_2FA in r.content.decode()
+    with schema_context("school_a"):
+        assert User.objects.get(pk=me.pk).roles == {"proprietor"}
+        assert User.objects.get(pk=t.pk).roles == {"teacher"}
+    assert not [e for e in _actions("role.added") if e.after == {"role": "school_admin"}]
+
+
+def test_unverified_proprietor_cannot_remove_mfa_role(client_a):
+    a = _admin()
+    _admin()
+    _login(client_a, ["proprietor"])
+    r = _post(client_a, a, action="roles", roles=["teacher"])
+    assert r.status_code == 403 and NEEDS_2FA in r.content.decode()
+    with schema_context("school_a"):
+        assert User.objects.get(pk=a.pk).roles == {"school_admin"}
+
+
+def test_unverified_proprietor_cannot_invite_bursar(client_a):
+    _login(client_a, ["proprietor"])
+    r = _invite_post(client_a, ["bursar"], "bursar@school.ng")
+    assert r.status_code == 403 and NEEDS_2FA in r.content.decode()
+    with schema_context("school_a"):
+        assert not User.objects.filter(email="bursar@school.ng").exists()
+    assert not mail.outbox
+
+
+def test_unverified_proprietor_cannot_reset_mfa(client_a):
+    _login(client_a, ["proprietor"])
+    with schema_context("school_a"):
+        t = StaffFactory()
+        set_roles(t, ["bursar"], by=t)
+        TOTPDevice.objects.create(user=t, name="default", confirmed=True)
+    r = _post(client_a, t, action="reset_mfa")
+    assert r.status_code == 403 and NEEDS_2FA in r.content.decode()
+    with schema_context("school_a"):
+        assert TOTPDevice.objects.filter(user=t).exists()
+    assert not _actions("auth.mfa_reset")
+
+
+def test_unverified_proprietor_can_add_teacher(client_a, django_capture_on_commit_callbacks):
+    _login(client_a, ["proprietor"])
+    with schema_context("school_a"):
+        t = StaffFactory()
+    assert _post(client_a, t, action="roles", roles=["teacher", "proprietor"]).status_code == 302
+    with schema_context("school_a"):
+        assert User.objects.get(pk=t.pk).roles == {"teacher", "proprietor"}
+    with django_capture_on_commit_callbacks(execute=True):
+        assert _invite_post(client_a, ["teacher"], "teach@school.ng").status_code == 302
+
+
+def test_verified_school_admin_can_do_mfa_sensitive_actions(
+    client_a, django_capture_on_commit_callbacks
+):
+    with schema_context("school_a"):
+        a = StaffFactory()
+        set_roles(a, ["school_admin"], by=a)
+        t = StaffFactory()
+        TOTPDevice.objects.create(user=t, name="default", confirmed=True)
+    login_verified(client_a, a)
+    assert _post(client_a, t, action="roles", roles=["teacher", "school_admin"]).status_code == 302
+    with django_capture_on_commit_callbacks(execute=True):
+        assert _invite_post(client_a, ["bursar"], "bursar@school.ng").status_code == 302
+    assert _post(client_a, t, action="reset_mfa").status_code == 302
+    with schema_context("school_a"):
+        assert User.objects.get(pk=t.pk).roles == {"teacher", "school_admin"}
+        assert set(User.objects.get(email="bursar@school.ng").roles) == {"bursar"}
+        assert not TOTPDevice.objects.filter(user=t).exists()
+
+
+def test_services_refuse_unverified_callers(school_a):
+    from django.core.exceptions import ValidationError
+
+    from apps.accounts.services import invite_staff, reset_mfa, update_staff_roles
+
+    with schema_context("school_a"):
+        by = StaffFactory()
+        t = StaffFactory()
+        with pytest.raises(ValidationError, match="two-factor-verified"):
+            update_staff_roles(t, ["principal"], by=by, verified=False)
+        with pytest.raises(ValidationError, match="two-factor-verified"):
+            reset_mfa(t, by=by, verified=False)
+        with pytest.raises(ValidationError, match="two-factor-verified"):
+            invite_staff(
+                full_name="X Y",
+                email="xy@school.ng",
+                phone=None,
+                roles=["bursar"],
+                by=by,
+                base_url="http://school-a.localhost",
+                verified=False,
+            )
+        assert User.objects.get(pk=t.pk).roles == set()
+        assert not User.objects.filter(email="xy@school.ng").exists()

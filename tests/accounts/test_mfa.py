@@ -324,7 +324,7 @@ def test_reset_mfa_removes_devices_and_audits(school_a):
         admin = StaffFactory()
         TOTPDevice.objects.create(user=user, name="default", confirmed=True)
         TOTPDevice.objects.create(user=user, name="other", confirmed=False)
-        reset_mfa(user, by=admin)
+        reset_mfa(user, by=admin, verified=True)
         assert not TOTPDevice.objects.filter(user=user).exists()
         ev = AuditEvent.objects.get(action="auth.mfa_reset")
     assert ev.object_id == str(user.pk) and ev.actor_id == admin.pk
