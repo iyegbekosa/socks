@@ -5,6 +5,8 @@ import logging
 from django.http import JsonResponse
 from django.urls import path
 from rest_framework.exceptions import NotFound, PermissionDenied, Throttled, ValidationError
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.errors import ApiError
@@ -47,6 +49,20 @@ class ValidationView(_Base):
         raise ValidationError({"ca1": ["Too big."]})
 
 
+class ApiBoomView(_Base):
+    def get(self, request):
+        raise RuntimeError("boom")
+
+
+class DefaultAuthView(APIView):
+    """Uses the project's REST_FRAMEWORK defaults plus IsAuthenticated."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response({"ok": True})
+
+
 def log_view(request):
     logger.warning("hello from view")
     return JsonResponse({"ok": True})
@@ -62,6 +78,10 @@ urlpatterns = [
     path("not-found", NotFoundView.as_view()),
     path("throttled", ThrottledView.as_view()),
     path("validation", ValidationView.as_view()),
+    path("default-auth", DefaultAuthView.as_view()),
+    path("api-boom", ApiBoomView.as_view()),
     path("log", log_view),
     path("boom", boom_view),
 ]
+
+handler500 = "apps.core.views.server_error"

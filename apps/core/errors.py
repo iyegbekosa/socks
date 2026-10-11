@@ -86,4 +86,9 @@ def api_exception_handler(exc, context):
         auth_header = getattr(exc, "auth_header", None)
         if auth_header:
             headers["WWW-Authenticate"] = auth_header
-    return Response(_body(code, message, details), status=exc.status_code, headers=headers)
+    status = exc.status_code
+    if isinstance(exc, exceptions.NotAuthenticated | exceptions.AuthenticationFailed):
+        # DRF downgrades these to 403 when the first authenticator has no
+        # WWW-Authenticate header (SessionAuthentication). §6.5 says 401.
+        status = 401
+    return Response(_body(code, message, details), status=status, headers=headers)

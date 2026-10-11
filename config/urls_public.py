@@ -7,3 +7,5 @@ urlpatterns = [
     path("", landing, name="landing"),
     path("healthz", healthz, name="healthz"),
 ]
+
+handler500 = "apps.core.views.server_error"

@@ -47,3 +47,23 @@ def test_redaction_in_json_output():
     assert out["username"] == "ada"
     assert out["request_id"] == "-"
     assert out["message"] == "login"
+
+
+@pytest.mark.django_db
+@pytest.mark.urls("tests.core.urls_testing")
+def test_authenticated_request_log_has_user_id(client_a, school_a, caplog):
+    from django.contrib.auth import get_user_model
+    from django_tenants.utils import schema_context
+
+    with schema_context(school_a.schema_name):
+        user = get_user_model().objects.create_user(username="ada", password="pw-12345-x")
+        client_a.force_login(user)
+        caplog.handler.addFilter(ContextFilter())
+        with caplog.at_level(logging.WARNING, logger="tests.core"):
+            client_a.get("/log")
+        pk = str(user.pk)
+        user.delete()
+    records = [r for r in caplog.records if r.name == "tests.core"]
+    assert records
+    assert records[0].user_id == pk
+    assert records[0].role == "-"
