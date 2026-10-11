@@ -43,6 +43,10 @@ def _backend_path() -> str:
     return path
 
 
+def sms_configured() -> bool:
+    return bool(getattr(settings, "SMS_BACKEND", None))
+
+
 @app.task(base=TenantTask, queue="notifications")
 def deliver_sms(to: str, body: str) -> None:
     import_string(_backend_path())().send(to, body)
@@ -50,4 +54,7 @@ def deliver_sms(to: str, body: str) -> None:
 
 def send_sms(to: str, body: str) -> None:
     _backend_path()  # fail at the call site, not in a worker
-    deliver_sms.apply_async(args=[to, body])
+    # argsrepr keeps the number and code out of Celery's "received" log line.
+    deliver_sms.apply_async(
+        args=[to, body], argsrepr="('<redacted>', '<redacted>')", kwargsrepr="{}"
+    )

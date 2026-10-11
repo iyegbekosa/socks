@@ -32,3 +32,13 @@ def test_unset_backend_without_debug_raises(settings, school_a):
     settings.SMS_BACKEND = None
     with pytest.raises(ImproperlyConfigured):
         sms.send_sms("+2348031234567", "x")
+
+
+def test_enqueue_redacts_args_in_celery_logs(sms_outbox, school_a):
+    from unittest.mock import patch
+
+    connection.set_tenant(school_a)
+    with patch.object(sms.deliver_sms, "apply_async") as mock:
+        sms.send_sms("+2348031234567", "code 123456")
+    kwargs = mock.call_args.kwargs
+    assert kwargs["argsrepr"] == "('<redacted>', '<redacted>')" and kwargs["kwargsrepr"] == "{}"

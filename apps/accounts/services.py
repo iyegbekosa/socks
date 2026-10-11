@@ -66,13 +66,15 @@ def issue_reset_code(user: User) -> str | None:
         return None
     code = f"{secrets.randbelow(10**6):06d}"
     cache.set(_reset_key(user), _code_digest(user, code), RESET_CODE_TTL)
+    # The per-user verify limiter (views) is deliberately NOT reset here.
     # Attempts live in their own key so the increment is atomic (no read-modify-write race).
     cache.set(_attempts_key(user), 0, RESET_CODE_TTL)
     return code
 
 
-def verify_reset_code(user: User, code: str) -> bool:
-    """Count the attempt first, then compare in constant time. The code is not consumed here."""
+def check_reset_code(user: User, code: str) -> bool:
+    """Count the attempt first, then compare in constant time. Does not consume the code;
+    call clear_reset_code (consume) once the reset has actually happened."""
     digest = cache.get(_reset_key(user))
     if digest is None:
         return False
@@ -81,12 +83,12 @@ def verify_reset_code(user: User, code: str) -> bool:
     except ValueError:
         return False
     if attempts > RESET_MAX_ATTEMPTS:
-        clear_reset_code(user)
+        consume_reset_code(user)
         return False
     return hmac.compare_digest(digest, _code_digest(user, (code or "").strip()))
 
 
-def clear_reset_code(user: User) -> None:
+def consume_reset_code(user: User) -> None:
     cache.delete_many([_reset_key(user), _attempts_key(user)])
 
 
