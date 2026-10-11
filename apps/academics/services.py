@@ -12,7 +12,9 @@ from apps.academics.models import (
     AcademicSession,
     ClassArm,
     ClassLevel,
+    FormTeacher,
     Subject,
+    SubjectOffering,
     Term,
 )
 from apps.audit.services import record
@@ -192,7 +194,8 @@ def delete_arm(arm: ClassArm, *, by: Any, request: Any = None) -> None:
             )
     except (ProtectedError, RestrictedError) as exc:
         raise ValidationError(
-            f"{label} has enrolments, so it cannot be deleted. Move or withdraw the students first."
+            f"{label} has enrolments or teaching assignments, so it cannot be deleted. "
+            "Move or withdraw the students and remove its assignments first."
         ) from exc
 
 
@@ -268,3 +271,114 @@ def delete_subject(subject: Subject, *, by: Any, request: Any = None) -> None:
         raise ValidationError(
             f"{label} has offerings, so it cannot be deleted. Remove its offerings first."
         ) from exc
+
+
+# --- offerings and form teachers ------------------------------------------------
+
+
+def _check_teacher(teacher: Any) -> None:
+    ok = (
+        teacher is not None
+        and teacher.is_active
+        and teacher.kind == "staff"
+        and teacher.has_role("teacher")
+    )
+    if not ok:
+        raise ValidationError({"teacher": "Choose an active staff member who is a teacher."})
+
+
+def _check_session_open(session: AcademicSession) -> None:
+    if session.end_date < date.today():
+        raise ValidationError(
+            {"session": f"Session {session.name} has ended, so it can no longer be changed."}
+        )
+
+
+def assign_offering(
+    *,
+    subject: Subject,
+    arm: ClassArm,
+    session: AcademicSession,
+    teacher: Any,
+    is_compulsory: bool = True,
+    by: Any,
+    request: Any = None,
+) -> SubjectOffering:
+    """Create or update the offering of a subject in an arm for a session."""
+    with transaction.atomic():
+        academic_write_lock()
+        if teacher is not None:
+            _check_teacher(teacher)
+        _check_session_open(session)
+        if arm.level.section not in (subject.sections or []):
+            raise ValidationError(
+                {"subject": f"{subject.name} is not taught in {arm.level.get_section_display()}."}
+            )
+        offering, _ = SubjectOffering.objects.update_or_create(
+            subject=subject,
+            arm=arm,
+            session=session,
+            defaults={"teacher": teacher, "is_compulsory": is_compulsory},
+        )
+        record(
+            "academics.offering_assigned",
+            request=request,
+            actor=by,
+            obj=offering,
+            after={
+                "what": "offering",
+                "subject_id": subject.pk,
+                "arm_id": arm.pk,
+                "session_id": session.pk,
+                "teacher_id": teacher.pk if teacher else None,
+            },
+        )
+    return offering
+
+
+def assign_form_teacher(
+    *, arm: ClassArm, session: AcademicSession, teacher: Any, by: Any, request: Any = None
+) -> FormTeacher:
+    with transaction.atomic():
+        academic_write_lock()
+        _check_teacher(teacher)
+        _check_session_open(session)
+        form_teacher, _ = FormTeacher.objects.update_or_create(
+            arm=arm, session=session, defaults={"teacher": teacher}
+        )
+        record(
+            "academics.form_teacher_assigned",
+            request=request,
+            actor=by,
+            obj=form_teacher,
+            after={
+                "what": "form_teacher",
+                "subject_id": None,
+                "arm_id": arm.pk,
+                "session_id": session.pk,
+                "teacher_id": teacher.pk,
+            },
+        )
+    return form_teacher
+
+
+def remove_form_teacher(
+    *, arm: ClassArm, session: AcademicSession, by: Any, request: Any = None
+) -> None:
+    with transaction.atomic():
+        academic_write_lock()
+        _check_session_open(session)
+        deleted, _ = FormTeacher.objects.filter(arm=arm, session=session).delete()
+        if deleted:
+            record(
+                "academics.form_teacher_assigned",
+                request=request,
+                actor=by,
+                after={
+                    "what": "form_teacher",
+                    "subject_id": None,
+                    "arm_id": arm.pk,
+                    "session_id": session.pk,
+                    "teacher_id": None,
+                },
+            )

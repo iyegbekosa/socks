@@ -1,0 +1,42 @@
+{% extends "core/base.html" %}
+{% block title %}{{ arm.display_name }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>{{ arm.display_name }}{% if arm.stream %} <span class="muted">{{ arm.get_stream_display }}</span>{% endif %}</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if not session %}
+  <p class="muted">Set a current term first. Teachers are assigned for the current session.</p>
+  {% else %}
+  <p class="muted">Session {{ session.name }}</p>
+  {% if not teachers %}<p class="muted">No active teachers yet. Give a staff member the teacher role first.</p>{% endif %}
+  <form method="post">
+    {% csrf_token %}
+    <label for="form_teacher">Form teacher</label>
+    <select name="form_teacher" id="form_teacher"{% if not can_edit %} disabled{% endif %}>
+      <option value="">Not assigned</option>
+      {% for t in teachers %}<option value="{{ t.pk }}"{% if t.pk == form_teacher_id %} selected{% endif %}>{{ t.get_full_name|default:t.username }}</option>{% endfor %}
+    </select>
+    <h2>Subjects</h2>
+    <table>
+      <thead><tr><th>Subject</th><th>Teacher</th><th>Compulsory</th></tr></thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td><label for="teacher_{{ row.subject.pk }}">{{ row.subject.name }}</label></td>
+          <td>
+            <select name="teacher_{{ row.subject.pk }}" id="teacher_{{ row.subject.pk }}"{% if not can_edit %} disabled{% endif %}>
+              <option value="">Not assigned</option>
+              {% for t in teachers %}<option value="{{ t.pk }}"{% if t.pk == row.teacher_id %} selected{% endif %}>{{ t.get_full_name|default:t.username }}</option>{% endfor %}
+            </select>
+          </td>
+          <td><input type="checkbox" name="compulsory_{{ row.subject.pk }}"{% if row.is_compulsory %} checked{% endif %}{% if not can_edit %} disabled{% endif %}></td>
+        </tr>
+        {% empty %}<tr><td colspan="3" class="muted">No subjects apply to this class's section yet.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+    {% if can_edit %}<button type="submit">Save</button>{% endif %}
+  </form>
+  {% endif %}
+  <p><a href="{% url 'academics:structure' %}">Back</a></p>
+</div>
+{% endblock %}

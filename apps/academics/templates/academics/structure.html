@@ -8,7 +8,7 @@
   <h2>{{ level.name }} <span class="muted">({{ level.get_section_display }})</span></h2>
   <ul>
     {% for arm in level.arms.all %}
-    <li>{{ arm.display_name }}{% if arm.stream %} <span class="muted">{{ arm.get_stream_display }}</span>{% endif %}
+    <li><a href="{% url 'academics:arm_detail' arm.pk %}">{{ arm.display_name }}</a>{% if arm.stream %} <span class="muted">{{ arm.get_stream_display }}</span>{% endif %}
       {% if can_edit %}
       <a href="{% url 'academics:arm_rename' arm.pk %}">Rename</a>
       <form method="post" action="{% url 'academics:arm_delete' arm.pk %}" class="inline">{% csrf_token %}<button type="submit" class="link">Delete</button></form>

@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
@@ -127,3 +128,47 @@ class Subject(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+
+class SubjectOffering(models.Model):
+    """A subject taught in an arm for a session; teacher is null until assigned."""
+
+    subject = models.ForeignKey(Subject, on_delete=models.PROTECT, related_name="offerings")
+    arm = models.ForeignKey(ClassArm, on_delete=models.PROTECT, related_name="offerings")
+    session = models.ForeignKey(AcademicSession, on_delete=models.PROTECT, related_name="offerings")
+    teacher = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="subject_offerings",
+    )
+    is_compulsory = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["subject", "arm", "session"], name="academics_offering_unique"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.subject} / {self.arm} / {self.session}"
+
+
+class FormTeacher(models.Model):
+    arm = models.ForeignKey(ClassArm, on_delete=models.PROTECT, related_name="form_teachers")
+    session = models.ForeignKey(
+        AcademicSession, on_delete=models.PROTECT, related_name="form_teachers"
+    )
+    teacher = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="form_teacher_of"
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["arm", "session"], name="academics_formteacher_unique"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.arm} / {self.session}: {self.teacher}"

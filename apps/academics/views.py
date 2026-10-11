@@ -1,4 +1,5 @@
 from django.contrib import messages
+from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError
 from django.shortcuts import get_object_or_404, redirect, render
@@ -6,8 +7,24 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
 from apps.academics.forms import ArmForm, ArmRenameForm, SessionForm, SubjectForm
-from apps.academics.models import AcademicSession, ClassArm, ClassLevel, Subject, Term
-from apps.academics.services import delete_arm, delete_subject, set_current_term
+from apps.academics.models import (
+    AcademicSession,
+    ClassArm,
+    ClassLevel,
+    FormTeacher,
+    Subject,
+    SubjectOffering,
+    Term,
+)
+from apps.academics.services import (
+    assign_form_teacher,
+    assign_offering,
+    current_session,
+    delete_arm,
+    delete_subject,
+    remove_form_teacher,
+    set_current_term,
+)
 from apps.accounts.roles import PRINCIPAL, PROPRIETOR, SCHOOL_ADMIN, require_roles
 
 CONFLICT_MESSAGE = "Someone else changed this at the same time — please try again."
@@ -163,3 +180,107 @@ def subject_delete(request, subject_id):
     else:
         messages.success(request, f"Deleted {label}.")
     return redirect("academics:subjects")
+
+
+def _active_teachers():
+    return (
+        get_user_model()
+        .objects.filter(is_active=True, kind="staff", groups__name="teacher")
+        .distinct()
+        .order_by("first_name", "last_name")
+    )
+
+
+@never_cache
+@require_roles(SCHOOL_ADMIN, PROPRIETOR, PRINCIPAL)
+def arm_detail(request, arm_id):
+    arm = get_object_or_404(ClassArm.objects.select_related("level"), pk=arm_id)
+    can_edit = request.user.has_role(SCHOOL_ADMIN)
+    if request.method == "POST" and not can_edit:
+        raise PermissionDenied
+    session = current_session()
+    ctx = {"arm": arm, "can_edit": can_edit, "session": session}
+    if session is None:
+        return render(request, "academics/arm_detail.html", ctx)
+
+    teachers = list(_active_teachers())
+    by_id = {t.pk: t for t in teachers}
+    subjects_here = [s for s in Subject.objects.all() if arm.level.section in (s.sections or [])]
+    existing = {o.subject_id: o for o in SubjectOffering.objects.filter(arm=arm, session=session)}
+    form_teacher = FormTeacher.objects.filter(arm=arm, session=session).first()
+
+    def pick(raw: str | None):
+        """Return (ok, teacher) for a posted teacher id; blank means no teacher."""
+        raw = (raw or "").strip()
+        if not raw:
+            return True, None
+        try:
+            teacher = by_id.get(int(raw))
+        except ValueError:
+            return False, None
+        return teacher is not None, teacher
+
+    if request.method == "POST":
+        try:
+            changed = 0
+            ok, new_ft = pick(request.POST.get("form_teacher"))
+            if not ok:
+                raise ValidationError("Choose a teacher from the list.")
+            old_ft_id = form_teacher.teacher_id if form_teacher else None
+            if (new_ft.pk if new_ft else None) != old_ft_id:
+                if new_ft is None:
+                    remove_form_teacher(arm=arm, session=session, by=request.user, request=request)
+                else:
+                    assign_form_teacher(
+                        arm=arm, session=session, teacher=new_ft, by=request.user, request=request
+                    )
+                changed += 1
+            for subject in subjects_here:
+                ok, teacher = pick(request.POST.get(f"teacher_{subject.pk}"))
+                if not ok:
+                    raise ValidationError("Choose a teacher from the list.")
+                compulsory = f"compulsory_{subject.pk}" in request.POST
+                old = existing.get(subject.pk)
+                if old is None and teacher is None:
+                    continue
+                if (
+                    old is not None
+                    and old.teacher_id == (teacher.pk if teacher else None)
+                    and old.is_compulsory == compulsory
+                ):
+                    continue
+                assign_offering(
+                    subject=subject,
+                    arm=arm,
+                    session=session,
+                    teacher=teacher,
+                    is_compulsory=compulsory,
+                    by=request.user,
+                    request=request,
+                )
+                changed += 1
+        except ValidationError as exc:
+            messages.error(request, " ".join(exc.messages))
+        except IntegrityError:
+            messages.error(request, CONFLICT_MESSAGE)
+        else:
+            messages.success(request, "Saved." if changed else "Nothing changed.")
+        return redirect("academics:arm_detail", arm_id=arm.pk)
+
+    rows = []
+    for subject in subjects_here:
+        off = existing.get(subject.pk)
+        rows.append(
+            {
+                "subject": subject,
+                "teacher_id": off.teacher_id if off else None,
+                "is_compulsory": off.is_compulsory if off else True,
+            }
+        )
+    ctx.update(
+        teachers=teachers,
+        rows=rows,
+        form_teacher=form_teacher,
+        form_teacher_id=form_teacher.teacher_id if form_teacher else None,
+    )
+    return render(request, "academics/arm_detail.html", ctx)
