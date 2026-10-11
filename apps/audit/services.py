@@ -16,10 +16,16 @@ def actor_label(user: Any) -> str:
     )
 
 
+def _scrub(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _scrub(v) for k, v in value.items() if not is_sensitive_key(str(k))}
+    if isinstance(value, list | tuple):
+        return [_scrub(v) for v in value]
+    return value
+
+
 def _clean(data: dict | None) -> dict | None:
-    if data is None:
-        return None
-    return {k: v for k, v in data.items() if not is_sensitive_key(str(k))}
+    return None if data is None else _scrub(data)
 
 
 def record(

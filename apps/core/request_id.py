@@ -1,3 +1,4 @@
+import ipaddress
 import re
 import uuid
 from contextvars import ContextVar
@@ -18,14 +19,23 @@ def get_request_id() -> str:
     return request_id_var.get()
 
 
+def _valid_ip(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return str(ipaddress.ip_address(value.strip()))
+    except ValueError:
+        return None
+
+
 def client_ip(request) -> str | None:
     header = getattr(settings, "CLIENT_IP_HEADER", None)
-    value = request.META.get(header) if header else None
-    if not value:
-        value = request.META.get("REMOTE_ADDR")
-    if value and "," in value:
-        value = value.split(",")[0]
-    return value.strip() or None if value else None
+    if header:
+        raw = request.META.get(header) or ""
+        ip = _valid_ip(raw.split(",")[0])
+        if ip:
+            return ip
+    return _valid_ip(request.META.get("REMOTE_ADDR"))
 
 
 def _new_id() -> str:

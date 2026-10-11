@@ -102,3 +102,52 @@ def test_events_isolated_per_schema(school_a, school_b):
         record("only.a")
     with schema_context("school_b"):
         assert not AuditEvent.objects.filter(action="only.a").exists()
+
+
+def test_truncate_blocked(school_a):
+    with schema_context("school_a"):
+        record("keep")
+        with pytest.raises(InternalError), transaction.atomic():
+            connection.cursor().execute("TRUNCATE audit_auditevent")
+        assert AuditEvent.objects.filter(action="keep").exists()
+
+
+@pytest.mark.parametrize("schema", ["school_a", "school_b"])
+def test_truncate_trigger_exists(school_a, school_b, schema):
+    with schema_context(schema), connection.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid "
+            "JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE t.tgname='audit_event_no_truncate' AND n.nspname=%s",
+            [schema],
+        )
+        assert cur.fetchone()[0] == 1
+
+
+def test_client_ip_validation(settings):
+    rf = RequestFactory()
+    assert client_ip(rf.get("/", REMOTE_ADDR="1.1.1.1")) == "1.1.1.1"
+    settings.CLIENT_IP_HEADER = "HTTP_X_REAL"
+    assert client_ip(rf.get("/", REMOTE_ADDR="1.1.1.1")) == "1.1.1.1"
+    multi = rf.get("/", REMOTE_ADDR="1.1.1.1", HTTP_X_REAL="203.0.113.5, 10.0.0.1")
+    assert client_ip(multi) == "203.0.113.5"
+    assert client_ip(rf.get("/", REMOTE_ADDR="1.1.1.1", HTTP_X_REAL="abc")) == "1.1.1.1"
+    assert client_ip(rf.get("/", REMOTE_ADDR="1.1.1.1", HTTP_X_REAL="2001:db8::1")) == "2001:db8::1"
+    assert client_ip(rf.get("/", REMOTE_ADDR="junk")) is None
+
+
+def test_record_with_garbage_ip_header(school_a, settings):
+    settings.CLIENT_IP_HEADER = "HTTP_X_REAL"
+    with schema_context("school_a"):
+        req = RequestFactory().get("/", REMOTE_ADDR="9.9.9.9", HTTP_X_REAL="not-an-ip")
+        req.user = StaffFactory()
+        assert record("auth.login_failed", request=req).ip == "9.9.9.9"
+
+
+def test_nested_sensitive_keys_dropped(school_a):
+    with schema_context("school_a"):
+        e = record(
+            "x",
+            after={"user": {"password": "x", "name": "Ada"}, "items": [{"otp": "1", "k": "v"}]},
+        )
+        assert e.after == {"user": {"name": "Ada"}, "items": [{"k": "v"}]}
