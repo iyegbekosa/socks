@@ -1,5 +1,6 @@
 from typing import Any
 
+from django.db import transaction
 from django.utils.text import slugify
 
 from apps.academics.models import SECTIONS, ClassLevel, Subject
@@ -75,18 +76,27 @@ SUBJECTS: dict[str, list[str]] = {
 
 
 def seed_academics(school: Any) -> None:
-    """Create default levels and subjects for the school's sections (idempotent, no arms)."""
+    """Create starting levels and subjects (no arms).
+
+    Defaults are a one-time starting point: levels are created only when the school has
+    none, subjects only when the school has none, so renames and deletions are respected.
+    """
     offered = [s for s in SECTIONS if s in (school.levels_offered or [])]
-    for section in offered:
-        for order, name in enumerate(LEVELS[section], start=1):
-            ClassLevel.objects.get_or_create(
-                name=name,
-                defaults={"section": section, "order": SECTIONS.index(section) * 10 + order},
-            )
-        for name in SUBJECTS[section]:
-            subject = Subject.objects.filter(name=name).first()
-            if subject is None:
-                Subject.objects.create(name=name, code=slugify(name), sections=[section])
-            elif section not in subject.sections:
-                subject.sections = [s for s in SECTIONS if s in {*subject.sections, section}]
-                subject.save(update_fields=["sections"])
+    with transaction.atomic():
+        if not ClassLevel.objects.exists():
+            for section in offered:
+                for order, name in enumerate(LEVELS[section], start=1):
+                    ClassLevel.objects.create(
+                        name=name, section=section, order=SECTIONS.index(section) * 10 + order
+                    )
+        if not Subject.objects.exists():
+            by_name: dict[str, set[str]] = {}
+            for section in offered:
+                for name in SUBJECTS[section]:
+                    by_name.setdefault(name, set()).add(section)
+            for name, found in by_name.items():
+                Subject.objects.create(
+                    name=name,
+                    code=slugify(name),
+                    sections=[s for s in SECTIONS if s in found],
+                )

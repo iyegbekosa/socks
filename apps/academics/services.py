@@ -166,9 +166,12 @@ def rename_arm(
 ) -> ClassArm:
     with transaction.atomic():
         academic_write_lock()
-        arm.suffix = (suffix or "").strip()
-        arm.stream = stream or None
-        arm.full_clean()
+        candidate = ClassArm(
+            pk=arm.pk, level=arm.level, suffix=(suffix or "").strip(), stream=stream or None
+        )
+        candidate._state.adding = False
+        candidate.full_clean()
+        arm.suffix, arm.stream = candidate.suffix, candidate.stream
         arm.save(update_fields=["suffix", "stream"])
         _audit_structure("arm_renamed", arm, by=by, request=request)
     return arm
@@ -238,9 +241,12 @@ def update_subject(
 ) -> Subject:
     with transaction.atomic():
         academic_write_lock()
-        subject.name = _check_subject_name(name, subject.pk)
-        subject.sections = _clean_sections(sections)
-        subject.full_clean()
+        new_name = _check_subject_name(name, subject.pk)
+        new_sections = _clean_sections(sections)
+        candidate = Subject(pk=subject.pk, name=new_name, code=subject.code, sections=new_sections)
+        candidate._state.adding = False
+        candidate.full_clean()
+        subject.name, subject.sections = new_name, new_sections
         subject.save(update_fields=["name", "sections"])
         _audit_structure("subject_updated", subject, by=by, request=request)
     return subject

@@ -51,11 +51,23 @@ def test_seed_all_sections_and_empty(school_a):
         seed_academics(_school(["nursery", "primary"]))
         assert ClassLevel.objects.count() == 8
         assert Subject.objects.get(name="Numeracy").sections == ["nursery"]
-        eng = Subject.objects.get(name="English Language")
-        assert eng.sections == ["primary"]
-        seed_academics(_school(["jss"]))
-        eng.refresh_from_db()
-        assert set(eng.sections) == {"primary", "jss"}
+        assert Subject.objects.get(name="English Language").sections == ["primary"]
+
+
+def test_reseed_after_rename_and_delete(school_a):
+    with schema_context("school_a"):
+        school = _school(["jss", "sss"])
+        seed_academics(school)
+        levels, subjects = ClassLevel.objects.count(), Subject.objects.count()
+        Subject.objects.filter(name="English Language").update(name="English")
+        Subject.objects.filter(name="French").delete()
+        seed_academics(school)
+        assert ClassLevel.objects.count() == levels
+        assert Subject.objects.count() == subjects - 1
+        assert not Subject.objects.filter(name__in=["French", "English Language"]).exists()
+        ClassLevel.objects.filter(name="JSS 3").delete()
+        seed_academics(school)
+        assert not ClassLevel.objects.filter(name="JSS 3").exists()
 
 
 def test_registered():

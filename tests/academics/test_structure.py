@@ -241,3 +241,57 @@ def test_pages_roles(client_a, school_a, levels):
     assert r.status_code == 200
     with schema_context("school_a"):
         assert not ClassArm.objects.exists()
+
+
+def test_rename_collision_refused(levels, admin_user):
+    with schema_context("school_a"):
+        create_arm(level=levels["jss1"], suffix="A", by=admin_user)
+        lvl = ClassLevel.objects.create(name="JSS", section="jss", order=9)
+        other = create_arm(level=lvl, suffix="B", by=admin_user)
+        with pytest.raises(ValidationError):
+            rename_arm(other, suffix="1A", by=admin_user)
+        other.refresh_from_db()
+        assert other.suffix == "B"
+
+
+def test_rejected_edits_show_stored_values(client_a, school_a, levels):
+    with schema_context("school_a"):
+        admin = StaffFactory()
+        set_roles(admin, ["school_admin"], by=admin)
+        a = create_arm(level=levels["jss1"], suffix="A", by=admin)
+        create_arm(level=levels["jss1"], suffix="B", by=admin)
+        s = create_subject(name="Art", sections=["jss"], by=admin)
+        create_subject(name="Music", sections=["jss"], by=admin)
+        login_verified(client_a, admin)
+    r = client_a.post(reverse("academics:arm_rename", args=[a.pk]), {"suffix": "B"})
+    assert r.status_code == 200
+    body = r.content.decode()
+    assert "<h1>Rename JSS 1A</h1>" in body
+    assert "JSS 1B</h1>" not in body
+    r = client_a.post(
+        reverse("academics:subject_edit", args=[s.pk]), {"name": "Music", "sections": ["jss"]}
+    )
+    assert r.status_code == 200
+    assert "<h1>Edit Art</h1>" in r.content.decode()
+
+
+@pytest.mark.parametrize("role", ["proprietor", "principal"])
+def test_read_roles_cannot_mutate(client_a, school_a, levels, role):
+    with schema_context("school_a"):
+        admin = StaffFactory()
+        set_roles(admin, ["school_admin"], by=admin)
+        user = StaffFactory()
+        set_roles(user, [role], by=admin)
+        a = create_arm(level=levels["jss1"], suffix="A", by=admin)
+        s = create_subject(name="Art", sections=["jss"], by=admin)
+        login_verified(client_a, user)
+    post = client_a.post
+    assert post(reverse("academics:arm_rename", args=[a.pk]), {"suffix": "Z"}).status_code == 403
+    assert post(reverse("academics:arm_delete", args=[a.pk])).status_code == 403
+    r = post(reverse("academics:subject_edit", args=[s.pk]), {"name": "Z", "sections": ["sss"]})
+    assert r.status_code == 403
+    assert post(reverse("academics:subject_delete", args=[s.pk])).status_code == 403
+    with schema_context("school_a"):
+        a.refresh_from_db()
+        s.refresh_from_db()
+        assert (a.suffix, s.name, s.sections) == ("A", "Art", ["jss"])
