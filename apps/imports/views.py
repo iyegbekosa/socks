@@ -7,7 +7,9 @@ from django.core.files.storage import default_storage
 from django.db import transaction
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_POST
 
 from apps.academics.services import current_session
 from apps.accounts.roles import SCHOOL_ADMIN, require_roles
@@ -15,6 +17,7 @@ from apps.core.storage import unique_upload_name
 from apps.imports.forms import ImportForm
 from apps.imports.models import ImportJob
 from apps.imports.tasks import delete_upload, run_import
+from apps.students.views import active_password_candidates, issue_and_render_sheet
 from apps.tenancy.limits import PlanLimitExceeded
 
 logger = logging.getLogger(__name__)
@@ -91,3 +94,16 @@ def errors_csv(request, pk: int):
             ]
         )
     return response
+
+
+@require_roles(SCHOOL_ADMIN)
+@require_POST
+def passwords(request, pk: int):
+    """Print one-time passwords for the students this job admitted (and no one else).
+
+    The ids come from the job, not the form, so any number of students fits in one POST.
+    """
+    job = get_object_or_404(ImportJob, pk=pk, kind=ImportJob.Kind.STUDENTS)
+    ids = [i for i in job.admitted_student_ids if isinstance(i, int)]
+    qs = active_password_candidates(request.user).filter(pk__in=ids)
+    return issue_and_render_sheet(request, qs, back=reverse("imports:detail", args=[job.pk]))

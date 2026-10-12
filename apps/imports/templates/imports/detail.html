@@ -16,8 +16,7 @@
   {% if job.admitted_student_ids %}
   <h2>Passwords</h2>
   <p class="muted">Imported students have no password yet. This prints one-time passwords for the students imported here only.</p>
-  <form method="post" action="{% url 'students:passwords' %}">{% csrf_token %}
-    {% for sid in job.admitted_student_ids %}<input type="hidden" name="student_ids" value="{{ sid }}">{% endfor %}
+  <form method="post" action="{% url 'imports:passwords' job.pk %}">{% csrf_token %}
     <button type="submit">Print passwords for the {{ job.admitted_student_ids|length }} student{{ job.admitted_student_ids|length|pluralize }} imported here</button>
   </form>
   {% endif %}

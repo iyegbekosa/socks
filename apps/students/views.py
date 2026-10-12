@@ -288,9 +288,7 @@ def passwords(request):
 
     The passwords exist only in this response: nothing is stored or flashed.
     """
-    qs = students_visible_to(request.user).filter(
-        status=Student.Status.ACTIVE, user__is_active=True
-    )
+    qs = active_password_candidates(request.user)
     arm_id = (request.POST.get("arm") or "").strip()
     ids = [
         int(v) for v in request.POST.getlist("student_ids") if v.isascii() and v.strip().isdigit()
@@ -310,6 +308,18 @@ def passwords(request):
     else:
         messages.error(request, "Choose a class or at least one student.")
         return redirect("students:list")
+    return issue_and_render_sheet(request, qs, back="students:list")
+
+
+def active_password_candidates(user: Any):
+    """Students ``user`` may issue passwords for: visible to them, active, login enabled."""
+    return students_visible_to(user).filter(status=Student.Status.ACTIVE, user__is_active=True)
+
+
+def issue_and_render_sheet(request: Any, qs: Any, *, back: str) -> HttpResponse:
+    """Issue one-time passwords for ``qs`` and render the printable sheet (shared with
+    imports). ``qs`` must already be scoped with ``active_password_candidates``. The
+    passwords exist only in this response: nothing is stored or flashed."""
     chosen = list(
         qs.select_related("user")
         .prefetch_related(_enrolment_prefetch())
@@ -318,7 +328,8 @@ def passwords(request):
     )
     if not chosen:
         messages.error(request, "No active students matched.")
-        return redirect("students:list")
+        return redirect(back)
+    session = current_session()
     issued = issue_one_time_passwords(chosen, by=request.user, request=request)
     rows = [
         {"issued": item, "enrolment": _enrolment_for_display(item.student, session)}

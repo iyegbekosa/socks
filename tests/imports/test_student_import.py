@@ -461,10 +461,14 @@ def test_password_button_issues_only_for_imported_students(client_a, world, clou
     c = admin_client(client_a, world)
     body = c.get(reverse("imports:detail", args=[job.pk])).content.decode()
     assert "Print passwords for the 2 students imported here" in body
-    assert f'action="{reverse("students:passwords")}"' in body
+    url = reverse("imports:passwords", args=[job.pk])
+    assert f'action="{url}"' in body
+    assert 'name="student_ids"' not in body
     assert "Open each class" not in body
-    r = c.post(reverse("students:passwords"), {"student_ids": job.admitted_student_ids})
+    r = c.post(url)
     assert r.status_code == 200
+    assert r["Cache-Control"] == "no-store"
+    assert r["Referrer-Policy"] == "no-referrer"
     with schema_context("school_a"):
         existing.user.refresh_from_db()
         assert existing.user.check_password("Passw0rd!long")
@@ -541,3 +545,110 @@ def test_blank_trailing_rows_do_not_count_toward_limit(world, cloud):
     job = run_job(world, content)
     assert job.status == ImportJob.Status.COMPLETED
     assert (job.total_rows, job.error_rows) == (2000, 2000)
+
+
+# --- fix round 2: passwords by job ----------------------------------------------------
+
+
+def _bulk_students(world, n: int) -> list[int]:
+    from django.contrib.auth import get_user_model
+
+    from apps.students.models import Enrolment
+
+    User = get_user_model()
+    users = User.objects.bulk_create(
+        [
+            User(
+                kind="student",
+                username=f"u_bulk{i:05d}",
+                admission_number=f"BULK/{i:05d}",
+                first_name="Bulk",
+                last_name=f"Pupil{i:05d}",
+                password="!unusable",
+            )
+            for i in range(n)
+        ]
+    )
+    students = Student.objects.bulk_create(
+        [
+            Student(
+                user=u,
+                first_name="Bulk",
+                last_name=u.last_name,
+                sex="F",
+                date_of_birth=date(2014, 3, 1),
+                guardian_name="G",
+                guardian_relationship="mother",
+                guardian_phone="+2348031234567",
+                consent_method="paper_form",
+            )
+            for u in users
+        ]
+    )
+    Enrolment.objects.bulk_create(
+        [Enrolment(student=st, arm=world.a, session=world.session) for st in students]
+    )
+    return [st.pk for st in students]
+
+
+def _job_with_ids(world, ids, kind="students") -> ImportJob:
+    return ImportJob.objects.create(
+        kind=kind,
+        file_name="imports/x.csv",
+        created_by=world.admin,
+        status=ImportJob.Status.COMPLETED,
+        admitted_student_ids=ids,
+    )
+
+
+def test_job_passwords_handles_more_than_1000_students(client_a, world, settings):
+    settings.PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+    with schema_context("school_a"):
+        ids = _bulk_students(world, 1200)
+        job = _job_with_ids(world, ids)
+    c = admin_client(client_a, world)
+    r = c.post(reverse("imports:passwords", args=[job.pk]))
+    assert r.status_code == 200
+    body = r.content.decode()
+    assert body.count('<section class="slip">') == 1200
+    assert "BULK/00000" in body and "BULK/01199" in body
+    with schema_context("school_a"):
+        assert AuditEvent.objects.filter(action="student.password_issued").count() == 1200
+
+
+def test_job_passwords_other_school_job_is_404(client_a, client_b, world, school_b):
+    with schema_context("school_b"):
+        other_admin = StaffFactory()
+        set_roles(other_admin, ["school_admin"], by=other_admin)
+        other = ImportJob.objects.create(
+            kind="students", file_name="imports/y.csv", created_by=other_admin
+        )
+        other_pk = other.pk
+    try:
+        with schema_context("school_a"):
+            # Make sure this school has no job with the same pk.
+            ImportJob.objects.filter(pk=other_pk).delete()
+        c = admin_client(client_a, world)
+        assert c.post(reverse("imports:passwords", args=[other_pk])).status_code == 404
+    finally:
+        with schema_context("school_b"):
+            ImportJob.objects.filter(pk=other_pk).delete()
+
+
+def test_job_passwords_staff_kind_is_404(client_a, world):
+    with schema_context("school_a"):
+        job = _job_with_ids(world, [], kind="staff")
+    c = admin_client(client_a, world)
+    assert c.post(reverse("imports:passwords", args=[job.pk])).status_code == 404
+
+
+def test_job_passwords_teacher_403_and_get_405(client_a, world):
+    with schema_context("school_a"):
+        job = _job_with_ids(world, [])
+        teacher = StaffFactory()
+        set_roles(teacher, ["teacher"], by=world.admin)
+    c = admin_client(client_a, world)
+    assert c.get(reverse("imports:passwords", args=[job.pk])).status_code == 405
+    with schema_context("school_a"):
+        client_a.force_login(teacher)
+    assert client_a.post(reverse("imports:passwords", args=[job.pk])).status_code == 403
