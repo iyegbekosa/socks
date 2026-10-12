@@ -71,7 +71,7 @@
   {% if data.editable %}
   <form method="post" enctype="multipart/form-data" action="{% url 'results:grid_upload' offering.pk %}">
     {% csrf_token %}
-    <label for="csvfile">Upload a filled CSV (same columns as the download)</label>
+    <label for="csvfile">Upload a filled CSV (a fresh download, with its first line and columns kept)</label>
     <input id="csvfile" type="file" name="file" accept=".csv,text/csv" required>
     <button type="submit">Upload CSV</button>
   </form>

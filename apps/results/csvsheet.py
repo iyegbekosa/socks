@@ -1,11 +1,17 @@
 """Score sheet <-> CSV (design §5.4). Columns: admission_number, name, one per component.
 
-Reading builds cells from the sheet's *current* versions and never echoes cell values
-into messages: the file can hold children's names.
+Line 1 is a version stamp, ``# version: <token>``, derived from every cell's version on the
+sheet. An upload whose stamp is missing or no longer matches the sheet is refused, so a file
+downloaded before later grid edits cannot silently revert them. Reading builds cells from the
+sheet's *current* versions (equal to the download's when the stamp matches; ``save_cells``
+re-checks them under its lock) and never echoes cell values into messages: the file can hold
+children's names.
 """
 
 import csv
+import hashlib
 import io
+import re
 from dataclasses import dataclass, field
 
 from django.core.exceptions import ValidationError
@@ -15,6 +21,9 @@ from apps.results.scores import CellInput, SheetData
 
 MAX_BYTES = 1024 * 1024
 FIXED = ["admission_number", "name"]
+STALE = "This file is out of date — download a fresh copy"
+_STAMP = re.compile(r"#\s*version:\s*([0-9a-f]{1,64})", re.IGNORECASE)
+_GUARDED = ("=", "+", "-", "@", "\t", "\r")
 
 
 @dataclass
@@ -28,17 +37,32 @@ class ParsedUpload:
 def safe_cell(value: object) -> str:
     """Stop spreadsheet apps treating a cell as a formula (CSV injection)."""
     text = "" if value is None else str(value)
-    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+    return "'" + text if text[:1] in _GUARDED else text
+
+
+def unguard(text: str) -> str:
+    """Undo ``safe_cell``: drop the leading "'" it adds before a formula character."""
+    return text[1:] if text[:1] == "'" and text[1:2] in _GUARDED else text
 
 
 def header_names(data: SheetData) -> list[str]:
     return FIXED + [c.name for c in data.components]
 
 
+def sheet_version(data: SheetData) -> str:
+    """A token that changes whenever any cell of the sheet (or its list of students) does."""
+    h = hashlib.sha256()
+    for row in data.rows:
+        for c in row["cells"]:
+            h.update(f"{row['student_id']}:{c['component_id']}:{c['version']};".encode())
+    return h.hexdigest()[:20]
+
+
 def sheet_to_csv(data: SheetData) -> str:
     out = io.StringIO(newline="")
     writer = csv.writer(out)
-    writer.writerow(header_names(data))
+    writer.writerow([f"# version: {sheet_version(data)}"])
+    writer.writerow([safe_cell(h) for h in header_names(data)])
     for row in data.rows:
         writer.writerow(
             [safe_cell(row["admission_number"]), safe_cell(row["name"])]
@@ -62,9 +86,20 @@ def parse_upload(data: SheetData, raw: bytes) -> ParsedUpload:
     if not rows:
         result.errors.append("The file is empty.")
         return result
+    stamp = _STAMP.fullmatch(rows[0][0].strip()) if rows[0] else None
+    if (
+        stamp is None
+        or any(c.strip() for c in rows[0][1:])
+        or stamp.group(1).lower() != sheet_version(data)
+    ):
+        result.errors.append(STALE)
+        return result
+    if len(rows) < 2:
+        result.errors.append("The file has no header row.")
+        return result
 
     expected = [h.strip().lower() for h in header_names(data)]
-    got = [h.strip().lower() for h in rows[0]]
+    got = [unguard(h.strip()).lower() for h in rows[1]]
     if got != expected:
         missing = [h for h in header_names(data) if h.strip().lower() not in got]
         extra = [h for h in got if h not in expected]
@@ -81,14 +116,14 @@ def parse_upload(data: SheetData, raw: bytes) -> ParsedUpload:
     by_admission = {normalise_admission_number(r["admission_number"]): r for r in data.rows}
     seen: set[str] = set()
     width = len(expected)
-    for n, cols in enumerate(rows[1:], start=2):
+    for n, cols in enumerate(rows[2:], start=3):  # spreadsheet row numbers
         if not any(c.strip() for c in cols):
             continue  # fully empty rows (e.g. trailing ",,,,") are skipped
         if len(cols) != width:
             result.errors.append(f"Row {n}: expected {width} columns, found {len(cols)}.")
             continue
         first = cols[0].strip()
-        if first.startswith("'"):  # undo the download's formula guard
+        if first.startswith("'"):  # undo the download's formula guard (or Excel's text mark)
             first = first[1:]
         adm = normalise_admission_number(first)
         row = by_admission.get(adm)

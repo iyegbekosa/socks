@@ -591,7 +591,7 @@ def test_edits_after_publish_refused_then_unlock(client_a, w, django_capture_on_
             )
         )
     )
-    rows[1][2] = "9"
+    rows[2][2] = "9"  # rows[0] is the version stamp, rows[1] the header
     csv.writer(out).writerows(rows)
     r = client_a.post(
         reverse("results:grid_upload", args=[w.offering.pk]),
