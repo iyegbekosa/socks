@@ -13,7 +13,7 @@ from apps.accounts.roles import require_roles
 from apps.core.parsing import parse_id
 from apps.fees import invoicing
 from apps.fees.forms import AdjustmentForm, GenerateInvoicesForm, OptionalItemForm
-from apps.fees.models import FeeStructureLine, Invoice, InvoiceLine
+from apps.fees.models import Allocation, FeeStructureLine, Invoice, InvoiceLine
 from apps.fees.scope import VIEW_ROLES, can_manage_fees
 from apps.fees.views.setup import _pick_term, _require_manage
 from apps.students.models import Enrolment
@@ -194,6 +194,9 @@ def invoice_detail(request, invoice_id):
             "student": invoice.student,
             "arm": enrolment.arm if enrolment is not None else None,
             "lines": invoice.lines.select_related("created_by").order_by("pk"),
+            "allocations": Allocation.objects.filter(invoice=invoice)
+            .select_related("payment__receipt")
+            .order_by("payment__paid_at", "pk"),
             "optional_form": optional_form,
             "adjustment_form": adjustment_form,
             "can_edit": can_edit and invoice.status != Invoice.CARRIED,

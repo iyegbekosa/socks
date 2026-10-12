@@ -219,3 +219,94 @@ class InvoiceLine(models.Model):
 
     def __str__(self) -> str:
         return f"{self.kind}: {self.amount_kobo}"
+
+
+class Payment(models.Model):
+    """A confirmed payment. Created only by ``ledger.confirm_payment``."""
+
+    ONLINE, CASH, TELLER, POS, TRANSFER = "online", "cash", "teller", "pos", "transfer"
+    METHOD_CHOICES = [
+        (ONLINE, "Online"),
+        (CASH, "Cash"),
+        (TELLER, "Teller"),
+        (POS, "POS"),
+        (TRANSFER, "Transfer"),
+    ]
+
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="payments")
+    amount_kobo = models.BigIntegerField()
+    method = models.CharField(max_length=8, choices=METHOD_CHOICES)
+    gateway_reference = models.CharField(max_length=64, unique=True, null=True, blank=True)
+    paid_at = models.DateTimeField()
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    unallocated_kobo = models.BigIntegerField(default=0)
+    flagged = models.BooleanField(default=False)
+    flag_reason = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-paid_at", "-pk"]
+        constraints = [
+            models.CheckConstraint(condition=Q(amount_kobo__gt=0), name="fees_payment_amount_gt0"),
+            models.CheckConstraint(
+                condition=Q(unallocated_kobo__gte=0)
+                & Q(unallocated_kobo__lte=models.F("amount_kobo")),
+                name="fees_payment_unallocated_range",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"Payment {self.pk}: {self.amount_kobo}"
+
+
+class Allocation(models.Model):
+    payment = models.ForeignKey(Payment, on_delete=models.PROTECT, related_name="allocations")
+    invoice = models.ForeignKey(Invoice, on_delete=models.PROTECT, related_name="allocations")
+    amount_kobo = models.BigIntegerField()
+
+    class Meta:
+        ordering = ["pk"]
+        constraints = [
+            models.UniqueConstraint(fields=["payment", "invoice"], name="fees_allocation_unique"),
+            models.CheckConstraint(
+                condition=Q(amount_kobo__gt=0), name="fees_allocation_amount_gt0"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.payment_id} -> {self.invoice_id}: {self.amount_kobo}"
+
+
+class Receipt(models.Model):
+    payment = models.OneToOneField(Payment, on_delete=models.PROTECT, related_name="receipt")
+    number = models.CharField(max_length=40, unique=True)
+    year = models.PositiveIntegerField()
+    pdf_name = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-pk"]
+
+    def __str__(self) -> str:
+        return self.number
+
+
+class ReceiptCounter(models.Model):
+    year = models.PositiveIntegerField(unique=True)
+    last = models.PositiveIntegerField(default=0)
+
+    def __str__(self) -> str:
+        return f"{self.year}: {self.last}"
