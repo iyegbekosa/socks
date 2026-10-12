@@ -12,8 +12,9 @@ from django.views.decorators.debug import sensitive_post_parameters
 from apps.accounts.identifiers import classify_identifier
 from apps.accounts.models import User
 from apps.accounts.services import reset_eligible, reset_link_token_generator
-from apps.accounts.views.login import id_limit as login_id_limit
+from apps.accounts.views.login import forget_login_lockout
 from apps.audit.services import record
+from apps.core.request_id import client_ip
 
 RESET_URL_TOKEN = "set"
 SESSION_KEY = "_reset_link"
@@ -70,11 +71,11 @@ def _usable(user: User | None, token: str) -> bool:
     )
 
 
-def _forget_lockout(user: User) -> None:
+def _forget_lockout(user: User, ip: str | None) -> None:
     # A locked-out user must be able to use the new password straight away.
     for raw in (user.admission_number, user.email, user.phone):
         if raw:
-            login_id_limit.reset(f"login:id:{classify_identifier(raw)[1]}")
+            forget_login_lockout(classify_identifier(raw)[1], ip)
 
 
 @sensitive_post_parameters()
@@ -108,7 +109,7 @@ def reset_link_confirm_view(request, uidb64: str | None = None, token: str | Non
             pending = request.session.get("mfa_pending")
             if isinstance(pending, dict) and pending.get("user_id") == user.pk:
                 request.session.pop("mfa_pending", None)
-            _forget_lockout(user)
+            _forget_lockout(user, client_ip(request))
             record("auth.password_reset", request=request, actor=user, obj=user)
             messages.success(
                 request, "Your password has been changed. Log in with the new password."

@@ -264,3 +264,61 @@ def test_login_page_cannot_be_framed(client_a):
     r = client_a.get(reverse("accounts:login"))
     assert r.status_code == 200
     assert r["X-Frame-Options"] == "DENY"
+
+
+def _post_from(client, ident, ip, password=DEFAULT_PASSWORD):
+    return client.post(
+        reverse("accounts:login"),
+        {"identifier": ident, "password": password},
+        REMOTE_ADDR=ip,
+    )
+
+
+def test_student_lockout_is_per_identifier_and_ip(client_a):
+    with schema_context("school_a"):
+        s = StudentFactory()
+    adm = s.admission_number
+    for _ in range(5):
+        assert _post_from(client_a, adm, "10.0.0.1", "bad").status_code == 200
+    assert _post_from(client_a, adm, "10.0.0.1").status_code == 429
+    # The real student, from another address, is not locked out.
+    assert _post_from(client_a, adm, "10.0.0.2").status_code == 302
+    lockouts = _actions("auth.lockout")
+    assert len(lockouts) == 1 and lockouts[0].after["by"] == "identifier_ip"
+
+
+def test_student_identifier_blocked_everywhere_after_20_failures(client_a):
+    with schema_context("school_a"):
+        s = StudentFactory()
+    adm = s.admission_number
+    for i in range(20):
+        ip = f"10.0.1.{i}"
+        assert _post_from(client_a, adm, ip, "bad").status_code == 200
+    r = _post_from(client_a, adm, "10.0.9.9")
+    assert r.status_code == 429 and "Too many attempts" in r.content.decode()
+    lockouts = _actions("auth.lockout")
+    assert len(lockouts) == 1 and lockouts[0].after["by"] == "identifier"
+
+
+def test_student_lockout_message_identical_known_and_unknown(client_a):
+    with schema_context("school_a"):
+        s = StudentFactory()
+    pages = []
+    for adm in (s.admission_number, "GFS/2026/9999"):
+        for _ in range(5):
+            _post_from(client_a, adm, "10.0.2.1", "bad")
+        r = _post_from(client_a, adm, "10.0.2.1")
+        pages.append((r.status_code, _strip(r, adm)))
+    assert pages[0] == pages[1] and pages[0][0] == 429
+
+
+def test_student_success_resets_identifier_keys(client_a):
+    with schema_context("school_a"):
+        s = StudentFactory()
+    adm = s.admission_number
+    for _ in range(4):
+        _post_from(client_a, adm, "10.0.3.1", "bad")
+    assert _post_from(client_a, adm, "10.0.3.1").status_code == 302
+    client_a.logout()
+    for _ in range(5):
+        assert _post_from(client_a, adm, "10.0.3.1", "bad").status_code == 200

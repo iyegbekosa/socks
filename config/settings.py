@@ -58,6 +58,9 @@ INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in S
 CLIENT_IP_HEADER: str | None = env("CLIENT_IP_HEADER", default=None)
 # Anti-spraying limit: failed logins per client IP per 900 s (per identifier it is 5).
 LOGIN_IP_FAILURE_LIMIT = 50
+# Student admission numbers are guessable: the tight 5/900 s limit is per (identifier, IP);
+# this looser per-identifier limit (across all IPs) caps distributed guessing.
+STUDENT_IDENTIFIER_FAILURE_LIMIT = 20
 # Platform-wide cap on valid self-service signups per 24 h (a WARNING is logged when hit).
 SIGNUP_GLOBAL_DAILY_LIMIT = env.int("SIGNUP_GLOBAL_DAILY_LIMIT", default=50)
 

@@ -15,7 +15,7 @@ from apps.accounts.services import (
     find_user_by_identifier,
 )
 from apps.accounts.tasks import send_password_reset
-from apps.accounts.views.login import id_limit as login_id_limit
+from apps.accounts.views.login import forget_login_lockout
 from apps.audit.services import record
 from apps.core.ratelimit import RateLimit
 from apps.core.request_id import client_ip, get_request_id
@@ -143,6 +143,6 @@ def reset_verify_view(request):
     request.session.cycle_key()
     record("auth.password_reset", request=request, actor=found, obj=found)
     # A locked-out user must be able to use the new password straight away.
-    login_id_limit.reset(f"login:id:{ident}")
+    forget_login_lockout(ident, client_ip(request))
     messages.success(request, "Your password has been changed. Log in with the new password.")
     return redirect(settings.LOGIN_URL)
