@@ -16,7 +16,7 @@
   </ul>
   {% empty %}<p class="muted">No sessions yet.</p>{% endfor %}
   {% if can_edit %}<p><a href="{% url 'academics:session_create' %}">Add a session</a></p>{% endif %}
-  <p><a href="{% url 'academics:structure' %}">Classes and arms</a> · <a href="{% url 'academics:subjects' %}">Subjects</a></p>
+  <p><a href="{% url 'academics:structure' %}">Classes and arms</a> · <a href="{% url 'academics:subjects' %}">Subjects</a> · <a href="{% url 'results:settings' %}">Results settings</a></p>
   <p><a href="{% url 'home' %}">Back</a></p>
 </div>
 {% endblock %}

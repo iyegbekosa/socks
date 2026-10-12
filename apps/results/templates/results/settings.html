@@ -1,0 +1,63 @@
+{% extends "core/base.html" %}
+{% block title %}Results settings{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Results settings</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% for p in panels %}
+  <section>
+    <h2>{{ p.label }}</h2>
+
+    <h3>Assessment components</h3>
+    {% if not p.complete %}<p class="error" role="alert">Components total {{ p.total }}, not 100. Results cannot be submitted for this section until they total exactly 100.</p>{% endif %}
+    {% if p.locked %}<p class="muted">Scores have already been entered for this section, so its components can no longer be changed.</p>{% endif %}
+    {% if can_edit and not p.locked %}
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="section" value="{{ p.section }}"><input type="hidden" name="kind" value="components">
+      {{ p.components.management_form }}
+      {% for e in p.components.non_form_errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+      <table>
+        <tr><th>Name</th><th>Max score</th><th>Order</th><th>Remove</th></tr>
+        {% for f in p.components %}
+        <tr>
+          <td>{{ f.name }}{% for e in f.name.errors %}<span class="error" role="alert">{{ e }}</span>{% endfor %}</td>
+          <td>{{ f.max_score }}{% for e in f.max_score.errors %}<span class="error" role="alert">{{ e }}</span>{% endfor %}</td>
+          <td>{{ f.order }}{% for e in f.order.errors %}<span class="error" role="alert">{{ e }}</span>{% endfor %}</td>
+          <td>{{ f.DELETE }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      <button type="submit">Save components</button>
+    </form>
+    {% else %}
+    <ul>{% for f in p.components.initial_forms %}<li>{{ f.initial.name }}: {{ f.initial.max_score }}</li>{% empty %}<li class="muted">None.</li>{% endfor %}</ul>
+    {% endif %}
+
+    <h3>Grading scale</h3>
+    {% if can_edit %}
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="section" value="{{ p.section }}"><input type="hidden" name="kind" value="scale">
+      {{ p.scale.management_form }}
+      {% for e in p.scale.non_form_errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+      <table>
+        <tr><th>From</th><th>To</th><th>Grade</th><th>Remark</th><th>Remove</th></tr>
+        {% for f in p.scale %}
+        <tr>
+          <td>{{ f.lower }}</td><td>{{ f.upper }}</td>
+          <td>{{ f.grade }}{% for e in f.grade.errors %}<span class="error" role="alert">{{ e }}</span>{% endfor %}</td>
+          <td>{{ f.remark }}</td><td>{{ f.DELETE }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      <button type="submit">Save scale</button>
+    </form>
+    {% else %}
+    <ul>{% for f in p.scale.initial_forms %}<li>{{ f.initial.grade }} {{ f.initial.lower }}–{{ f.initial.upper }} {{ f.initial.remark }}</li>{% empty %}<li class="muted">None.</li>{% endfor %}</ul>
+    {% endif %}
+  </section>
+  {% endfor %}
+  <p><a href="{% url 'academics:sessions' %}">Back</a></p>
+</div>
+{% endblock %}
