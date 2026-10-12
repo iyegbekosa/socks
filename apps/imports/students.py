@@ -78,6 +78,28 @@ PLAN_LIMIT_MESSAGE = "Plan limit reached ({} students)"
 CLASH_MESSAGE = "Admission number already used"
 UNEXPECTED_MESSAGE = "Unexpected error on this row"
 DUPLICATE_MESSAGE = "This admission number appears earlier in the file"
+ALREADY_ADMITTED_MESSAGE = "Already admitted as {}"
+SAME_STUDENT_MESSAGE = "This student appears earlier in the file"
+
+StudentKey = tuple[str, str, Any]
+
+
+def _name_key(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
+def student_key(first_name: str, last_name: str, date_of_birth: Any) -> StudentKey:
+    """Identity used to spot re-imports: names (case-insensitive, whitespace collapsed)
+    plus date of birth. Never logged."""
+    return (_name_key(first_name), _name_key(last_name), date_of_birth)
+
+
+def _active_students_by_key() -> dict[StudentKey, str]:
+    """One query per job: active students' identity → admission number."""
+    rows = Student.objects.filter(status=Student.Status.ACTIVE).values_list(
+        "first_name", "last_name", "date_of_birth", "user__admission_number"
+    )
+    return {student_key(f, la, d): number or "" for f, la, d, number in rows}
 
 
 @dataclass
@@ -267,17 +289,30 @@ def import_students(job: ImportJob) -> None:
     maximum = PlanLimits.for_current_school().plan.max_students
     progress = _Progress(job)
     seen_numbers: set[str] = set()
+    admitted_by_key = _active_students_by_key()
+    seen_keys: set[StudentKey] = set()
     by = job.created_by
     try:
         for index, (number, row) in enumerate(rows, start=1):
             result = validate_row(row, arms, seen_numbers)
-            if result.admit_kwargs is None:
+            kw = result.admit_kwargs
+            key = (
+                student_key(kw["first_name"], kw["last_name"], kw["date_of_birth"]) if kw else None
+            )
+            if kw is None or key is None:
                 progress.fail_row(number, result.errors)
+            elif key in admitted_by_key:
+                progress.fail_row(
+                    number, [("", ALREADY_ADMITTED_MESSAGE.format(admitted_by_key[key]))]
+                )
+            elif key in seen_keys:
+                progress.fail_row(number, [("", SAME_STUDENT_MESSAGE)])
             else:
+                seen_keys.add(key)
                 try:
                     with transaction.atomic():
                         student, _ = admit_student(
-                            **result.admit_kwargs,
+                            **kw,
                             session=session,
                             consent_method=Student.ConsentMethod.PAPER_FORM,
                             issue_password=False,
@@ -297,7 +332,8 @@ def import_students(job: ImportJob) -> None:
                     _log_unexpected(job, number, exc)
                     progress.fail_row(number, [("", UNEXPECTED_MESSAGE)])
                 else:
-                    progress.admitted(student, result.admit_kwargs["arm"])
+                    progress.admitted(student, kw["arm"])
+                    admitted_by_key[key] = student.user.admission_number or ""
             if index % PROGRESS_EVERY == 0:
                 progress.save()
     finally:

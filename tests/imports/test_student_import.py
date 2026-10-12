@@ -737,3 +737,78 @@ def test_job_passwords_teacher_403(client_a, world, cloud):
         client_a.force_login(teacher)
     assert client_a.get(_confirm_url(job, world.a)).status_code == 403
     assert client_a.post(_confirm_url(job, world.a)).status_code == 403
+
+
+# --- final fix wave: re-imports ------------------------------------------------------
+
+
+def test_reimporting_the_same_file_admits_nobody_again(world, cloud):
+    rows = [
+        good_row(first_name="Ada"),
+        good_row(first_name="Bola", last_name="Okafor"),
+        good_row(first_name="Chi", date_of_birth="02/03/2013"),
+    ]
+    first = run_job(world, csv_file(rows))
+    assert (first.ok_rows, first.error_rows) == (3, 0)
+    with schema_context("school_a"):
+        numbers = {
+            s.first_name: s.user.admission_number
+            for s in Student.objects.filter(pk__in=first.admitted_student_ids).select_related(
+                "user"
+            )
+        }
+        before = Student.objects.count()
+    # Same people, different case and spacing.
+    again = [
+        {**rows[0], "first_name": "  ADA "},
+        {**rows[1], "last_name": "okafor"},
+        {**rows[2], "first_name": "Chi", "last_name": " Eze  "},
+    ]
+    second = run_job(world, csv_file(again))
+    assert (second.ok_rows, second.error_rows) == (0, 3)
+    with schema_context("school_a"):
+        assert Student.objects.count() == before
+    assert [e["message"] for e in second.errors] == [
+        f"Already admitted as {numbers['Ada']}",
+        f"Already admitted as {numbers['Bola']}",
+        f"Already admitted as {numbers['Chi']}",
+    ]
+
+
+def test_same_student_twice_in_one_file_is_an_error_after_the_first(world, cloud):
+    job = run_job(world, csv_file([good_row(first_name="Ada"), good_row(first_name="ada")]))
+    assert (job.ok_rows, job.error_rows) == (1, 1)
+    with schema_context("school_a"):
+        number = Student.objects.get(pk=job.admitted_student_ids[0]).user.admission_number
+    assert job.errors == [{"row": 3, "column": "", "message": f"Already admitted as {number}"}]
+
+
+def test_twins_with_different_first_names_both_import(world, cloud):
+    job = run_job(world, csv_file([good_row(first_name="Taiwo"), good_row(first_name="Kehinde")]))
+    assert (job.ok_rows, job.error_rows) == (2, 0)
+
+
+def test_withdrawn_student_does_not_block_reimport(world, cloud):
+    first = run_job(world, csv_file([good_row(first_name="Ada")]))
+    with schema_context("school_a"):
+        Student.objects.filter(pk__in=first.admitted_student_ids).update(
+            status=Student.Status.WITHDRAWN
+        )
+    second = run_job(world, csv_file([good_row(first_name="Ada")]))
+    assert (second.ok_rows, second.error_rows) == (1, 0)
+
+
+def test_duplicate_lookup_is_one_query_per_job(world, cloud):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    run_job(world, csv_file([good_row(first_name=f"Pupil{i}") for i in range(3)]))
+    with CaptureQueriesContext(connection) as ctx:
+        run_job(world, csv_file([good_row(first_name=f"Pupil{i}") for i in range(6)]))
+    lookups = [
+        q["sql"]
+        for q in ctx.captured_queries
+        if '"students_student"."date_of_birth"' in q["sql"]
+        and '"accounts_user"."admission_number"' in q["sql"]
+    ]
+    assert len(lookups) == 1
