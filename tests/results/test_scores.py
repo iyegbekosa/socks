@@ -491,6 +491,9 @@ def test_save_takes_a_shared_lock_on_the_class_row(w):
     on_class += [x["sql"] for x in q.captured_queries if " results_classresult " in x["sql"]]
     assert any(s.rstrip().endswith("FOR SHARE") for s in on_class), on_class
     assert not any("FOR UPDATE" in s for s in on_class)
+    on_comp = [x["sql"] for x in q.captured_queries if "results_assessmentcomponent" in x["sql"]]
+    assert any(s.rstrip().endswith("FOR SHARE") for s in on_comp), on_comp
+    assert not any("FOR UPDATE" in s for s in on_comp)
 
     with CaptureQueriesContext(connection) as q:
         try:

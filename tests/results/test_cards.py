@@ -492,6 +492,18 @@ def test_a_successful_run_keeps_a_notification_queueing_error(acc, uploads):
     assert klass.cards_error == ClassResult.NOTIFY_START_ERROR
 
 
+def test_a_failed_run_keeps_a_notification_queueing_error(acc, uploads):
+    """A card failure must not hide that guardian notifications never started."""
+    _publish(acc)
+    ClassResult.objects.filter(arm=acc.arm, term=acc.term).update(
+        cards_error=ClassResult.NOTIFY_START_ERROR
+    )
+    with mock.patch("apps.results.cards.load_logo", side_effect=RuntimeError("boom")):
+        assert generate_report_cards(acc.arm, acc.term) == 0
+    klass = ClassResult.objects.get(arm=acc.arm, term=acc.term)
+    assert klass.cards_error == ClassResult.NOTIFY_START_ERROR
+
+
 def test_storage_limit_stops_and_shows_on_class_page(acc, uploads, client_a, caplog):
     _publish(acc)
     with (

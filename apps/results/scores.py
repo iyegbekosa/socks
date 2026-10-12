@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Any
 
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import connection, transaction
 
 from apps.academics.models import SubjectOffering, Term
 from apps.audit.services import record
@@ -151,12 +151,9 @@ def _validate(
 ) -> dict[tuple[int, int], Decimal | None]:
     """Parse every cell or raise one ValidationError keyed ``"<student_id>:<component_id>"``."""
     taking = set(students_taking(offering).values_list("pk", flat=True))
-    # Row locks: save_components locks the same rows, so a max cannot change mid-save.
-    maxima = dict(
-        AssessmentComponent.objects.select_for_update()
-        .filter(section=_section(offering))
-        .values_list("pk", "max_score")
-    )
+    # Shared row locks: save_components locks the same rows FOR UPDATE, so a max cannot
+    # change mid-save, while saves for other subjects of the section still run together.
+    maxima = _shared_component_maxima(_section(offering))
     errors: dict[str, list[str]] = {}
     parsed: dict[tuple[int, int], Decimal | None] = {}
     for c in cells:
@@ -213,6 +210,14 @@ def save_cells(
             after={"offering_id": offering.pk, "term_id": term.pk},
         )
         raise
+
+
+def _shared_component_maxima(section: str) -> dict[int, Decimal]:
+    """``{component pk: max_score}`` for a section, read ``FOR SHARE`` (see _shared_class_lock)."""
+    table = AssessmentComponent._meta.db_table
+    with connection.cursor() as cur:
+        cur.execute(f"SELECT id, max_score FROM {table} WHERE section = %s FOR SHARE", [section])
+        return dict(cur.fetchall())
 
 
 def _shared_class_lock(arm_id: int, term_id: int) -> ClassResult:

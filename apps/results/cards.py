@@ -294,15 +294,16 @@ def _discard(arm: ClassArm, term: Term, written: list[tuple[int, str]]) -> None:
 
 def _set_cards_error(arm: ClassArm, term: Term, error: str) -> None:
     """Record (or, with "", clear) why this run's cards are incomplete. An error is recorded
-    only while the class is still published; clearing keeps a notification-queueing error,
-    which only "Regenerate report cards" resolves."""
+    only while the class is still published; a notification-queueing error is kept either
+    way, since only "Regenerate report cards" resolves it."""
     with transaction.atomic():
         _lock(arm, term)
         qs = ClassResult.objects.filter(arm=arm, term=term).exclude(cards_error=error)
+        # A notification-queueing error is never overwritten: "Regenerate report cards"
+        # re-queues notifications only while it is recorded.
+        qs = qs.exclude(cards_error=ClassResult.NOTIFY_START_ERROR)
         if error:
             qs = qs.filter(status=ClassResult.Status.PUBLISHED)
-        else:
-            qs = qs.exclude(cards_error=ClassResult.NOTIFY_START_ERROR)
         qs.update(cards_error=error)
 
 
