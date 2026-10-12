@@ -48,7 +48,13 @@ def _invite_contact(school: School, base_url: str, *, resend: bool) -> None:
     if existing is not None:
         if resend and existing.is_active and not existing.has_usable_password():
             # A previous run created them but the email may never have gone out.
-            resend_invite(existing, by=None, base_url=base_url, send_sms=False)
+            resend_invite(
+                existing,
+                by=None,
+                base_url=base_url,
+                send_sms=False,
+                raise_on_send_failure=True,
+            )
         return
     invite_staff(
         full_name=school.contact_name,
@@ -59,6 +65,7 @@ def _invite_contact(school: School, base_url: str, *, resend: bool) -> None:
         base_url=base_url,
         verified=True,  # platform action, not a staff session
         send_sms=False,  # public signup must not be able to trigger SMS to arbitrary numbers
+        raise_on_send_failure=True,  # a failed first invite must fail the task so it retries
     )
 
 

@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import logging
 import secrets
 from collections.abc import Iterable
 
@@ -18,6 +19,8 @@ from django.utils.http import base36_to_int, urlsafe_base64_encode
 from apps.accounts.identifiers import classify_identifier
 from apps.accounts.models import User
 from apps.accounts.roles import MFA_REQUIRED_ROLES, SCHOOL_ADMIN, set_roles
+
+logger = logging.getLogger(__name__)
 
 MFA_VERIFICATION_REQUIRED = "This change needs a two-factor-verified admin."
 
@@ -250,7 +253,9 @@ def invite_link(user: User, base_url: str) -> str:
     return f"{base_url.rstrip('/')}/accounts/invite/{uid}/{token}/"
 
 
-def _send_invite_on_commit(user: User, base_url: str, *, send_sms: bool = True) -> None:
+def _send_invite_on_commit(
+    user: User, base_url: str, *, send_sms: bool = True, raise_on_failure: bool = False
+) -> None:
     """Queue the invite email/SMS for after the surrounding transaction commits."""
     from apps.core import sms
 
@@ -259,24 +264,36 @@ def _send_invite_on_commit(user: User, base_url: str, *, send_sms: bool = True) 
     email, phone = user.email, user.phone
 
     def _send() -> None:
+        # After commit: a mail/SMS failure must not undo or fail the invite. The user stays
+        # a pending invitee and can be re-sent. Never log the address or the link.
         if email:
-            send_mail(
-                render_to_string(
-                    "accounts/email/invite_subject.txt", {"school_name": school_name}
-                ).strip(),
-                render_to_string(
-                    "accounts/email/invite_body.txt",
-                    {"school_name": school_name, "link": link, "name": user.first_name},
-                ),
-                None,
-                [email],
-            )
+            try:
+                send_mail(
+                    render_to_string(
+                        "accounts/email/invite_subject.txt", {"school_name": school_name}
+                    ).strip(),
+                    render_to_string(
+                        "accounts/email/invite_body.txt",
+                        {"school_name": school_name, "link": link, "name": user.first_name},
+                    ),
+                    None,
+                    [email],
+                )
+            except Exception as exc:  # noqa: BLE001
+                if raise_on_failure:
+                    raise
+                logger.warning("Invite send failed: %s", type(exc).__name__)
         if send_sms and phone and sms.sms_configured():
-            sms.send_sms(
-                phone,
-                f"{school_name}: you've been invited to the staff portal. "
-                f"Set your password: {link}",
-            )
+            try:
+                sms.send_sms(
+                    phone,
+                    f"{school_name}: you've been invited to the staff portal. "
+                    f"Set your password: {link}",
+                )
+            except Exception as exc:  # noqa: BLE001
+                if raise_on_failure:
+                    raise
+                logger.warning("Invite send failed: %s", type(exc).__name__)
 
     transaction.on_commit(_send)
 
@@ -292,9 +309,11 @@ def invite_staff(
     verified: bool,
     request=None,
     send_sms: bool = True,
+    raise_on_send_failure: bool = False,
 ) -> User:
     """``verified``: the acting session passed a TOTP check; required for MFA roles.
-    Platform provisioning (``by=None``) passes True."""
+    Platform provisioning (``by=None``) passes True. Send failures after commit are logged
+    and swallowed unless ``raise_on_send_failure`` (provisioning retries on failure)."""
     from apps.audit.services import record
 
     if set(roles) & MFA_REQUIRED_ROLES:
@@ -345,12 +364,20 @@ def invite_staff(
             obj=user,
             after={"roles": roles},
         )
-        _send_invite_on_commit(user, base_url, send_sms=send_sms)
+        _send_invite_on_commit(
+            user, base_url, send_sms=send_sms, raise_on_failure=raise_on_send_failure
+        )
     return user
 
 
 def resend_invite(
-    user: User, *, by: User | None, base_url: str, request=None, send_sms: bool = True
+    user: User,
+    *,
+    by: User | None,
+    base_url: str,
+    request=None,
+    send_sms: bool = True,
+    raise_on_send_failure: bool = False,
 ) -> None:
     from apps.audit.services import record
 
@@ -358,7 +385,9 @@ def resend_invite(
         raise ValidationError("An invite can only be resent while the password is not set.")
     with transaction.atomic():
         record("user.invited", request=request, actor=by, obj=user, after={"resent": True})
-        _send_invite_on_commit(user, base_url, send_sms=send_sms)
+        _send_invite_on_commit(
+            user, base_url, send_sms=send_sms, raise_on_failure=raise_on_send_failure
+        )
 
 
 def _lock_admins() -> list[int]:

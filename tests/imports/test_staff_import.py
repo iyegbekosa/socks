@@ -186,3 +186,46 @@ def test_staff_template_files_have_exact_headers():
     finally:
         wb.close()
     assert rows == [tuple(H)]
+
+
+def test_mail_failure_after_commit_still_counts_row_ok(
+    world, cloud, django_capture_on_commit_callbacks, caplog
+):
+    from unittest import mock
+
+    with (
+        mock.patch("apps.accounts.services.send_mail", side_effect=OSError("smtp down")),
+        caplog.at_level("WARNING", logger="apps.accounts.services"),
+    ):
+        job = run_job(world, [srow()], capture=django_capture_on_commit_callbacks)
+    assert (job.ok_rows, job.error_rows) == (1, 0)
+    with schema_context("school_a"):
+        assert User.objects.filter(email="ada@school.ng").exists()
+    assert "Invite send failed: OSError" in caplog.text
+    assert "ada@school.ng" not in caplog.text
+
+
+def test_roles_cell_with_unsafe_text_gets_generic_message(world, cloud):
+    job = run_job(world, [srow(roles="leak@school.ng"), srow(email="b@school.ng", roles="Wizard")])
+    msgs = [e["message"] for e in job.errors]
+    assert msgs == ["Unknown role in the roles column", "Unknown role “wizard”."]
+    assert "leak@school.ng" not in str(job.errors)
+
+
+def test_unverified_school_admin_upload_cannot_import_bursar(client_a, world, cloud):
+    client_a.force_login(world.admin)  # no OTP verification
+    data = csv_file([srow(email="bur@school.ng", roles="bursar")], H)
+    r = client_a.post(
+        reverse("imports:new"),
+        {"kind": "staff", "file": SimpleUploadedFile("s.csv", data)},
+        HTTP_HOST="school-a.localhost",
+    )
+    with schema_context("school_a"):
+        job = ImportJob.objects.filter(kind="staff").first()
+        assert not User.objects.filter(email="bur@school.ng").exists()
+    if job is None:
+        # MfaEnforcementMiddleware keeps an unverified admin off the page entirely.
+        assert r.status_code in (302, 403)
+    else:
+        assert job.started_verified is False
+        assert job.error_rows == 1

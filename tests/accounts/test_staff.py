@@ -403,3 +403,30 @@ def test_services_refuse_unverified_callers(school_a):
             )
         assert User.objects.get(pk=t.pk).roles == set()
         assert not User.objects.filter(email="xy@school.ng").exists()
+
+
+def test_invite_mail_failure_after_commit_does_not_500(
+    client_a, django_capture_on_commit_callbacks, caplog
+):
+    from unittest import mock
+
+    _login(client_a, ["proprietor"])
+    with (
+        mock.patch("apps.accounts.services.send_mail", side_effect=OSError("smtp down")),
+        caplog.at_level("WARNING", logger="apps.accounts.services"),
+        django_capture_on_commit_callbacks(execute=True),
+    ):
+        r = client_a.post(
+            reverse("staff:invite"),
+            {
+                "full_name": "New Person",
+                "email": "new@school.ng",
+                "phone": "",
+                "roles": ["teacher"],
+            },
+        )
+    assert r.status_code == 302 and r["Location"] == reverse("staff:list")
+    with schema_context("school_a"):
+        assert User.objects.filter(email="new@school.ng").exists()
+    assert "Invite send failed: OSError" in caplog.text
+    assert "new@school.ng" not in caplog.text and "/accounts/invite/" not in caplog.text

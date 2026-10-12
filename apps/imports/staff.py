@@ -4,6 +4,7 @@ Error messages never echo names, emails or phone numbers; nothing here logs row 
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -31,6 +32,8 @@ MFA_MESSAGE = "This role needs a two-factor-verified admin to import"
 UNEXPECTED_MESSAGE = "Unexpected error on this row"
 BAD_PHONE = "Enter a valid Nigerian mobile number."
 BAD_EMAIL = "Enter a valid email address."
+SAFE_ROLE = re.compile(r"^[a-z_ ,]+$")
+UNKNOWN_ROLE_GENERIC = "Unknown role in the roles column"
 
 
 @dataclass
@@ -69,12 +72,16 @@ def validate_row(
         result.error("email", "Give an email or a phone number.")
 
     roles: list[str] = []
-    for part in cell_text(row.get("roles")).split(","):
+    roles_cell = cell_text(row.get("roles")).lower()
+    for part in roles_cell.split(","):
         role = part.strip().lower()
         if not role or role in roles:
             continue
         if role not in STAFF_ROLES:
-            result.error("roles", f"Unknown role “{role[:40]}”.")
+            if SAFE_ROLE.match(roles_cell):
+                result.error("roles", f"Unknown role “{role[:40]}”.")
+            else:
+                result.error("roles", UNKNOWN_ROLE_GENERIC)
         else:
             roles.append(role)
     if not roles:
@@ -125,16 +132,14 @@ class _Progress:
 def _validation_errors(exc: ValidationError) -> list[tuple[str, str]]:
     """Clash and format problems get fixed messages: library text could quote the value."""
     if not hasattr(exc, "error_dict"):
-        return [("", DUPLICATE_MESSAGE if "already" in " ".join(exc.messages) else BAD_EMAIL)]
+        return [("", UNEXPECTED_MESSAGE)]
     out: list[tuple[str, str]] = []
-    for key, messages in exc.message_dict.items():
-        text = " ".join(messages)
-        if "already" in text:
-            out.append((key if key in ("email", "phone") else "", DUPLICATE_MESSAGE))
-        elif key == "phone":
-            out.append(("phone", BAD_PHONE))
-        elif key == "email":
-            out.append(("email", BAD_EMAIL))
+    # invite_staff's clash errors are keyed email/phone and carry no codes; its format
+    # errors (bad phone) share those keys, so a bad phone is told apart by the cell check
+    # done before the call (validate_row), leaving only clashes here.
+    for key in exc.message_dict:
+        if key in ("email", "phone"):
+            out.append((key, DUPLICATE_MESSAGE))
         else:
             out.append(("", UNEXPECTED_MESSAGE))
     return out
