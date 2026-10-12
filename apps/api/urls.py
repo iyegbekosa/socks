@@ -15,6 +15,7 @@ urlpatterns = [
         views.ResultsApproveView.as_view(),
         name="results_approve",
     ),
+    path("payments/manual", views.ManualPaymentView.as_view(), name="payments_manual"),
     path(
         "results/<str:student>/<str:term>/report-card",
         views.ReportCardView.as_view(),

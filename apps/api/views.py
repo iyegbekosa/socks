@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Any
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -32,7 +33,12 @@ from apps.api.serializers import (
     sheet_data_json,
 )
 from apps.core.errors import ApiError
+from apps.core.money import money_fields
 from apps.core.parsing import parse_id
+from apps.fees import manual
+from apps.fees.ledger import PlannedLine
+from apps.fees.models import Invoice, ManualPayment
+from apps.fees.scope import can_manage_fees
 from apps.imports.models import ImportJob
 from apps.imports.services import ImportNotReady, create_import_job
 from apps.results.cards import downloadable_card
@@ -323,3 +329,118 @@ class ReportCardView(APIView):
         if card is None:
             raise ApiError("NOT_FOUND", "Report card not found.", 404)
         return signed_redirect(card.file_name)
+
+
+MANUAL_KEYS = {"student", "method", "amount_kobo", "invoices", "paid_on", "reference_no"}
+MANUAL_FIELD_NAMES = {"amount": "amount_kobo"}
+
+
+def _validation(details: list[dict]) -> ApiError:
+    return ApiError("VALIDATION_ERROR", "Some fields are invalid.", 400, details)
+
+
+def _json_kobo(raw: Any) -> int | None:
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None
+    return raw
+
+
+class ManualPaymentView(APIView):
+    """POST: a bursar or school admin records a manual payment (UC-13).
+
+    201 ``{id, status, payment}``; ``payment`` is null while waiting for approval. Unknown
+    student or invoice ids (including another school's) are a 404.
+    """
+
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["post", "options"]
+
+    def post(self, request: Request) -> Response:
+        user = request.user
+        if not can_manage_fees(user):
+            raise ApiError("FORBIDDEN", "Only a bursar or school admin can record payments.", 403)
+        data = request.data
+        if not isinstance(data, dict):
+            raise _bad("non_field_errors", "Send a JSON object.")
+        unknown = sorted(set(data) - MANUAL_KEYS)
+        if unknown:
+            raise _bad(unknown[0], "Unknown field.")
+
+        student_id = _json_id(data.get("student"))
+        if student_id is None:
+            raise _bad("student", "Must be a student id.")
+        method = data.get("method")
+        if not isinstance(method, str) or method not in manual.METHODS:
+            raise _bad("method", "Must be one of cash, teller, pos or transfer.")
+        amount = _json_kobo(data.get("amount_kobo"))
+        if amount is None:
+            raise _bad("amount_kobo", "Must be a whole number of kobo.")
+        raw_paid_on = data.get("paid_on")
+        try:
+            if not isinstance(raw_paid_on, str) or len(raw_paid_on) != 10:
+                raise ValueError
+            paid_on = date.fromisoformat(raw_paid_on)
+        except ValueError:
+            raise _bad("paid_on", "Must be a date like 2026-10-01.") from None
+        reference_no = data.get("reference_no") or ""
+        if not isinstance(reference_no, str):
+            raise _bad("reference_no", "Must be text.")
+        raw_lines = data.get("invoices")
+        if not isinstance(raw_lines, list) or not 1 <= len(raw_lines) <= manual.MAX_PLAN_LINES:
+            raise _bad("invoices", f"Send 1 to {manual.MAX_PLAN_LINES} invoices.")
+        plan: list[PlannedLine] = []
+        for i, raw in enumerate(raw_lines):
+            if not isinstance(raw, dict) or set(raw) != {"invoice", "amount_kobo"}:
+                raise _bad(f"invoices.{i}", "Each line needs invoice and amount_kobo.")
+            invoice_id = _json_id(raw["invoice"])
+            if invoice_id is None:
+                raise _bad(f"invoices.{i}.invoice", "Must be an invoice id.")
+            kobo = _json_kobo(raw["amount_kobo"])
+            if kobo is None:
+                raise _bad(f"invoices.{i}.amount_kobo", "Must be a whole number of kobo.")
+            plan.append(PlannedLine(invoice_id, kobo))
+
+        student = get_object_or_404(Student, pk=student_id)
+        found = set(
+            Invoice.objects.filter(pk__in={ln.invoice_id for ln in plan}).values_list(
+                "pk", flat=True
+            )
+        )
+        if any(ln.invoice_id not in found for ln in plan):
+            raise ApiError("NOT_FOUND", "Invoice not found.", 404)
+
+        try:
+            mp = manual.record(
+                student=student,
+                method=method,
+                amount_kobo=amount,
+                plan=plan,
+                paid_on=paid_on,
+                reference_no=reference_no,
+                by=user,
+                request=request,
+            )
+        except DjangoValidationError as exc:
+            if hasattr(exc, "error_dict"):
+                details = [
+                    {"field": MANUAL_FIELD_NAMES.get(key, key), "message": message}
+                    for key, messages in exc.message_dict.items()
+                    for message in messages
+                ]
+            else:
+                details = [{"field": "non_field_errors", "message": m} for m in exc.messages]
+            raise _validation(details) from exc
+
+        payment = None
+        if mp.status == ManualPayment.APPROVED:
+            p = mp.payment
+            payment = {
+                "id": p.pk,
+                **money_fields(p.amount_kobo),
+                "unallocated_kobo": p.unallocated_kobo,
+                "receipt_number": p.receipt.number,
+            }
+        return Response(
+            {"id": mp.pk, "status": mp.status, "payment": payment},
+            status=status.HTTP_201_CREATED,
+        )

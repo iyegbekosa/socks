@@ -221,6 +221,60 @@ class InvoiceLine(models.Model):
         return f"{self.kind}: {self.amount_kobo}"
 
 
+class ManualPayment(models.Model):
+    """A cash, teller, POS or transfer payment recorded by staff (UC-13).
+
+    At or above ``FeeSettings.manual_approval_threshold_kobo`` it waits for a second fee
+    manager; it credits nothing until approved. ``plan`` is
+    ``[{"invoice_id": int, "amount_kobo": int}, ...]`` in allocation order.
+    """
+
+    PENDING, APPROVED, REJECTED = "pending_approval", "approved", "rejected"
+    STATUS_CHOICES = [
+        (PENDING, "Waiting for approval"),
+        (APPROVED, "Approved"),
+        (REJECTED, "Rejected"),
+    ]
+    CASH, TELLER, POS, TRANSFER = "cash", "teller", "pos", "transfer"
+    METHOD_CHOICES = [(CASH, "Cash"), (TELLER, "Teller"), (POS, "POS"), (TRANSFER, "Transfer")]
+
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="manual_payments")
+    method = models.CharField(max_length=8, choices=METHOD_CHOICES)
+    amount_kobo = models.BigIntegerField()
+    plan = models.JSONField(default=list)
+    paid_on = models.DateField()
+    reference_no = models.CharField(max_length=64, blank=True)
+    photo_name = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=PENDING)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+"
+    )
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    reject_reason = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        indexes = [models.Index(fields=["status"], name="fees_manual_status")]
+        constraints = [
+            models.CheckConstraint(condition=Q(amount_kobo__gt=0), name="fees_manual_amount_gt0"),
+            models.CheckConstraint(
+                condition=Q(status__in=["pending_approval", "approved", "rejected"]),
+                name="fees_manual_status_valid",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"Manual payment {self.pk}: {self.amount_kobo} ({self.status})"
+
+
 class Payment(models.Model):
     """A confirmed payment. Created only by ``ledger.confirm_payment``."""
 
@@ -255,6 +309,13 @@ class Payment(models.Model):
     unallocated_kobo = models.BigIntegerField(default=0)
     flagged = models.BooleanField(default=False)
     flag_reason = models.CharField(max_length=200, blank=True)
+    manual = models.OneToOneField(
+        ManualPayment,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="payment",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

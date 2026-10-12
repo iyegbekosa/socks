@@ -15,6 +15,16 @@ from django.urls import URLPattern, URLResolver, get_resolver
 API_PREFIX = "api/v1/"
 
 
+def bursar_actor():
+    """A bursar (an MFA role, logged in verified by the harness) in school A."""
+    from apps.accounts.roles import set_roles
+    from tests.accounts.factories import StaffFactory
+
+    user = StaffFactory.create()
+    set_roles(user, ["bursar"], by=None)
+    return user
+
+
 def default_actor():
     """A school_admin in the active (school A) schema; the caller logs them into client_a."""
     from apps.accounts.roles import set_roles
@@ -33,6 +43,8 @@ class IsolationCase:
     url: Callable[[Any], str]  # object created in school B -> URL requested as school A
     make_obj: Callable[[], Any]  # creates the object in the active (school B) schema
     body: dict | None = None
+    # JSON body built from school B's object (e.g. B's ids posted to A); replaces ``body``.
+    body_for: Callable[[Any], dict] | None = None
     # Creates the logged-in school A user (called in school A's schema); None = anonymous.
     actor: Callable[[], Any] | None = default_actor
     # "refused": status must be 401/403/404. "absent" (list endpoints, and endpoints that
@@ -155,6 +167,32 @@ def _published_report_card():
     return make_card(w.students[0], w.term, w.arm)
 
 
+def _invoice_in_active_schema():
+    """A student's unpaid invoice (with its term) in the active schema."""
+    from apps.fees import invoicing
+    from apps.fees.models import Invoice, InvoiceLine
+    from tests.fees.factories import make_terms
+    from tests.students.factories import StudentProfileFactory
+
+    invoice = Invoice.objects.create(student=StudentProfileFactory(), term=make_terms().term1)
+    InvoiceLine.objects.create(
+        invoice=invoice, kind=InvoiceLine.FEE, description="Tuition", amount_kobo=1_000_000
+    )
+    invoicing.recompute(invoice)
+    return invoice
+
+
+def _manual_payment_body(invoice) -> dict:
+    return {
+        "student": invoice.student_id,
+        "method": "cash",
+        "amount_kobo": 100_000,
+        "invoices": [{"invoice": invoice.pk, "amount_kobo": 100_000}],
+        "paid_on": "2026-10-01",
+        "reference_no": "",
+    }
+
+
 def _tiny_csv() -> dict:
     from django.core.files.uploadedfile import SimpleUploadedFile
 
@@ -240,6 +278,26 @@ ISOLATION_CASES: list[IsolationCase] = [
         url=lambda c: f"/api/v1/results/{c.student_id}/{c.term_id}/report-card",
         make_obj=_published_report_card,
     ),
+    # School A's bursar posts school B's student and invoice ids: unknown in A, so 404, and
+    # B's invoice is unchanged. tests/api/test_payments_manual_api.py covers roles.
+    IsolationCase(
+        "api:payments_manual",
+        "POST",
+        url=lambda i: "/api/v1/payments/manual",
+        make_obj=_invoice_in_active_schema,
+        body_for=_manual_payment_body,
+        actor=bursar_actor,
+        label="bursar",
+    ),
+    IsolationCase(
+        "api:payments_manual",
+        "POST",
+        url=lambda i: "/api/v1/payments/manual",
+        make_obj=_invoice_in_active_schema,
+        body_for=_manual_payment_body,
+        actor=None,
+        label="anonymous",
+    ),
 ]
 
 # Route names deliberately outside the isolation requirement (no tenant data).
@@ -310,11 +368,12 @@ def _snapshot(obj):
     return {f.attname: getattr(obj, f.attname) for f in obj._meta.concrete_fields}
 
 
-def _request_kwargs(case):
+def _request_kwargs(case, obj=None):
     if case.multipart is not None:
         return {"data": case.multipart()}
     if case.method.upper() in {"POST", "PUT", "PATCH"}:
-        return {"data": json.dumps(case.body or {}), "content_type": "application/json"}
+        body = case.body_for(obj) if case.body_for is not None else case.body
+        return {"data": json.dumps(body or {}), "content_type": "application/json"}
     return {}
 
 
@@ -339,7 +398,7 @@ def assert_cross_school_refused(case, school_a, school_b, client_a) -> None:
     if actor is not None:
         login_verified(client_a, actor)
 
-    response = getattr(client_a, case.method.lower())(case.url(obj), **_request_kwargs(case))
+    response = getattr(client_a, case.method.lower())(case.url(obj), **_request_kwargs(case, obj))
 
     if case.expect == "refused":
         assert response.status_code in {401, 403, 404}, (

@@ -1,0 +1,25 @@
+{% extends "core/base.html" %}
+{% load fees_money %}
+{% block title %}Record payment{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Record payment: {{ student.full_name }}</h1>
+  {% include "fees/_nav.html" %}
+  {% if student.admission_number %}<p>{{ student.admission_number }}</p>{% endif %}
+  {% if invoices %}
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    {% for field in form.plain_fields %}{% include "fees/_field.html" %}{% endfor %}
+    <fieldset>
+      <legend>Amount for each invoice (naira)</legend>
+      <p class="hint">The amounts must add up to the amount paid. Leave an invoice blank to skip it.</p>
+      {% for field in form.invoice_fields %}{% include "fees/_field.html" %}{% endfor %}
+    </fieldset>
+    <p class="hint">Payments of {{ threshold|naira }} or more wait for approval by another bursar or school admin.</p>
+    <button type="submit">Record payment</button>
+  </form>
+  {% else %}<p>This student has no invoices with a balance to pay.</p>{% endif %}
+  <p><a href="{% url 'fees:manual_pending' %}">Pending approvals</a></p>
+</div>
+{% endblock %}

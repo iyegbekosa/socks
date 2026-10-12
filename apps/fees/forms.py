@@ -4,7 +4,16 @@ from django import forms
 
 from apps.academics.models import AcademicSession, ClassLevel, Term
 from apps.core.money import kobo_from_naira, naira_display
-from apps.fees.models import Discount, FeeItem, FeeSettings, FeeStructureLine, StudentDiscount
+from apps.fees.ledger import PlannedLine
+from apps.fees.models import (
+    Discount,
+    FeeItem,
+    FeeSettings,
+    FeeStructureLine,
+    Invoice,
+    ManualPayment,
+    StudentDiscount,
+)
 
 NAIRA_ATTRS = {"inputmode": "decimal", "autocomplete": "off"}
 
@@ -280,3 +289,66 @@ class AdjustmentForm(forms.Form):
         if not reason:
             raise forms.ValidationError("Give a reason for the adjustment.")
         return reason
+
+
+def naira_input(kobo: int) -> str:
+    """Kobo as plain naira text for an input's initial value (no symbol, no commas)."""
+    whole, fraction = divmod(kobo, 100)
+    return f"{whole}.{fraction:02d}"
+
+
+class ManualPaymentForm(forms.Form):
+    """Record a cash, teller, POS or transfer payment against a student's open invoices.
+
+    One optional naira field per invoice (``invoice_<pk>``); ``plan()`` lists the filled ones
+    in invoice order. The amounts must add up to ``amount`` (checked by ``manual.record``).
+    """
+
+    method = forms.ChoiceField(choices=ManualPayment.METHOD_CHOICES)
+    amount = NairaField(label="Amount paid (naira)")
+    paid_on = forms.DateField(label="Date paid", widget=forms.DateInput(attrs={"type": "date"}))
+    reference_no = forms.CharField(
+        max_length=64,
+        required=False,
+        label="Teller or reference number",
+        help_text="Required for teller, POS and transfer payments.",
+    )
+    photo = forms.FileField(
+        required=False,
+        label="Teller photo",
+        help_text="Optional. JPEG, PNG or PDF, at most 5 MB.",
+        widget=forms.ClearableFileInput(attrs={"accept": ".jpg,.jpeg,.png,.pdf"}),
+    )
+
+    def __init__(
+        self, *args: Any, invoices: list[Invoice], preselect: int | None = None, **kwargs: Any
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.invoices = invoices
+        for invoice in invoices:
+            field = NairaField(
+                required=False,
+                label=f"{invoice.term} (balance {naira_display(invoice.balance_kobo)})",
+            )
+            if invoice.pk == preselect:
+                field.initial = naira_input(invoice.balance_kobo)
+                self.fields["amount"].initial = naira_input(invoice.balance_kobo)
+            self.fields[f"invoice_{invoice.pk}"] = field
+
+    def invoice_fields(self) -> list[Any]:
+        return [self[f"invoice_{invoice.pk}"] for invoice in self.invoices]
+
+    def plain_fields(self) -> list[Any]:
+        return [self[name] for name in ("method", "amount", "paid_on", "reference_no", "photo")]
+
+    def plan(self) -> list[PlannedLine]:
+        lines = []
+        for invoice in self.invoices:
+            kobo = self.cleaned_data.get(f"invoice_{invoice.pk}")
+            if kobo:
+                lines.append(PlannedLine(invoice.pk, kobo))
+        return lines
+
+
+class RejectForm(forms.Form):
+    reason = forms.CharField(max_length=500, widget=forms.Textarea(attrs={"rows": 2}))

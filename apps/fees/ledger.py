@@ -15,7 +15,14 @@ from django.utils import timezone
 from apps.academics.services import academic_settings_or_defaults
 from apps.audit.services import record
 from apps.fees import hooks, invoicing
-from apps.fees.models import Allocation, Invoice, Payment, Receipt, ReceiptCounter
+from apps.fees.models import (
+    Allocation,
+    Invoice,
+    ManualPayment,
+    Payment,
+    Receipt,
+    ReceiptCounter,
+)
 from apps.students.models import Student
 
 FLAG_OVERPAID = "Paid more than the balance"
@@ -40,10 +47,16 @@ def next_receipt_number(year: int) -> str:
     return f"{prefix}/RCT/{year}/{counter.last:06d}"
 
 
-def _existing_payment(gateway_reference: str | None) -> Payment | None:
-    if not gateway_reference:
-        return None
-    return Payment.objects.filter(gateway_reference=gateway_reference).first()
+def _existing_payment(
+    gateway_reference: str | None, manual: ManualPayment | None = None
+) -> Payment | None:
+    if gateway_reference:
+        found = Payment.objects.filter(gateway_reference=gateway_reference).first()
+        if found is not None:
+            return found
+    if manual is not None:
+        return Payment.objects.filter(manual=manual).first()
+    return None
 
 
 def _validate(amount_kobo: int, method: str, plan: list[PlannedLine], paid_at: datetime) -> None:
@@ -75,12 +88,14 @@ def confirm_payment(
     gateway_reference: str | None = None,
     recorded_by: Any = None,
     approved_by: Any = None,
+    manual: ManualPayment | None = None,
 ) -> Payment:
     """Record a payment, allocate it across ``plan`` in order and number its receipt.
 
-    Idempotent on ``gateway_reference``: a second call with the same reference returns the
-    first Payment unchanged. Each planned line is capped at the invoice's balance and at what
-    is left of the payment; any excess is kept as ``unallocated_kobo`` and the payment flagged.
+    Idempotent on ``gateway_reference`` and on ``manual``: a second call with the same
+    reference, or for the same ManualPayment, returns the first Payment unchanged. Each
+    planned line is capped at the invoice's balance and at what is left of the payment; any
+    excess is kept as ``unallocated_kobo`` and the payment flagged.
     """
     _validate(amount_kobo, method, plan, paid_at)
     gateway_reference = gateway_reference or None
@@ -91,7 +106,7 @@ def confirm_payment(
             inv.pk: inv
             for inv in Invoice.objects.select_for_update().filter(pk__in=ids).order_by("pk")
         }
-        existing = _existing_payment(gateway_reference)
+        existing = _existing_payment(gateway_reference, manual)
         if existing is not None:
             return existing
         if len(invoices) != len(ids):
@@ -122,11 +137,15 @@ def confirm_payment(
                     unallocated_kobo=remaining,
                     flagged=remaining > 0,
                     flag_reason=FLAG_OVERPAID if remaining > 0 else "",
+                    manual=manual,
                 )
         except IntegrityError:
-            if gateway_reference is None:
-                raise
-            return Payment.objects.get(gateway_reference=gateway_reference)
+            # Lost a race on the unique reference or the one-to-one manual link: re-read.
+            if gateway_reference is not None:
+                return Payment.objects.get(gateway_reference=gateway_reference)
+            if manual is not None:
+                return Payment.objects.get(manual=manual)
+            raise
 
         Allocation.objects.bulk_create(
             Allocation(payment=payment, invoice_id=pk, amount_kobo=kobo)

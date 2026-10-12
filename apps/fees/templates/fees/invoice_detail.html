@@ -28,6 +28,7 @@
     </tfoot>
   </table>
   <h2>Payments</h2>
+  {% if can_edit and invoice.balance_kobo > 0 %}<p><a href="{% url 'fees:manual_new' student.pk %}?invoice={{ invoice.pk }}">Record payment</a></p>{% endif %}
   <table>
     <thead><tr><th>Date</th><th>Method</th><th>Amount</th><th>Receipt</th></tr></thead>
     <tbody>

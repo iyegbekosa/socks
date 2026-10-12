@@ -1,0 +1,50 @@
+{% extends "core/base.html" %}
+{% load fees_money %}
+{% block title %}Pending approvals{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Payments waiting for approval</h1>
+  {% include "fees/_nav.html" %}
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <table>
+    <thead><tr><th>Student</th><th>Method</th><th>Amount</th><th>Date paid</th><th>Reference</th><th>Invoices</th><th>Recorded by</th><th>Teller</th>{% if can_act %}<th>Decision</th>{% endif %}</tr></thead>
+    <tbody>
+    {% for row in rows %}
+    {% with mp=row.mp %}
+    <tr>
+      <td>{{ mp.student.full_name }}</td>
+      <td>{{ mp.get_method_display }}</td>
+      <td>{{ mp.amount_kobo|naira }}</td>
+      <td>{{ mp.paid_on|date:"j M Y" }}</td>
+      <td>{{ mp.reference_no }}</td>
+      <td>{% for inv in row.invoices %}<a href="{% url 'fees:invoice' inv %}">Invoice {{ inv }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+      <td>{{ mp.recorded_by.get_full_name }}</td>
+      <td>{% if mp.photo_name %}<a href="{% url 'fees:teller_photo' mp.pk %}" target="_blank" rel="noopener">View</a>{% endif %}</td>
+      {% if can_act %}
+      <td>
+        {% if row.own %}<span class="muted">You recorded this payment. Another bursar or school admin must approve it.</span>
+        {% else %}
+        <form method="post" action="{% url 'fees:manual_decide' mp.pk %}">
+          {% csrf_token %}<input type="hidden" name="action" value="approve">
+          <button type="submit">Approve</button>
+        </form>
+        <form method="post" action="{% url 'fees:manual_decide' mp.pk %}">
+          {% csrf_token %}<input type="hidden" name="action" value="reject">
+          <label for="reason-{{ mp.pk }}">Reason for rejecting</label>
+          <textarea name="reason" id="reason-{{ mp.pk }}" rows="2" maxlength="500"></textarea>
+          {% for k, errs in reject_errors.items %}{% if k == mp.pk %}{% for e in errs %}<p class="error" role="alert">{{ e }}</p>{% endfor %}{% endif %}{% endfor %}
+          <button type="submit">Reject</button>
+        </form>
+        {% endif %}
+      </td>
+      {% endif %}
+    </tr>
+    {% endwith %}
+    {% empty %}<tr><td colspan="{% if can_act %}9{% else %}8{% endif %}">No payments are waiting for approval.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
