@@ -35,9 +35,9 @@ def validate_upload(upload: Any) -> None:
 
 
 def create_import_job(*, uploaded_file: Any, kind: str, user: Any, request: Any) -> ImportJob:
-    """Store the (already validated) file privately, create the job and queue it.
+    """Validate the upload, store it privately, create the job and queue it.
 
-    Validates the upload itself (``ValidationError``), so no caller can skip it.
+    Raises ``ValidationError`` for a bad upload (checked here, so no caller can skip it).
     Raises ``ImportNotReady`` (no current term) or ``PlanLimitExceeded`` (storage quota).
     """
     validate_upload(uploaded_file)
