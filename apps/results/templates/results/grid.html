@@ -1,0 +1,69 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Scores: {{ offering.subject.name }}{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card scoregrid" id="scoregrid"{% if data %} data-api-url="{% url 'api:scores' %}" data-offering="{{ offering.pk }}" data-term="{{ term.pk }}"{% if data.editable %} data-editable="1"{% endif %}{% endif %}>
+  {% csrf_token %}
+  <h1>{{ offering.subject.name }} — {{ offering.arm.display_name }}</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if problem %}
+  <p class="muted">{{ problem }}</p>
+  {% else %}
+  <p class="muted">Session {{ offering.session.name }}, {{ term.get_number_display }}. Sheet: {{ data.sheet_status|capfirst }}. Class results: {{ data.class_status|capfirst }}.</p>
+  <div class="banner" id="banner" role="alert" hidden></div>
+  {% if not data.editable %}<p class="banner" role="status">These scores are locked, so they can no longer be changed.</p>{% endif %}
+  {% if upload_errors %}
+  <div class="error" role="alert">
+    <strong>Nothing was saved.</strong>
+    <ul>{% for e in upload_errors %}<li>{{ e }}</li>{% endfor %}</ul>
+    {% if more_errors %}<p>and {{ more_errors }} more.</p>{% endif %}
+  </div>
+  {% endif %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th class="sticky">Student</th>
+          {% for c in data.components %}<th>{{ c.name }} <span class="muted">/{{ c.max_score|floatformat:"-1" }}</span></th>{% endfor %}
+          <th>Total</th>
+          {% if data.editable %}<th></th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+      {% for row in data.rows %}
+        <tr data-row="{{ row.student_id }}">
+          <td class="sticky">{{ row.name }} <span class="muted">{{ row.admission_number }}</span></td>
+          {% for cell in row.cells %}
+          <td class="num">
+            {% if data.editable %}
+            <input class="cell" type="text" inputmode="decimal" autocomplete="off"
+              aria-label="{{ row.name }}, {% for c in data.components %}{% if c.pk == cell.component_id %}{{ c.name }}{% endif %}{% endfor %}"
+              data-student="{{ row.student_id }}" data-component="{{ cell.component_id }}" data-version="{{ cell.version }}"
+              data-saved="{{ cell.value|default_if_none:'' }}" value="{{ cell.value|default_if_none:'' }}">
+            {% else %}{{ cell.value|default_if_none:"" }}{% endif %}
+          </td>
+          {% endfor %}
+          <td class="num" data-total>{{ row.total|default_if_none:"" }}</td>
+          {% if data.editable %}<td><span class="unsaved" data-unsaved hidden>not yet saved</span></td>{% endif %}
+        </tr>
+      {% empty %}<tr><td colspan="9" class="muted">No students take this subject.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p>
+    <a class="button" href="{% url 'results:grid_csv' offering.pk %}">Download CSV</a>
+    <a href="{% url 'results:my_sheets' %}">Back to my sheets</a>
+  </p>
+  {% if data.editable %}
+  <form method="post" enctype="multipart/form-data" action="{% url 'results:grid_upload' offering.pk %}">
+    {% csrf_token %}
+    <label for="csvfile">Upload a filled CSV (same columns as the download)</label>
+    <input id="csvfile" type="file" name="file" accept=".csv,text/csv" required>
+    <button type="submit">Upload CSV</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</div>
+{% if data.editable %}<script src="{% static 'results/scoregrid.js' %}" defer></script>{% endif %}
+{% endblock %}

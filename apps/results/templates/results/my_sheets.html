@@ -1,0 +1,26 @@
+{% extends "core/base.html" %}
+{% block title %}My score sheets{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>My score sheets</h1>
+  {% if not term %}<p class="muted">Set a current term first</p>{% else %}
+  <p class="muted">Session {{ term.session.name }}, {{ term.get_number_display }}</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Subject</th><th>Class</th><th>Sheet</th><th>Class results</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <td><a href="{% url 'results:grid' r.offering.pk %}">{{ r.offering.subject.name }}</a></td>
+          <td>{{ r.offering.arm.display_name }}</td>
+          <td>{{ r.sheet_status|capfirst }}</td>
+          <td>{{ r.class_status|capfirst }}</td>
+        </tr>
+      {% empty %}<tr><td colspan="4" class="muted">No subjects are assigned to you this session.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

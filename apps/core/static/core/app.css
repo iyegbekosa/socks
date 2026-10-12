@@ -38,3 +38,13 @@ dl.facts dd { margin:0 0 .5rem; overflow-wrap:anywhere; }
 .otp { font-size:1.6rem; letter-spacing:.08em; padding:.5rem .75rem; border:1px dashed var(--fg); display:inline-block; }
 button.danger { background:var(--danger); }
 @media print { .site-header, .no-print { display:none !important; } body { background:#fff; } .card { border:0; } }
+/* Score grid */
+.container.grid { max-width:64rem; }
+.scoregrid input.cell { width:4.5rem; padding:.4rem .4rem; text-align:right; }
+.scoregrid td.num { text-align:right; }
+.scoregrid input.cell[aria-invalid=true], .scoregrid input.cell.conflict { border-color:var(--danger); background:#fef3f2; }
+.scoregrid .cellmsg { display:block; font-size:.8rem; color:var(--danger); white-space:normal; max-width:9rem; }
+.scoregrid .unsaved { color:var(--muted); font-size:.85rem; }
+.scoregrid th.sticky, .scoregrid td.sticky { position:sticky; left:0; background:var(--card); }
+.banner { background:#fef3f2; border:1px solid #fecdca; color:var(--danger); border-radius:6px; padding:.6rem .75rem; margin-bottom:.75rem; }
+.banner[hidden] { display:none; }
