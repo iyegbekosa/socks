@@ -88,8 +88,10 @@ Mailpit (<http://localhost:8025>), the web server, a Celery worker and Celery Be
   proxy's IP, and the per-IP login limit (`LOGIN_IP_FAILURE_LIMIT`, 50 failures / 15 min)
   would hit the whole platform.
 - **`SECURE_PROXY_SSL=true`** when TLS ends at a proxy that sets `X-Forwarded-Proto`.
-  Without it, Django sees plain http and staff invite links in emails and SMS are built
-  as `http://` instead of `https://`.
+  Without it, Django sees plain http and every link the app builds from the request is
+  `http://` instead of `https://`: staff invite links in emails and SMS (including invites
+  sent by staff imports), password-reset links, and the portal URL printed on student
+  password sheets.
 - **Cloudinary console:** turn on *Settings → Security → "Allow delivery of PDF and ZIP
   files"*. Report cards and receipts are PDFs, and new accounts block them.
 - **Environment:** set `CLOUDINARY_URL`, `CLOUDINARY_ENV_PREFIX` (e.g. `prod`, which keeps
@@ -104,16 +106,32 @@ Mailpit (<http://localhost:8025>), the web server, a Celery worker and Celery Be
   status page, e.g. `PLATFORM_URL_TEMPLATE=https://{subdomain}.build2learn.ng`.
   `python manage.py check --deploy` fails (`core.E001`) if it contains `localhost` or does
   not start with `https://`.
-- **Email (invites, signup):** `EMAIL_HOST`, `EMAIL_PORT` (default 587), `EMAIL_HOST_USER`,
-  `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS` (default true) and `DEFAULT_FROM_EMAIL`. With
-  `DEBUG=false` the SMTP backend is used.
-- **SMS:** `SMS_BACKEND` is unset in production until the real provider lands in P5. Until
-  then **password reset by SMS is unavailable in production** (the reset page says so), and
-  invites go by email only. Do not set it to the console backend in production.
+- **Email (invites, signup, password reset) is required:** `EMAIL_HOST`, `EMAIL_PORT`
+  (default 587), `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS` (default true)
+  and `DEFAULT_FROM_EMAIL`. With `DEBUG=false` the SMTP backend is used. Do not deploy
+  without working SMTP: an emailed reset link is how staff recover their accounts and how
+  **parents recover student accounts** (the link goes to the main guardian's email).
+- **Password reset works without an SMS provider.** "Forgot password" sends a reset link by
+  email. `SMS_BACKEND` is unset in production until the real provider lands in P5; until
+  then reset codes by SMS are unavailable (the reset page says so) and invites go by email
+  only. SMS codes are added as a second channel once a provider is configured. Do not set
+  it to the console backend in production.
 - **Celery worker queues:** the worker must consume all four queues, highest priority first:
   `celery -A config worker -Q payments,notifications,default,reports` (as in
   `docker-compose.yml`). Tasks are routed to these queues (SMS goes to `notifications`); a
   worker pool that misses one leaves those tasks queued forever.
+- **Imports need a worker on `default`.** Student and staff import jobs run as Celery tasks
+  on the `default` queue; without a worker consuming it, uploads stay "Queued" forever.
+- **Fail stale imports from cron:** run `python manage.py fail_stale_imports` periodically
+  (e.g. every 15 minutes; `--older-than-minutes`, default 60). For every school it marks
+  import jobs still queued or running after that long as failed with a generic message,
+  deletes their uploaded files (which hold children's data) and audits the counts. It never
+  resumes a job; the school uploads the file again.
+- **Seed academics for schools created before P2:** run
+  `python manage.py seed_academics_defaults` once after deploying P2 (or
+  `--schema <name>` for one school). It adds the default class levels and subjects for each
+  school's levels offered. Levels are added only where a school has none, and subjects
+  likewise, so it never undoes a school's own changes and is safe to re-run.
 - **`SIGNUP_GLOBAL_DAILY_LIMIT`** (default 50): platform-wide cap on valid self-service
   signups per 24 hours. When it is hit, signup shows a "try again later" page and logs a
   WARNING (`Global signup cap reached`); raise it if real demand needs more.
