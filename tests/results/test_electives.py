@@ -228,3 +228,57 @@ def test_form_teacher_of_other_session_forbidden(client_a, world):
         client_a.force_login(world["ft"])
     url = reverse("results:electives", args=[world["elective"].pk])
     assert client_a.get(url).status_code == 403
+
+
+def _current_term(session):
+    from datetime import date
+
+    from apps.academics.models import Term
+
+    Term.objects.filter(is_current=True).update(is_current=False)
+    term, _ = Term.objects.update_or_create(
+        session=session,
+        number=1,
+        defaults={
+            "start_date": date(2026, 9, 1),
+            "end_date": date(2026, 12, 15),
+            "is_current": True,
+        },
+    )
+    return term
+
+
+@pytest.mark.parametrize("status", ["reviewed", "approved", "published"])
+def test_electives_refused_once_the_class_moved_past_draft(client_a, world, status):
+    from apps.academics.services import current_term
+    from apps.results.models import ClassResult
+    from apps.results.workflow import ResultsStateError
+
+    s = world["students"]
+    with schema_context("school_a"):
+        set_electives(world["elective"], [s[0].pk], by=world["admin"])
+        _current_term(world["elective"].session)
+        term = current_term()
+        assert term is not None and term.session_id == world["elective"].session_id
+        ClassResult.objects.create(arm=world["elective"].arm, term=term, status=status)
+        with pytest.raises(ResultsStateError, match="past draft"):
+            set_electives(world["elective"], [s[0].pk, s[1].pk], by=world["admin"])
+        client_a.force_login(world["ft"])
+    r = client_a.post(
+        reverse("results:electives", args=[world["elective"].pk]), {"students": [s[1].pk]}
+    )
+    assert r.status_code == 409 and "past draft" in r.content.decode()
+    with schema_context("school_a"):
+        assert {c.student_id for c in ElectiveChoice.objects.all()} == {s[0].pk}
+        assert AuditEvent.objects.filter(action="results.elective_changed").count() == 1
+
+
+def test_electives_change_while_the_class_is_draft(world):
+    from apps.results.models import ClassResult
+
+    s = world["students"]
+    with schema_context("school_a"):
+        term = _current_term(world["elective"].session)
+        ClassResult.objects.create(arm=world["elective"].arm, term=term)
+        set_electives(world["elective"], [s[2].pk], by=world["admin"])
+        assert {c.student_id for c in ElectiveChoice.objects.all()} == {s[2].pk}

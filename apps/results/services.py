@@ -4,11 +4,13 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from apps.academics.models import SubjectOffering
+from apps.academics.services import current_term
 from apps.audit.services import record
 from apps.core.locks import school_lock
 from apps.results import scope
 from apps.results.models import (
     AssessmentComponent,
+    ClassResult,
     ElectiveChoice,
     GradeBand,
     Score,
@@ -16,6 +18,10 @@ from apps.results.models import (
 )
 from apps.students.models import Enrolment, Student
 
+ELECTIVES_LOCKED = (
+    "This class's results have moved past draft, so its elective choices can no longer "
+    "change. A school admin can unlock the class first."
+)
 LOCKED_MESSAGE = (
     "Scores have already been entered for this section, so its assessment components "
     "can no longer be changed."
@@ -106,8 +112,22 @@ def set_electives(
     if offering.is_compulsory:
         raise ValidationError("This subject is compulsory, so it has no elective choices.")
     wanted = {int(i) for i in student_ids}
+    from apps.results.workflow import ResultsStateError
+
     with transaction.atomic():
         school_lock(f"electives:{offering.pk}")
+        # Who takes a subject decides which cells must be filled: once the class has moved
+        # past draft for the current term, a new taker would leave a submitted sheet blank.
+        term = current_term()
+        if term is not None and term.session_id == offering.session_id:
+            school_lock(f"results:{offering.arm_id}:{term.pk}")
+            status = (
+                ClassResult.objects.filter(arm_id=offering.arm_id, term=term)
+                .values_list("status", flat=True)
+                .first()
+            )
+            if status not in (None, ClassResult.Status.DRAFT):
+                raise ResultsStateError(ELECTIVES_LOCKED)
         valid = set(
             Enrolment.objects.filter(
                 arm_id=offering.arm_id,

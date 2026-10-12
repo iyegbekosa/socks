@@ -9,6 +9,7 @@ from apps.accounts.roles import SCHOOL_ADMIN, TEACHER, require_roles
 from apps.core.parsing import parse_id
 from apps.results.models import ElectiveChoice
 from apps.results.services import set_electives
+from apps.results.workflow import ResultsStateError
 from apps.students.models import Enrolment, Student
 
 
@@ -43,6 +44,7 @@ def electives_page(request, offering_pk):
     chosen = set(
         ElectiveChoice.objects.filter(offering=offering).values_list("student_id", flat=True)
     )
+    code = 200
     if request.method == "POST":
         parsed = [parse_id(i) for i in request.POST.getlist("students")]
         posted = [i for i in parsed if i is not None]
@@ -50,6 +52,10 @@ def electives_page(request, offering_pk):
             if len(posted) != len(parsed):
                 raise ValidationError("Choose only students from the list.")
             set_electives(offering, posted, by=request.user, request=request)
+        except ResultsStateError as exc:
+            code = 409
+            for message in exc.messages:
+                messages.error(request, message)
         except ValidationError as exc:
             for message in exc.messages:
                 messages.error(request, message)
@@ -62,4 +68,4 @@ def electives_page(request, offering_pk):
             return redirect("results:electives", offering_pk=offering.pk)
         chosen = set(posted)
     ctx.update(rows=[{"student": s, "checked": s.pk in chosen} for s in students])
-    return render(request, "results/electives.html", ctx)
+    return render(request, "results/electives.html", ctx, status=code)
