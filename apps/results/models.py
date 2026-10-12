@@ -403,3 +403,32 @@ class ReportCard(models.Model):
 
     def __repr__(self) -> str:
         return f"<ReportCard {self.pk}>"
+
+
+# --- reading a student's subject results ---------------------------------------------------
+# The summary's arm is the single source of truth for a (student, term): a student who moved
+# arm mid-term may still have rows from the old arm until it is recomputed, and every reader
+# must ignore them.
+
+
+def subject_results_for(summary: ResultSummary) -> models.QuerySet[SubjectResult]:
+    """The summary's student's subject results for its term, from the summary's arm only."""
+    return SubjectResult.objects.filter(
+        student_id=summary.student_id,
+        term_id=summary.term_id,
+        offering__arm_id=summary.arm_id,
+    )
+
+
+def in_summary_arm(qs: models.QuerySet[SubjectResult]) -> models.QuerySet[SubjectResult]:
+    """Keep only the rows whose offering is in the arm of that student's summary for that
+    term (``subject_results_for`` for many summaries in one query)."""
+    return qs.filter(
+        models.Exists(
+            ResultSummary.objects.filter(
+                student_id=models.OuterRef("student_id"),
+                term_id=models.OuterRef("term_id"),
+                arm_id=models.OuterRef("offering__arm_id"),
+            )
+        )
+    )

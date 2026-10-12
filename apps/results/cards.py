@@ -39,6 +39,7 @@ from apps.results.models import (
     ResultSummary,
     SubjectResult,
     Trait,
+    subject_results_for,
 )
 from apps.students.models import Student
 from apps.tenancy.limits import PlanLimitExceeded
@@ -164,9 +165,7 @@ def card_context(student: Student, term: Term, *, logo: Any = _LOAD) -> dict[str
     summary = ResultSummary.objects.select_related("arm__level").get(student=student, term=term)
     arm = summary.arm
     results = list(
-        SubjectResult.objects.filter(student=student, term=term)
-        .select_related("offering")
-        .order_by("subject_name", "pk")
+        subject_results_for(summary).select_related("offering").order_by("subject_name", "pk")
     )
     headers = _component_headers(results)
     third_term = term.number == Term.THIRD
@@ -430,5 +429,12 @@ def downloadable_card(user: Any, raw_student: Any, raw_term: Any) -> ReportCard 
     if kind == "staff":
         if not students_visible_to(user).filter(pk=student_id).exists():
             return None
-        return ReportCard.objects.filter(student_id=student_id, term_id=term_id).first()
+        # Only the card of the student's current class for the term (their summary's arm).
+        return ReportCard.objects.filter(
+            student_id=student_id,
+            term_id=term_id,
+            arm_id__in=ResultSummary.objects.filter(student_id=student_id, term_id=term_id).values(
+                "arm_id"
+            ),
+        ).first()
     return None

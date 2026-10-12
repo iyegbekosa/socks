@@ -30,6 +30,7 @@ from apps.results.models import (
     components_complete,
     components_for,
     grade_for,
+    in_summary_arm,
 )
 from apps.results.scope import ranked_students, required_offerings, students_taking
 
@@ -269,16 +270,18 @@ def prior_term_totals(
     """Each student's per-subject totals in the session's earlier terms, keyed by
     ``(student_id, term_id, subject_id)``.
 
-    Per (student, term, subject): the computed ``SubjectResult.total`` when present. Otherwise
-    the sum of that term's scores, but only when the student has a non-null score for every
-    component of the offering's section; a partly filled term counts as absent.
+    Per (student, term, subject): the computed ``SubjectResult.total`` from that term's
+    summary arm when present. Otherwise the sum of that term's scores, but only when the
+    student has a non-null score for every component of the offering's section; a partly
+    filled term counts as absent.
     """
     earlier = list(Term.objects.filter(session_id=term.session_id, number__lt=term.number))
     if not earlier:
         return {}
     found: dict[tuple[int, int, int], Decimal] = {}
-    for st, term_id, subject_id, total in SubjectResult.objects.filter(
-        student_id__in=student_ids, term__in=earlier
+    # Only the rows of each earlier term's summary arm (see ``in_summary_arm``).
+    for st, term_id, subject_id, total in in_summary_arm(
+        SubjectResult.objects.filter(student_id__in=student_ids, term__in=earlier)
     ).values_list("student_id", "term_id", "offering__subject_id", "total"):
         found[(st, term_id, subject_id)] = total
     per_section = dict(
@@ -412,13 +415,18 @@ def compute_class(arm: ClassArm, term: Term) -> None:
         for st in data.excluded:
             logger.warning("Student %s takes no subjects; left out of class ranking.", st)
 
-        written = [s.student_id for s in data.summaries]
         # Every offering of the arm: one that has lost its takers keeps no stale rows.
         SubjectResult.objects.filter(
             term=term, offering__arm=arm, offering__session_id=term.session_id
         ).delete()
         ResultSummary.objects.filter(term=term, arm=arm).delete()
-        ResultSummary.objects.filter(term=term, student_id__in=written).delete()
+        # This arm's students own their (student, term) results now: drop any computed rows
+        # from another arm they left this term. That arm keeps its stored positions and stats
+        # until it is recomputed (deliberate: no other arm's lock is taken here).
+        SubjectResult.objects.filter(term=term, student_id__in=ranked).exclude(
+            offering__arm=arm
+        ).delete()
+        ResultSummary.objects.filter(term=term, student_id__in=ranked).delete()
         SubjectResult.objects.bulk_create(
             SubjectResult(
                 student_id=r.student_id,

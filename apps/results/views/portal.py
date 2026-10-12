@@ -5,13 +5,19 @@ from typing import Any
 
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Exists, OuterRef
 from django.shortcuts import render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET
 
 from apps.results.compute import ordinal
-from apps.results.models import ClassResult, ReportCard, ResultSummary, SubjectResult
+from apps.results.models import (
+    ClassResult,
+    ReportCard,
+    ResultSummary,
+    SubjectResult,
+    in_summary_arm,
+)
 from apps.students.models import Student
 
 
@@ -42,15 +48,12 @@ def my_results(request):
     terms: list[dict[str, Any]] = []
     if student is not None and summaries:
         # One query for every subject row: each term's rows from the summary's own arm.
-        match = Q()
-        for s in summaries:
-            match |= Q(term_id=s.term_id, offering__arm_id=s.arm_id)
         by_term: dict[int, list[SubjectResult]] = defaultdict(list)
-        for r in (
-            SubjectResult.objects.filter(student=student)
-            .filter(match)
-            .order_by("subject_name", "pk")
-        ):
+        for r in in_summary_arm(
+            SubjectResult.objects.filter(
+                student=student, term_id__in=[s.term_id for s in summaries]
+            )
+        ).order_by("subject_name", "pk"):
             r.position_label = ordinal(r.position)  # type: ignore[attr-defined]
             by_term[r.term_id].append(r)
         cards = set(
