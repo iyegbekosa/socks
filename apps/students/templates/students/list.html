@@ -5,7 +5,7 @@
 <div class="card">
   <h1>Students</h1>
   {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
-  {% if can_admit %}<p><a class="button" href="{% url 'students:admit' %}">Admit a student</a></p>{% endif %}
+  {% if can_admit %}<p><a class="button" href="{% url 'students:admit' %}">Admit a student</a> <a class="button" href="{% url 'imports:new' %}">Import students</a></p>{% endif %}
   <form method="get" class="search-row">
     <div><label for="q">Search name or admission number</label><input type="text" id="q" name="q" value="{{ q }}"></div>
     <div><label for="arm">Class</label>

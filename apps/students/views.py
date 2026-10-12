@@ -32,6 +32,7 @@ from apps.students.models import Enrolment, Student
 from apps.students.passwords import issue_one_time_passwords
 from apps.students.services import (
     admit_student,
+    is_admission_number_clash,
     set_student_photo,
     update_student,
     withdraw_student,
@@ -40,7 +41,6 @@ from apps.tenancy.limits import PlanLimitExceeded
 
 PAGE_SIZE = 50
 JUST_ADMITTED = "students:just_admitted"
-UNIQUE_VIOLATION = "23505"
 PASSWORD_TTL_SECONDS = 300
 FULL_VIEW_ROLES = (SCHOOL_ADMIN, PROPRIETOR, PRINCIPAL)
 
@@ -159,15 +159,6 @@ def detail(request, pk: int):
     )
 
 
-def _is_admission_number_clash(exc: IntegrityError) -> bool:
-    """True only for the unique violation on accounts_user.admission_number."""
-    cause = exc.__cause__
-    if getattr(cause, "sqlstate", None) != UNIQUE_VIOLATION:
-        return False
-    diag = getattr(cause, "diag", None)
-    return "admission_number" in (getattr(diag, "constraint_name", None) or "")
-
-
 @never_cache
 @require_roles(SCHOOL_ADMIN)
 def admit(request):
@@ -200,7 +191,7 @@ def admit(request):
         except PlanLimitExceeded as exc:
             form.add_error(None, exc.message)
         except IntegrityError as exc:
-            if not _is_admission_number_clash(exc):
+            if not is_admission_number_clash(exc):
                 raise
             form.add_error("admission_number", "That admission number is already in use.")
         else:

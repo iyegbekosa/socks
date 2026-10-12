@@ -1,0 +1,43 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}Import{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Import from a spreadsheet</h1>
+  <p>Upload a CSV or Excel file. Good rows are saved and any problem rows are listed with the reason, so you can fix them and upload just those rows again.</p>
+  <p>Start from a template:
+    <a href="{% static 'imports/students_template.csv' %}" download>students template (.csv)</a> ·
+    <a href="{% static 'imports/students_template.xlsx' %}" download>students template (.xlsx)</a></p>
+  <p class="muted">Required: first_name, last_name, sex (M or F), date_of_birth (DD/MM/YYYY), class (for example JSS 1A), guardian_name, and guardian_phone or guardian_email. Imported students get no password: print one-time passwords per class from the students list afterwards.</p>
+  <form method="post" enctype="multipart/form-data" novalidate>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    <div class="form-grid">
+      {% with field=form.kind %}{% include "students/_field.html" %}{% endwith %}
+      {% with field=form.file %}{% include "students/_field.html" %}{% endwith %}
+    </div>
+    <button type="submit">Upload and import</button>
+  </form>
+  {% if jobs %}
+  <h2>Recent imports</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Started</th><th>Kind</th><th>Status</th><th>Saved</th><th>Problems</th></tr></thead>
+      <tbody>
+      {% for j in jobs %}
+        <tr>
+          <td><a href="{% url 'imports:detail' j.pk %}">{{ j.created_at|date:"d/m/Y H:i" }}</a></td>
+          <td>{{ j.get_kind_display }}</td>
+          <td>{{ j.get_status_display }}</td>
+          <td>{{ j.ok_rows }}</td>
+          <td>{{ j.error_rows }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  <p><a href="{% url 'students:list' %}">Back to students</a></p>
+</div>
+{% endblock %}

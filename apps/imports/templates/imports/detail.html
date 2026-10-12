@@ -1,0 +1,38 @@
+{% extends "core/base.html" %}
+{% block title %}Import #{{ job.pk }}{% endblock %}
+{% block head %}{% if job.is_active %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>{{ job.get_kind_display }} import #{{ job.pk }}</h1>
+  <p>File: {{ job.original_name|default:"—" }} · uploaded {{ job.created_at|date:"d/m/Y H:i" }} by {{ job.created_by.get_full_name|default:job.created_by }}</p>
+  <p role="status"><strong>Status: {{ job.get_status_display }}</strong>{% if job.is_active %} — this page refreshes every few seconds.{% endif %}</p>
+  {% if job.status == "failed" %}<p class="error" role="alert">{{ job.message }}</p>{% endif %}
+  <dl>
+    <dt>Rows in file</dt><dd>{{ job.total_rows }}</dd>
+    <dt>Saved</dt><dd>{{ job.ok_rows }}</dd>
+    <dt>Problems</dt><dd>{{ job.error_rows }}</dd>
+  </dl>
+  {% if job.arms %}
+  <h2>Classes that received students</h2>
+  <p class="muted">Imported students have no password yet. Open each class and choose “Print passwords for this class”.</p>
+  <ul>
+    {% for arm in job.arms %}<li><a href="{% url 'students:list' %}?arm={{ arm.id }}">{{ arm.name }}</a> ({{ arm.count }})</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% if job.errors %}
+  <h2>Rows with problems</h2>
+  <p><a href="{% url 'imports:errors_csv' job.pk %}">Download errors.csv</a></p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Row</th><th>Column</th><th>Problem</th></tr></thead>
+      <tbody>
+      {% for e in errors %}<tr><td>{{ e.row }}</td><td>{{ e.column|default:"—" }}</td><td>{{ e.message }}</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if more_errors %}<p class="muted">{{ more_errors }} more in errors.csv.</p>{% endif %}
+  {% endif %}
+  <p><a href="{% url 'imports:new' %}">Import another file</a> · <a href="{% url 'students:list' %}">Students</a></p>
+</div>
+{% endblock %}

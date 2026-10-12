@@ -21,6 +21,7 @@ dependencies = [
     "django-otp>=1.5",
     "segno>=1.6",
     "Pillow>=10.4",
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -48,14 +49,17 @@ select = ["E", "F", "I", "B", "UP", "DJ"]
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings"
 testpaths = ["tests"]
-markers = ["cloudinary: hits the live Cloudinary API (needs CLOUDINARY_URL)"]
+markers = [
+    "cloudinary: hits the live Cloudinary API (needs CLOUDINARY_URL)",
+    "slow: slow tests (still run in CI; deselect locally with -m \"not slow\")",
+]
 
 [tool.mypy]
 python_version = "3.12"
 plugins = ["mypy_django_plugin.main"]
 
 [[tool.mypy.overrides]]
-module = ["cloudinary.*", "django_tenants.*", "environ.*", "pythonjsonlogger.*", "celery.*", "kombu.*", "rest_framework.*", "factory.*", "django_otp.*", "segno.*"]
+module = ["cloudinary.*", "django_tenants.*", "environ.*", "pythonjsonlogger.*", "celery.*", "kombu.*", "rest_framework.*", "factory.*", "django_otp.*", "segno.*", "openpyxl.*"]
 ignore_missing_imports = true
 
 [tool.django-stubs]

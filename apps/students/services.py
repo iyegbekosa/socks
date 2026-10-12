@@ -11,7 +11,7 @@ from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.core.files.storage import default_storage
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.academics.models import AcademicSession, ClassArm
@@ -36,6 +36,7 @@ PHOTO_FORMATS = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG", ".webp": "WEBP"
 PHOTO_MAX_PIXELS = 4096 * 4096
 PHOTO_SIDE = 600
 PHOTO_QUALITY = 80
+UNIQUE_VIOLATION = "23505"
 
 # Fields update_student may change. Status, user and consent have their own services.
 EDITABLE_FIELDS = (
@@ -70,6 +71,15 @@ class GuardianData:
             f"{prefix}_phone": self.phone or None,
             f"{prefix}_email": self.email or "",
         }
+
+
+def is_admission_number_clash(exc: IntegrityError) -> bool:
+    """True only for the unique violation on accounts_user.admission_number."""
+    cause = exc.__cause__
+    if getattr(cause, "sqlstate", None) != UNIQUE_VIOLATION:
+        return False
+    diag = getattr(cause, "diag", None)
+    return "admission_number" in (getattr(diag, "constraint_name", None) or "")
 
 
 def _age_on(dob: date, today: date) -> int:
