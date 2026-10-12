@@ -1,0 +1,36 @@
+{% extends "core/base.html" %}
+{% block title %}My results{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>My results</h1>
+  {% for entry in terms %}
+  <section>
+    <h2>{{ entry.term.get_number_display }} ({{ entry.term.session.name }})</h2>
+    <p class="muted">{{ entry.summary.arm.display_name }}</p>
+    <dl class="facts">
+      <dt>Total</dt><dd>{{ entry.summary.total }}</dd>
+      <dt>Average</dt><dd>{{ entry.summary.average }}</dd>
+      <dt>Position</dt><dd>{{ entry.position }} out of {{ entry.summary.out_of }}</dd>
+    </dl>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Subject</th><th>Total</th><th>Grade</th><th>Remark</th><th>Position</th></tr></thead>
+        <tbody>
+        {% for r in entry.subjects %}
+          <tr><td>{{ r.subject_name }}</td><td>{{ r.total }}</td><td>{{ r.grade }}</td><td>{{ r.remark }}</td><td>{{ r.position_label }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if entry.has_card %}
+    <p><a href="{% url 'results:report_card' entry.summary.student_id entry.term.pk %}">Download report card</a></p>
+    {% else %}
+    <p class="muted">Your report card is being prepared. Check back soon.</p>
+    {% endif %}
+  </section>
+  {% empty %}
+  <p class="muted">No published results yet.</p>
+  {% endfor %}
+  <p><a href="{% url 'home' %}">Back to my profile</a></p>
+</div>
+{% endblock %}

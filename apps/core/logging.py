@@ -11,7 +11,11 @@ REDACTED = "[REDACTED]"
 # Celery tasks whose arguments are secret (phone numbers, OTP codes). Celery's trace and
 # worker loggers attach the task context as ``extra={"data": {...}}``, args included.
 SECRET_ARG_TASKS = frozenset(
-    {"apps.core.sms.deliver_sms", "apps.accounts.tasks.send_password_reset"}
+    {
+        "apps.core.sms.deliver_sms",
+        "apps.accounts.tasks.send_password_reset",
+        "apps.results.tasks.notify_published_task",
+    }
 )
 _TASK_ARG_KEYS = ("args", "kwargs", "argsrepr", "kwargsrepr")
 

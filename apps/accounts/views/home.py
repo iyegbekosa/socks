@@ -1,5 +1,6 @@
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import render
+from django.urls import reverse
 
 from apps.accounts.roles import BURSAR, PRINCIPAL, PROPRIETOR, SCHOOL_ADMIN, TEACHER
 
@@ -35,5 +36,10 @@ def _student_home(request):
     return render(
         request,
         "students/portal_profile.html",
-        {"student": student, "enrolment": enrolment, "term": term},
+        {
+            "student": student,
+            "enrolment": enrolment,
+            "term": term,
+            "results_url": reverse("results:my_results"),
+        },
     )

@@ -56,11 +56,12 @@ class ResultsStateError(ValidationError):
 
 
 def on_class_published(arm: ClassArm, term: Term) -> None:
-    """Runs on commit after a class is published: queues its report cards. Guardian
-    notifications (Task 10) hook in here too."""
-    from apps.results.tasks import generate_report_cards_task
+    """Runs on commit after a class is published: queues its report cards and the guardian
+    notifications."""
+    from apps.results.tasks import generate_report_cards_task, notify_published_task
 
     generate_report_cards_task.apply_async(args=[arm.pk, term.pk], queue="reports")
+    notify_published_task.apply_async(args=[arm.pk, term.pk], queue="notifications")
 
 
 def on_class_unlocked(arm: ClassArm, term: Term) -> None:

@@ -97,3 +97,75 @@ def make_card(student, term, arm, *, status: str = "published"):
         file_name=f"report_cards/{term.session_id}/{term.pk}/{student.pk}.pdf",
         generated_at=timezone.now(),
     )
+
+
+def accuracy_world() -> SimpleNamespace:
+    """In the active schema: the Task 7 accuracy dataset (6 students, 3 subjects) entered and
+    submitted for the current 1st term, plus a form teacher, a principal, a verified school
+    admin, a proprietor and a teacher who is not the form teacher. Not yet computed."""
+    from apps.academics.models import FormTeacher, Term
+    from apps.accounts.roles import set_roles
+    from tests.accounts.factories import StaffFactory
+    from tests.results.test_accuracy import (
+        SCORES,
+        SUBJECTS,
+        _enter,
+        _jss_structure,
+        _offerings,
+        _submit,
+        _term,
+    )
+    from tests.students.factories import StudentProfileFactory, default_arm, default_session
+
+    def staff(*roles):
+        user = StaffFactory()
+        set_roles(user, list(roles), by=None)
+        return user
+
+    Term.objects.filter(is_current=True).update(is_current=False)
+    session = default_session()
+    term = _term(session, 1, current=True)
+    term2 = _term(session, 2)
+    arm = default_arm()
+    comps = list(_jss_structure())
+    teacher = StaffFactory(first_name="Ada", last_name="Okafor")
+    set_roles(teacher, ["teacher"], by=None)
+    offerings = _offerings(arm, session, teacher, SUBJECTS)
+    students = {}
+    for letter, rows in SCORES.items():
+        st = StudentProfileFactory(first_name="Pupil", last_name=letter)
+        students[letter] = st
+        for name, values in zip(SUBJECTS, rows, strict=True):
+            _enter(st, offerings[name], term, comps, values, teacher)
+    _submit(offerings.values(), term)
+    ft = staff("teacher")
+    FormTeacher.objects.create(arm=arm, session=session, teacher=ft)
+    admin = staff("school_admin")
+    admin.is_verified = lambda: True
+    return SimpleNamespace(
+        session=session,
+        term=term,
+        term2=term2,
+        arm=arm,
+        comps=comps,
+        teacher=teacher,
+        offerings=offerings,
+        students=students,
+        ft=ft,
+        principal=staff("principal"),
+        admin=admin,
+        proprietor=staff("proprietor"),
+    )
+
+
+def approve_and_compute(world) -> None:
+    """Move the accuracy class to ``approved`` through ``approve_class`` and compute it, as
+    the on-commit compute task would."""
+    from apps.results.models import ClassResult
+    from apps.results.workflow import approve_class, run_compute
+
+    ClassResult.objects.update_or_create(
+        arm=world.arm, term=world.term, defaults={"status": ClassResult.Status.REVIEWED}
+    )
+    approve_class(world.arm, world.term, by=world.principal)
+    run_compute(world.arm, world.term)

@@ -707,11 +707,15 @@ def test_unlock_draft_class_without_sheets_is_a_state_error(w):
 
 
 def test_hooks_delegate_to_report_cards():
-    """Publishing queues report cards; unlocking removes them (end to end in test_cards)."""
+    """Publishing queues report cards and notifications; unlocking removes the cards."""
     arm, term = SimpleNamespace(pk=1), SimpleNamespace(pk=2)
-    with mock.patch("apps.results.tasks.generate_report_cards_task.apply_async") as enqueue:
+    with (
+        mock.patch("apps.results.tasks.generate_report_cards_task.apply_async") as enqueue,
+        mock.patch("apps.results.tasks.notify_published_task.apply_async") as notify,
+    ):
         assert workflow.on_class_published(arm, term) is None
     enqueue.assert_called_once_with(args=[1, 2], queue="reports")
+    notify.assert_called_once_with(args=[1, 2], queue="notifications")
     with mock.patch("apps.results.cards.remove_report_cards") as remove:
         assert workflow.on_class_unlocked(arm, term) is None
     remove.assert_called_once_with(arm, term)

@@ -1,0 +1,44 @@
+{% extends "core/base.html" %}
+{% block title %}Broadsheet: {{ arm.display_name }}{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Broadsheet — {{ arm.display_name }}</h1>
+  <p class="muted">Session {{ term.session.name }}, {{ term.get_number_display }}.</p>
+  {% if not ready %}
+  <p role="status">Results not ready. The broadsheet appears once the class's results are approved and computed.</p>
+  {% else %}
+  <p>{{ out_of }} student{{ out_of|pluralize }} ranked. <a href="{% url 'results:broadsheet_csv' arm.pk term.pk %}">Download CSV</a></p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Admission no.</th><th>Name</th>
+          {% for s in subjects %}<th>{{ s.name }}</th>{% endfor %}
+          <th>Total</th><th>Average</th><th>Position</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td>{{ row.admission_number }}</td><td>{{ row.name }}</td>
+          {% for t in row.totals %}<td>{% if t is not None %}{{ t }}{% endif %}</td>{% endfor %}
+          <td>{{ row.total }}</td><td>{{ row.average }}</td><td>{{ row.position }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+      <tfoot>
+      {% for line in footer %}
+        <tr>
+          <th colspan="2" scope="row">{{ line.label }}</th>
+          {% for v in line.values %}<td>{% if v is not None %}{{ v }}{% endif %}</td>{% endfor %}
+          <td colspan="3"></td>
+        </tr>
+      {% endfor %}
+      </tfoot>
+    </table>
+  </div>
+  {% endif %}
+  <p><a href="{% url 'results:class_status' arm.pk %}">Back to class results</a></p>
+</div>
+{% endblock %}

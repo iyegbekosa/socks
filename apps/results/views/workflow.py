@@ -75,6 +75,7 @@ def _context(request, arm: ClassArm, term: Term) -> dict[str, Any]:
         "rows": rows,
         "submitted": submitted,
         "is_ft": is_form_teacher(user, arm, term),
+        "show_broadsheet": status in (ClassResult.Status.APPROVED, ClassResult.Status.PUBLISHED),
         "can_review": status == ClassResult.Status.DRAFT and is_form_teacher(user, arm, term),
         "can_approve": status == ClassResult.Status.REVIEWED and user.has_role(PRINCIPAL),
         "can_publish": status == ClassResult.Status.APPROVED

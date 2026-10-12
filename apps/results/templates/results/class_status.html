@@ -32,6 +32,7 @@
     </table>
   </div>
   {% if is_ft %}<p><a href="{% url 'results:class_comments' arm.pk %}">Comments &amp; ratings</a></p>{% endif %}
+  {% if show_broadsheet %}<p><a href="{% url 'results:broadsheet' arm.pk term.pk %}">Broadsheet</a></p>{% endif %}
   {% if can_review %}
   <form method="post" action="{% url 'results:class_review' arm.pk %}">{% csrf_token %}
     <p class="muted">Check every subject is submitted and every student has your comment.</p>
