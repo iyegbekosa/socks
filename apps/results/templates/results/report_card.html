@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Report card</title>
+<style>
+  @page {
+    size: A4 portrait;
+    margin: 12mm 10mm 14mm 10mm;
+    @bottom-right { content: "Page " counter(page) " of " counter(pages); font-family: "DejaVu Sans", "Helvetica", "Arial", sans-serif; font-size: 6.5pt; color: #666; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "DejaVu Sans", "Helvetica", "Arial", sans-serif; font-size: 8pt; color: #111; line-height: 1.3; }
+  h1, h2, h3, p { margin: 0; }
+  .school { display: flex; align-items: center; gap: 4mm; border-bottom: 1.2mm solid {{ primary_color }}; padding-bottom: 3mm; }
+  .school .logo { max-height: 20mm; max-width: 30mm; }
+  .school h1 { font-size: 15pt; color: {{ primary_color }}; }
+  .school .motto { font-style: italic; font-size: 8.5pt; }
+  .school .address { font-size: 7.5pt; color: #444; }
+  .title { margin: 3mm 0 2mm; font-size: 10.5pt; text-transform: uppercase; letter-spacing: 0.04em; color: {{ primary_color }}; }
+  table { border-collapse: collapse; width: 100%; }
+  .facts td { padding: 0.8mm 1.5mm; vertical-align: top; }
+  .facts .label { color: #555; width: 22mm; }
+  .facts .value { font-weight: bold; }
+  .subjects { margin-top: 3mm; font-size: {% if third_term %}6.8pt{% else %}7.5pt{% endif %}; }
+  .subjects thead { display: table-header-group; }
+  .subjects tr { page-break-inside: avoid; break-inside: avoid; }
+  .subjects th { background: {{ primary_color }}; color: #fff; font-weight: bold; padding: 1mm 0.8mm; border: 0.2mm solid {{ primary_color }}; }
+  .subjects td { padding: 0.9mm 0.8mm; border: 0.2mm solid #bbb; text-align: center; white-space: nowrap; }
+  .subjects td.subject { text-align: left; white-space: normal; }
+  .subjects tbody tr:nth-child(even) td { background: #f4f4f4; }
+  .subjects .cum { border-left: 0.6mm solid {{ accent_color }}; }
+  .summary { margin-top: 3mm; }
+  .summary td { border: 0.2mm solid #bbb; padding: 1.2mm 2mm; }
+  .summary .label { color: #555; }
+  .summary .value { font-weight: bold; font-size: 9pt; }
+  .cols { display: flex; gap: 4mm; margin-top: 3mm; }
+  .cols > div { flex: 1; }
+  h3 { font-size: 8.5pt; margin-bottom: 1mm; color: {{ primary_color }}; border-bottom: 0.4mm solid {{ accent_color }}; }
+  .ratings td { padding: 0.6mm 1mm; border-bottom: 0.2mm solid #ddd; }
+  .ratings td.r { text-align: center; width: 10mm; font-weight: bold; }
+  .comments { margin-top: 3mm; }
+  .comment { margin-bottom: 2mm; break-inside: avoid; }
+  .comment p { border: 0.2mm solid #bbb; padding: 1.5mm 2mm; min-height: 9mm; white-space: pre-wrap; }
+  .key td { padding: 0.4mm 1mm; }
+  .key td.g { font-weight: bold; }
+  .muted { color: #666; }
+  .next { margin-top: 2mm; font-weight: bold; }
+</style>
+</head>
+<body>
+<header class="school">
+  {% if logo %}<img class="logo" src="{{ logo }}" alt="">{% endif %}
+  <div>
+    <h1>{{ school_name }}</h1>
+    {% if motto %}<p class="motto">{{ motto }}</p>{% endif %}
+    {% if address %}<p class="address">{{ address }}</p>{% endif %}
+  </div>
+</header>
+
+<h2 class="title">Report card</h2>
+<table class="facts">
+  <tr>
+    <td class="label">Name</td><td class="value">{{ student_name }}</td>
+    <td class="label">Admission no.</td><td class="value">{{ admission_number }}</td>
+  </tr>
+  <tr>
+    <td class="label">Class</td><td class="value">{{ class_name }}</td>
+    <td class="label">Session</td><td class="value">{{ session_name }}</td>
+  </tr>
+  <tr>
+    <td class="label">Term</td><td class="value">{{ term_label }}</td>
+    <td class="label">Attendance</td>
+    <td class="value">{% if days_present is not None and days_open is not None %}{{ days_present }} / {{ days_open }} days present{% else %}—{% endif %}</td>
+  </tr>
+</table>
+
+<table class="subjects">
+  <thead>
+    <tr>
+      <th>Subject</th>
+      {% for c in components %}<th>{{ c.name }} ({{ c.max }})</th>{% endfor %}
+      <th>Total</th><th>Grade</th><th>Remark</th><th>Position</th>
+      <th>Highest</th><th>Lowest</th><th>Class avg</th>
+      {% if third_term %}<th class="cum">1st term</th><th>2nd term</th><th>3rd term</th><th>Cumulative</th>{% endif %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td class="subject">{{ r.subject }}</td>
+      {% for s in r.scores %}<td>{% if s is None %}—{% else %}{{ s }}{% endif %}</td>{% endfor %}
+      <td><strong>{{ r.total }}</strong></td>
+      <td>{{ r.grade }}</td>
+      <td>{{ r.remark }}</td>
+      <td>{{ r.position }}</td>
+      <td>{{ r.highest }}</td>
+      <td>{{ r.lowest }}</td>
+      <td>{{ r.class_average }}</td>
+      {% if third_term %}
+        {% for t in r.term_totals %}<td{% if forloop.first %} class="cum"{% endif %}>{% if t is None %}—{% else %}{{ t }}{% endif %}</td>{% endfor %}
+        <td>{% if r.cumulative is None %}—{% else %}{{ r.cumulative }}{% endif %}</td>
+      {% endif %}
+    </tr>
+    {% empty %}
+    <tr><td class="subject muted" colspan="{{ components|length|add:8 }}">No subjects</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<table class="summary">
+  <tr>
+    <td><span class="label">Total</span><br><span class="value">{{ total }}</span></td>
+    <td><span class="label">Average</span><br><span class="value">{{ average }}</span></td>
+    <td><span class="label">Subjects</span><br><span class="value">{{ subjects_count }}</span></td>
+    <td><span class="label">Class position</span><br><span class="value">{{ position }} out of {{ out_of }}</span></td>
+    {% if third_term %}<td><span class="label">Cumulative average</span><br><span class="value">{% if cumulative_average is None %}—{% else %}{{ cumulative_average }}{% endif %}</span></td>{% endif %}
+  </tr>
+</table>
+
+<div class="cols">
+  <div>
+    <h3>Affective traits</h3>
+    <table class="ratings">
+      {% for t in ratings.affective %}<tr><td>{{ t.name }}</td><td class="r">{{ t.value|default:"—" }}</td></tr>{% empty %}<tr><td class="muted">None rated</td></tr>{% endfor %}
+    </table>
+  </div>
+  <div>
+    <h3>Psychomotor skills</h3>
+    <table class="ratings">
+      {% for t in ratings.psychomotor %}<tr><td>{{ t.name }}</td><td class="r">{{ t.value|default:"—" }}</td></tr>{% empty %}<tr><td class="muted">None rated</td></tr>{% endfor %}
+    </table>
+    <p class="muted">Rated 1 (lowest) to 5 (highest).</p>
+  </div>
+  <div>
+    <h3>Grading key</h3>
+    <table class="key">
+      {% for b in grading_key %}<tr><td class="g">{{ b.grade }}</td><td>{{ b.lower }} – {{ b.upper }}</td><td>{{ b.remark }}</td></tr>{% endfor %}
+    </table>
+  </div>
+</div>
+
+<div class="comments">
+  <div class="comment">
+    <h3>Class teacher's comment</h3>
+    <p>{{ class_teacher_comment|default:"—" }}</p>
+  </div>
+  <div class="comment">
+    <h3>Principal's comment</h3>
+    <p>{{ principal_comment|default:"—" }}</p>
+  </div>
+</div>
+
+{% if next_term_start %}<p class="next">Next term begins: {{ next_term_start|date:"j F Y" }}</p>{% endif %}
+</body>
+</html>

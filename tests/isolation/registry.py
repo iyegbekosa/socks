@@ -147,6 +147,14 @@ def _reviewed_class_result():
     return ClassResult.objects.create(arm=w.arm, term=w.term, status=ClassResult.Status.REVIEWED)
 
 
+def _published_report_card():
+    """A stored report card (published class, computed summary) in the active schema."""
+    from tests.results.factories import make_card, make_sheet_world
+
+    w = make_sheet_world()
+    return make_card(w.students[0], w.term, w.arm)
+
+
 def _tiny_csv() -> dict:
     from django.core.files.uploadedfile import SimpleUploadedFile
 
@@ -222,6 +230,15 @@ ISOLATION_CASES: list[IsolationCase] = [
         "POST",
         url=lambda r: f"/api/v1/results/{r.arm_id}/approve",
         make_obj=_reviewed_class_result,
+    ),
+    # School A's admin asks for school B's card: refused (404, no redirect);
+    # tests/api/test_report_card_api.py::test_admin_in_a_cannot_reach_school_b_card covers B's
+    # student/term ids that do not exist in school A.
+    IsolationCase(
+        "api:report_card",
+        "GET",
+        url=lambda c: f"/api/v1/results/{c.student_id}/{c.term_id}/report-card",
+        make_obj=_published_report_card,
     ),
 ]
 

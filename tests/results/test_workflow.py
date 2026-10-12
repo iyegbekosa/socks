@@ -706,10 +706,15 @@ def test_unlock_draft_class_without_sheets_is_a_state_error(w):
         unlock_class(w.arm, w.term, sheets=[], reason="fix", by=w.admin)
 
 
-def test_hooks_are_plain_no_ops():
+def test_hooks_delegate_to_report_cards():
+    """Publishing queues report cards; unlocking removes them (end to end in test_cards)."""
     arm, term = SimpleNamespace(pk=1), SimpleNamespace(pk=2)
-    assert workflow.on_class_published(arm, term) is None
-    assert workflow.on_class_unlocked(arm, term) is None
+    with mock.patch("apps.results.tasks.generate_report_cards_task.apply_async") as enqueue:
+        assert workflow.on_class_published(arm, term) is None
+    enqueue.assert_called_once_with(args=[1, 2], queue="reports")
+    with mock.patch("apps.results.cards.remove_report_cards") as remove:
+        assert workflow.on_class_unlocked(arm, term) is None
+    remove.assert_called_once_with(arm, term)
 
 
 def test_hooks_not_called_without_commit(w, django_capture_on_commit_callbacks):

@@ -3,6 +3,7 @@ from typing import Any
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import connection
 from django.db.models import Prefetch, Q, QuerySet
+from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from rest_framework import exceptions, status
 from rest_framework.generics import ListAPIView
@@ -34,6 +35,7 @@ from apps.core.errors import ApiError
 from apps.core.parsing import parse_id
 from apps.imports.models import ImportJob
 from apps.imports.services import ImportNotReady, create_import_job
+from apps.results.cards import downloadable_card
 from apps.results.scope import can_enter_scores
 from apps.results.scores import (
     CellInput,
@@ -42,6 +44,7 @@ from apps.results.scores import (
     save_cells,
     sheet_rows,
 )
+from apps.results.views.cards import signed_redirect
 from apps.results.workflow import ResultsStateError, approve_class
 from apps.students.models import Enrolment, Student
 from apps.tenancy.limits import PlanLimitExceeded
@@ -303,3 +306,20 @@ class ResultsApproveView(APIView):
         except ResultsStateError as exc:
             raise ApiError("RESULTS_STATE", " ".join(exc.messages), 409) from exc
         return Response({"status": "approved"}, status=status.HTTP_202_ACCEPTED)
+
+
+class ReportCardView(APIView):
+    """GET: 302 to a short-lived signed URL for a student's report card (``no-store``).
+
+    Students: their own card, once their class for the term is published. Staff: students in
+    ``students_visible_to``. Anything else, including a missing card, is a §6.5 404.
+    """
+
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["get", "head", "options"]
+
+    def get(self, request: Request, student: str, term: str) -> HttpResponseRedirect:
+        card = downloadable_card(request.user, student, term)
+        if card is None:
+            raise ApiError("NOT_FOUND", "Report card not found.", 404)
+        return signed_redirect(card.file_name)

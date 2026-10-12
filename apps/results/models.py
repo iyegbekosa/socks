@@ -215,6 +215,8 @@ class ClassResult(models.Model):
     )
     # Why the last computation after approval failed (ids and counts only); empty when none.
     compute_error = models.CharField(max_length=300, blank=True, default="")
+    # Why the last report-card run stopped early (e.g. "Storage limit reached"); empty when none.
+    cards_error = models.CharField(max_length=100, blank=True, default="")
 
     class Meta:
         constraints = [
@@ -374,3 +376,30 @@ class ResultSummary(models.Model):
 
     def __repr__(self) -> str:
         return f"<ResultSummary {self.pk}>"
+
+
+class ReportCard(models.Model):
+    """A generated report-card PDF, stored privately at ``file_name`` (FR-09).
+
+    ``arm`` is the class the card was generated for, so unlocking that class can find it.
+    ``version`` goes up by one each time the card is regenerated.
+    """
+
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="report_cards")
+    term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="report_cards")
+    arm = models.ForeignKey(ClassArm, on_delete=models.PROTECT, related_name="report_cards")
+    file_name = models.CharField(max_length=255)
+    generated_at = models.DateTimeField()
+    version = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["student", "term"], name="results_reportcard_unique"),
+        ]
+        indexes = [models.Index(fields=["term", "arm"], name="results_card_term_arm_idx")]
+
+    def __str__(self) -> str:
+        return f"report card {self.pk}"
+
+    def __repr__(self) -> str:
+        return f"<ReportCard {self.pk}>"

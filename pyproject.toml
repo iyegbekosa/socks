@@ -35,6 +35,7 @@ dev = [
     "mypy",
     "django-stubs",
     "pgserver",  # embedded PostgreSQL for scripts/dev_postgres.py
+    "pypdf",  # report-card PDF text in tests
 ]
 
 [tool.setuptools.packages.find]

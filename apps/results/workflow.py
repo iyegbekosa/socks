@@ -56,12 +56,18 @@ class ResultsStateError(ValidationError):
 
 
 def on_class_published(arm: ClassArm, term: Term) -> None:
-    """Runs on commit after a class is published. Report cards (Task 9) and guardian
-    notifications (Task 10) hook in here."""
+    """Runs on commit after a class is published: queues its report cards. Guardian
+    notifications (Task 10) hook in here too."""
+    from apps.results.tasks import generate_report_cards_task
+
+    generate_report_cards_task.apply_async(args=[arm.pk, term.pk], queue="reports")
 
 
 def on_class_unlocked(arm: ClassArm, term: Term) -> None:
-    """Runs on commit after a class is unlocked. Report-card removal (Task 9) hooks in here."""
+    """Runs on commit after a class is unlocked: removes its report cards (files on commit)."""
+    from apps.results.cards import remove_report_cards
+
+    remove_report_cards(arm, term)
 
 
 # --- helpers -------------------------------------------------------------------------------

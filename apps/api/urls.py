@@ -15,4 +15,9 @@ urlpatterns = [
         views.ResultsApproveView.as_view(),
         name="results_approve",
     ),
+    path(
+        "results/<str:student>/<str:term>/report-card",
+        views.ReportCardView.as_view(),
+        name="report_card",
+    ),
 ]

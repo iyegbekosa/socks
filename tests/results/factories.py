@@ -65,3 +65,35 @@ def make_sheet_world() -> SimpleNamespace:
         students=students,
         withdrawn=withdrawn,
     )
+
+
+def make_card(student, term, arm, *, status: str = "published"):
+    """In the active schema: the student's computed summary, the class result in ``status``
+    and a stored report card row (no file is uploaded)."""
+    from decimal import Decimal
+
+    from django.utils import timezone
+
+    from apps.results.models import ClassResult, ReportCard, ResultSummary
+
+    ResultSummary.objects.update_or_create(
+        student=student,
+        term=term,
+        defaults={
+            "arm": arm,
+            "subjects_count": 1,
+            "total": Decimal("50"),
+            "average": Decimal("50"),
+            "position": 1,
+            "out_of": 1,
+            "computed_at": timezone.now(),
+        },
+    )
+    ClassResult.objects.update_or_create(arm=arm, term=term, defaults={"status": status})
+    return ReportCard.objects.create(
+        student=student,
+        term=term,
+        arm=arm,
+        file_name=f"report_cards/{term.session_id}/{term.pk}/{student.pk}.pdf",
+        generated_at=timezone.now(),
+    )

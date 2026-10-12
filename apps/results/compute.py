@@ -263,16 +263,17 @@ def _ids(values: Iterable[int]) -> str:
     return ", ".join(str(v) for v in sorted(values))
 
 
-def _prior_totals(student_ids: Sequence[int], term: Term) -> dict[int, dict[int, list[Decimal]]]:
-    """Each student's per-subject totals in the session's earlier terms, in term order.
+def prior_term_totals(
+    student_ids: Sequence[int], term: Term
+) -> dict[tuple[int, int, int], Decimal]:
+    """Each student's per-subject totals in the session's earlier terms, keyed by
+    ``(student_id, term_id, subject_id)``.
 
     Per (student, term, subject): the computed ``SubjectResult.total`` when present. Otherwise
     the sum of that term's scores, but only when the student has a non-null score for every
     component of the offering's section; a partly filled term counts as absent.
     """
-    earlier = list(
-        Term.objects.filter(session_id=term.session_id, number__lt=term.number).order_by("number")
-    )
+    earlier = list(Term.objects.filter(session_id=term.session_id, number__lt=term.number))
     if not earlier:
         return {}
     found: dict[tuple[int, int, int], Decimal] = {}
@@ -306,6 +307,18 @@ def _prior_totals(student_ids: Sequence[int], term: Term) -> dict[int, dict[int,
             continue
         key = (row["student_id"], row["term_id"], row["offering__subject_id"])
         found.setdefault(key, subject_total([row["total"]]))
+    return found
+
+
+def _prior_totals(student_ids: Sequence[int], term: Term) -> dict[int, dict[int, list[Decimal]]]:
+    """Each student's per-subject totals in the session's earlier terms, in term order
+    (see ``prior_term_totals``)."""
+    found = prior_term_totals(student_ids, term)
+    if not found:
+        return {}
+    earlier = Term.objects.filter(session_id=term.session_id, number__lt=term.number).order_by(
+        "number"
+    )
     out: dict[int, dict[int, list[Decimal]]] = defaultdict(lambda: defaultdict(list))
     for t in earlier:
         for (st, term_id, subject_id), total in sorted(found.items()):
