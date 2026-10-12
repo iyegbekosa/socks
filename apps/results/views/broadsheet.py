@@ -123,7 +123,7 @@ def _csv(data: dict[str, Any]) -> str:
     out = io.StringIO(newline="")
     writer = csv.writer(out)
     writer.writerow(
-        ["admission_number", "name", *(s["name"] for s in data["subjects"])]
+        ["admission_number", "name", *(safe_cell(s["name"]) for s in data["subjects"])]
         + ["total", "average", "position"]
     )
     for row in data["rows"]:

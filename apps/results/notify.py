@@ -47,17 +47,29 @@ def guardian_contacts(arm: ClassArm, term: Term) -> tuple[list[str], list[str]]:
     return emails, phones
 
 
+def _still_published(arm: ClassArm, term: Term) -> bool:
+    return ClassResult.objects.filter(
+        arm=arm, term=term, status=ClassResult.Status.PUBLISHED
+    ).exists()
+
+
 def notify_published(arm: ClassArm, term: Term) -> dict[str, int] | None:
     """Tell the class's guardians that results are out. Does nothing (None) unless the class is
-    still published. Returns the counts it audited."""
+    still published, and stops sending if it is unlocked part-way (re-checked before each
+    recipient). Returns the counts it audited. SMS are counted when queued (``send_sms``
+    enqueues delivery), hence ``sms_queued``."""
     klass = ClassResult.objects.filter(arm=arm, term=term).first()
     if klass is None or klass.status != ClassResult.Status.PUBLISHED:
         return None
     term = Term.objects.select_related("session").get(pk=term.pk)
     body = MESSAGE.format(term=term)
     emails, phones = guardian_contacts(arm, term)
-    counts = {"emails_sent": 0, "sms_sent": 0, "failures": 0}
+    counts = {"emails_sent": 0, "sms_queued": 0, "failures": 0}
+    stopped = False
     for address in emails:
+        if not _still_published(arm, term):
+            stopped = True
+            break
         try:
             send_mail(
                 subject="Results are ready",
@@ -76,8 +88,11 @@ def notify_published(arm: ClassArm, term: Term) -> dict[str, int] | None:
             )
         else:
             counts["emails_sent"] += 1
-    if sms_configured():
+    if sms_configured() and not stopped:
         for phone in phones:
+            if not _still_published(arm, term):
+                stopped = True
+                break
             try:
                 send_sms(phone, body)
             except Exception as exc:  # noqa: BLE001 - one bad number must not stop the rest
@@ -89,6 +104,12 @@ def notify_published(arm: ClassArm, term: Term) -> dict[str, int] | None:
                     type(exc).__name__,
                 )
             else:
-                counts["sms_sent"] += 1
+                counts["sms_queued"] += 1
+    if stopped:
+        logger.info(
+            "Results notifications for class %s term %s stopped: the class is no longer published.",
+            arm.pk,
+            term.pk,
+        )
     record("results.published_notified", obj=klass, after=dict(counts))
     return counts
