@@ -1,6 +1,6 @@
 from django.urls import path
 
-from apps.results.views import electives, grid, settings
+from apps.results.views import comments, electives, grid, settings
 
 app_name = "results"
 
@@ -11,4 +11,5 @@ urlpatterns = [
     path("grid/<int:offering_pk>/", grid.grid, name="grid"),
     path("grid/<int:offering_pk>/csv/", grid.grid_csv, name="grid_csv"),
     path("grid/<int:offering_pk>/upload/", grid.grid_upload, name="grid_upload"),
+    path("comments/<int:arm_pk>/", comments.class_comments, name="class_comments"),
 ]

@@ -21,6 +21,10 @@
       </tbody>
     </table>
   </div>
+  {% if form_arms %}
+  <h2>My class</h2>
+  <ul>{% for a in form_arms %}<li>{{ a.display_name }}: <a href="{% url 'results:class_comments' a.pk %}">Comments &amp; ratings</a></li>{% endfor %}</ul>
+  {% endif %}
   {% endif %}
 </div>
 {% endblock %}

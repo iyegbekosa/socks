@@ -8,7 +8,7 @@ from django.utils.text import slugify
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET, require_POST
 
-from apps.academics.models import SubjectOffering, Term
+from apps.academics.models import FormTeacher, SubjectOffering, Term
 from apps.academics.services import current_session, current_term
 from apps.accounts.roles import TEACHER, require_roles
 from apps.core.parsing import parse_id
@@ -62,6 +62,14 @@ def my_sheets(request):
     term = current_term()
     session = current_session()
     rows = []
+    form_arms = []
+    if session is not None:
+        form_arms = [
+            f.arm
+            for f in FormTeacher.objects.filter(teacher=request.user, session=session)
+            .select_related("arm__level")
+            .order_by("arm__level__order", "arm__suffix")
+        ]
     if session is not None:
         offerings = SubjectOffering.objects.filter(
             teacher=request.user, session=session
@@ -79,7 +87,9 @@ def my_sheets(request):
             }
             for o in offerings.order_by("arm__level__order", "arm__suffix", "subject__name")
         ]
-    return render(request, "results/my_sheets.html", {"rows": rows, "term": term})
+    return render(
+        request, "results/my_sheets.html", {"rows": rows, "term": term, "form_arms": form_arms}
+    )
 
 
 @never_cache

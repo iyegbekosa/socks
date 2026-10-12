@@ -3,7 +3,7 @@ from typing import Any
 from django.db import transaction
 
 from apps.academics.models import SECTIONS
-from apps.results.models import AssessmentComponent, GradeBand
+from apps.results.models import AssessmentComponent, GradeBand, Trait
 
 DEFAULT_COMPONENTS: list[tuple[str, int]] = [
     ("CA1", 10),
@@ -35,12 +35,27 @@ BASIC_SCALE: list[tuple[int, int, str, str]] = [
 ]
 
 
+DEFAULT_TRAITS: list[tuple[str, str]] = [
+    ("affective", "Punctuality"),
+    ("affective", "Neatness"),
+    ("affective", "Politeness"),
+    ("affective", "Honesty"),
+    ("affective", "Attentiveness"),
+    ("affective", "Relationship with others"),
+    ("psychomotor", "Handwriting"),
+    ("psychomotor", "Sports"),
+    ("psychomotor", "Drawing"),
+    ("psychomotor", "Musical skills"),
+    ("psychomotor", "Verbal fluency"),
+]
+
+
 def default_scale(section: str) -> list[tuple[int, int, str, str]]:
     return SSS_SCALE if section == "sss" else BASIC_SCALE
 
 
 def seed_results(school: Any) -> None:
-    """Create default components and grade bands for each offered section that has none.
+    """Create default traits (once), components and grade bands for each offered section.
 
     Each section is checked separately so a section added later still gets its defaults,
     while a section the school has customised (or emptied of components) is left alone.
@@ -58,3 +73,8 @@ def seed_results(school: Any) -> None:
                     GradeBand.objects.create(
                         section=section, lower=lower, upper=upper, grade=grade, remark=remark
                     )
+        if not Trait.objects.exists():
+            counters: dict[str, int] = {}
+            for kind, name in DEFAULT_TRAITS:
+                counters[kind] = counters.get(kind, 0) + 1
+                Trait.objects.create(kind=kind, name=name, order=counters[kind])

@@ -221,3 +221,86 @@ class ClassResult(models.Model):
 
     def __str__(self) -> str:
         return f"class {self.arm_id}/{self.term_id} ({self.status})"
+
+
+class Trait(models.Model):
+    """A behavioural (affective) or skill (psychomotor) trait rated 1-5 on the report card."""
+
+    class Kind(models.TextChoices):
+        AFFECTIVE = "affective", "Affective"
+        PSYCHOMOTOR = "psychomotor", "Psychomotor"
+
+    kind = models.CharField(max_length=12, choices=Kind.choices)
+    name = models.CharField(max_length=60)
+    order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["kind", "order", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["kind", "name"], name="results_trait_unique_name"),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class ReportComment(models.Model):
+    """Comments and attendance totals for one student and term."""
+
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="report_comments")
+    term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="report_comments")
+    class_teacher_comment = models.CharField(max_length=500, blank=True, default="")
+    principal_comment = models.CharField(max_length=500, blank=True, default="")
+    days_present = models.PositiveSmallIntegerField(null=True, blank=True)
+    days_open = models.PositiveSmallIntegerField(null=True, blank=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "term"], name="results_reportcomment_unique"
+            ),
+            models.CheckConstraint(
+                condition=(models.Q(days_open__isnull=True) | models.Q(days_open__lte=200)),
+                name="results_reportcomment_open_max",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(days_present__isnull=True)
+                    | models.Q(days_open__isnull=True)
+                    | models.Q(days_present__lte=models.F("days_open"))
+                ),
+                name="results_reportcomment_present_le_open",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"comment {self.student_id}/{self.term_id}"
+
+    def __repr__(self) -> str:
+        return f"<ReportComment {self.pk}>"
+
+
+class Rating(models.Model):
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="ratings")
+    term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="ratings")
+    trait = models.ForeignKey(Trait, on_delete=models.PROTECT, related_name="ratings")
+    value = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(5)]
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "term", "trait"], name="results_rating_unique"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(value__gte=1, value__lte=5), name="results_rating_range"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"rating {self.pk}"
