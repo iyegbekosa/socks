@@ -26,6 +26,7 @@ def test_student_me(client_a):
         "roles": [],
         "admission_number": s.admission_number,
         "school": {"name": "School A"},
+        "current_class": None,
     }
 
 
@@ -36,6 +37,7 @@ def test_staff_me_roles_sorted_no_contact_details(client_a):
         client_a.force_login(u)
     data = client_a.get("/api/v1/me").json()
     assert data["roles"] == ["proprietor", "teacher"] and data["admission_number"] is None
+    assert "current_class" not in data
     assert "email" not in data and "phone" not in data
 
 
@@ -73,3 +75,28 @@ def test_school_b_session_cookie_rejected_on_school_a(client_a, client_b):
         assert Session.objects.filter(session_key=key).exists()
     with schema_context("school_a"):
         assert not Session.objects.filter(session_key=key).exists()
+
+
+def test_student_me_has_current_class(client_a, world):
+    from tests.students.factories import StudentProfileFactory
+
+    with schema_context("school_a"):
+        p = StudentProfileFactory(enrolment__arm=world.a, enrolment__session=world.session)
+        client_a.force_login(p.user)
+    data = client_a.get("/api/v1/me").json()
+    assert data["current_class"] == {"arm": "JSS 1A", "session": "2026/2027"}
+
+
+def test_student_me_class_null_without_current_enrolment(client_a, world):
+    from datetime import date
+
+    from apps.academics.models import AcademicSession
+    from tests.students.factories import StudentProfileFactory
+
+    with schema_context("school_a"):
+        old = AcademicSession.objects.create(
+            name="2020/2021", start_date=date(2020, 9, 1), end_date=date(2021, 7, 1)
+        )
+        p = StudentProfileFactory(enrolment__arm=world.a, enrolment__session=old)
+        client_a.force_login(p.user)
+    assert client_a.get("/api/v1/me").json()["current_class"] is None

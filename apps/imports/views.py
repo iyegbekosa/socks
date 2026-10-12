@@ -3,20 +3,16 @@
 import csv
 import logging
 
-from django.core.files.storage import default_storage
-from django.db import transaction
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
-from apps.academics.services import current_session
 from apps.accounts.roles import SCHOOL_ADMIN, require_roles
-from apps.core.storage import unique_upload_name
 from apps.imports.forms import ImportForm
 from apps.imports.models import ImportJob
-from apps.imports.tasks import delete_upload, run_import
+from apps.imports.services import ImportNotReady, create_import_job
 from apps.students.views import active_password_candidates, issue_and_render_sheet
 from apps.tenancy.limits import PlanLimitExceeded
 
@@ -31,32 +27,19 @@ RECENT_JOBS = 10
 def new(request):
     form = ImportForm(request.POST or None, request.FILES or None)
     if request.method == "POST" and form.is_valid():
-        kind = form.cleaned_data["kind"]
-        if kind == ImportJob.Kind.STUDENTS and current_session() is None:
-            form.add_error(None, "Set a current term before importing students.")
+        try:
+            job = create_import_job(
+                uploaded_file=form.cleaned_data["file"],
+                kind=form.cleaned_data["kind"],
+                user=request.user,
+                request=request,
+            )
+        except ImportNotReady as exc:
+            form.add_error(None, exc.message)
+        except PlanLimitExceeded as exc:
+            form.add_error("file", exc.message)
         else:
-            upload = form.cleaned_data["file"]
-            try:
-                name = default_storage.save(unique_upload_name("imports", upload.name), upload)
-            except PlanLimitExceeded as exc:
-                form.add_error("file", exc.message)
-            else:
-                try:
-                    job = ImportJob.objects.create(
-                        kind=kind,
-                        file_name=name,
-                        original_name=(upload.name or "")[:255],
-                        created_by=request.user,
-                        started_verified=bool(
-                            getattr(request.user, "is_verified", lambda: False)()
-                        ),
-                        base_url=request.build_absolute_uri("/").rstrip("/")[:255],
-                    )
-                except BaseException:
-                    delete_upload(name)
-                    raise
-                transaction.on_commit(lambda: run_import.delay(job.pk))
-                return redirect("imports:detail", pk=job.pk)
+            return redirect("imports:detail", pk=job.pk)
     jobs = ImportJob.objects.select_related("created_by")[:RECENT_JOBS]
     return render(request, "imports/new.html", {"form": form, "jobs": jobs})
 

@@ -35,20 +35,55 @@ class IsolationCase:
     body: dict | None = None
     # Creates the logged-in school A user (called in school A's schema); None = anonymous.
     actor: Callable[[], Any] | None = default_actor
-    # "refused": status must be 401/403/404. "absent" (list endpoints): any status, but
-    # marker(obj) must not appear in the response body.
-    expect: Literal["refused", "absent"] = "refused"
+    # "refused": status must be 401/403/404. "absent" (list endpoints): a 2xx response (so a
+    # broken login cannot pass vacuously) whose body lacks marker(obj). "no_cross_effect"
+    # (write endpoints that act on the caller's own school): any status below 500, school B's
+    # object unchanged and school B's count_b() unchanged.
+    expect: Literal["refused", "absent", "no_cross_effect"] = "refused"
     marker: Callable[[Any], str] | None = None
+    # Multipart form data (e.g. an uploaded file), built per request; replaces the JSON body.
+    multipart: Callable[[], dict] | None = None
+    # no_cross_effect: counts rows in the active (school B) schema that the request could add.
+    count_b: Callable[[], int] | None = None
 
     def __post_init__(self):
         if self.expect == "absent" and self.marker is None:
             raise ValueError("expect='absent' requires a marker")
+        if self.expect == "no_cross_effect" and self.count_b is None:
+            raise ValueError("expect='no_cross_effect' requires count_b")
 
 
 def _student_in_active_schema():
     from tests.accounts.factories import StudentFactory
 
     return StudentFactory.create()
+
+
+def _student_with_profile():
+    from tests.students.factories import StudentProfileFactory
+
+    return StudentProfileFactory.create()
+
+
+def _import_job():
+    from apps.imports.models import ImportJob
+    from tests.accounts.factories import StaffFactory
+
+    return ImportJob.objects.create(
+        kind="students", file_name="imports/x.csv", created_by=StaffFactory.create()
+    )
+
+
+def _import_job_count() -> int:
+    from apps.imports.models import ImportJob
+
+    return ImportJob.objects.count()
+
+
+def _tiny_csv() -> dict:
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    return {"file": SimpleUploadedFile("s.csv", b"first_name,last_name\n", "text/csv")}
 
 
 # api:me covers anonymous refusal (school B's object is unreachable without a session);
@@ -61,6 +96,32 @@ ISOLATION_CASES: list[IsolationCase] = [
         url=lambda u: "/api/v1/me",
         make_obj=_student_in_active_schema,
         actor=None,
+    ),
+    # A's admin lists students: B's student must be absent (and the response must be 2xx).
+    IsolationCase(
+        "api:students",
+        "GET",
+        url=lambda s: "/api/v1/students",
+        make_obj=_student_with_profile,
+        expect="absent",
+        marker=lambda s: s.admission_number,
+    ),
+    # A's POST acts on school A only. Whatever status A gets (400 if A has no current term,
+    # 202 if it has one), B's job and B's job count must not change.
+    IsolationCase(
+        "api:students_import",
+        "POST",
+        url=lambda j: "/api/v1/students/import",
+        make_obj=_import_job,
+        multipart=_tiny_csv,
+        expect="no_cross_effect",
+        count_b=_import_job_count,
+    ),
+    IsolationCase(
+        "api:import_detail",
+        "GET",
+        url=lambda j: f"/api/v1/imports/{j.pk}",
+        make_obj=_import_job,
     ),
 ]
 
@@ -133,6 +194,8 @@ def _snapshot(obj):
 
 
 def _request_kwargs(case):
+    if case.multipart is not None:
+        return {"data": case.multipart()}
     if case.method.upper() in {"POST", "PUT", "PATCH"}:
         return {"data": json.dumps(case.body or {}), "content_type": "application/json"}
     return {}
@@ -147,6 +210,8 @@ def assert_cross_school_refused(case, school_a, school_b, client_a) -> None:
     with schema_context(school_b.schema_name):
         obj = case.make_obj()
         before = _snapshot(obj)
+        count_before = case.count_b() if case.count_b else None
+        marker = case.marker(obj) if case.marker else None
     if case.actor is not None:
         with schema_context(school_a.schema_name):
             actor = case.actor()
@@ -158,11 +223,18 @@ def assert_cross_school_refused(case, school_a, school_b, client_a) -> None:
         assert response.status_code in {401, 403, 404}, (
             f"{case.name}: expected 401/403/404, got {response.status_code}"
         )
+    elif case.expect == "no_cross_effect":
+        assert response.status_code < 500, f"{case.name}: server error {response.status_code}"
     else:
         assert case.marker is not None
-        marker = case.marker(obj)
+        assert 200 <= response.status_code < 300, (
+            f"{case.name}: expected a 2xx response, got {response.status_code}"
+        )
+        assert marker is not None
         assert marker not in response.content.decode(), (
             f"{case.name}: school B's marker {marker!r} leaked into the response"
         )
     with schema_context(school_b.schema_name):
         assert _snapshot(obj) == before, f"{case.name}: school B's object changed"
+        if case.count_b is not None:
+            assert case.count_b() == count_before, f"{case.name}: school B's rows changed"

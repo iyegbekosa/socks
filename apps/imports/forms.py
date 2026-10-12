@@ -1,9 +1,7 @@
-import os
-
 from django import forms
 
 from apps.imports.models import ImportJob
-from apps.imports.parsing import ALLOWED_EXTENSIONS, MAX_BYTES
+from apps.imports.services import validate_upload
 
 
 class ImportForm(forms.Form):
@@ -17,9 +15,5 @@ class ImportForm(forms.Form):
 
     def clean_file(self):  # type: ignore[no-untyped-def]
         upload = self.cleaned_data["file"]
-        ext = os.path.splitext(upload.name or "")[1].lower()
-        if ext not in ALLOWED_EXTENSIONS:
-            raise forms.ValidationError("Upload a .csv or .xlsx file.")
-        if upload.size > MAX_BYTES:
-            raise forms.ValidationError("The file is larger than 5 MB.")
+        validate_upload(upload)
         return upload

@@ -1,0 +1,12 @@
+from django.urls import path
+
+from apps.api import views
+
+app_name = "api"
+
+urlpatterns = [
+    path("me", views.MeView.as_view(), name="me"),
+    path("students", views.StudentListView.as_view(), name="students"),
+    path("students/import", views.StudentImportView.as_view(), name="students_import"),
+    path("imports/<int:pk>", views.ImportDetailView.as_view(), name="import_detail"),
+]

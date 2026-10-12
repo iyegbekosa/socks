@@ -6,7 +6,32 @@ from apps.accounts.roles import BURSAR, PRINCIPAL, PROPRIETOR, SCHOOL_ADMIN, TEA
 
 @login_required
 def home(request):
+    if request.user.kind == "student":
+        return _student_home(request)
     can_see_students = request.user.kind == "staff" and request.user.has_role(
         SCHOOL_ADMIN, PROPRIETOR, PRINCIPAL, BURSAR, TEACHER
     )
     return render(request, "accounts/home.html", {"can_see_students": can_see_students})
+
+
+def _student_home(request):
+    """A student's own profile card: no guardian contacts, no date of birth."""
+    from apps.academics.services import current_term
+    from apps.students.models import Enrolment, Student
+
+    term = current_term()
+    student = Student.objects.filter(user=request.user).first()
+    enrolment = None
+    if student is not None and term is not None:
+        enrolment = (
+            Enrolment.objects.filter(
+                student=student, session=term.session, status=Enrolment.Status.ACTIVE
+            )
+            .select_related("arm__level", "session")
+            .first()
+        )
+    return render(
+        request,
+        "students/portal_profile.html",
+        {"student": student, "enrolment": enrolment, "term": term},
+    )

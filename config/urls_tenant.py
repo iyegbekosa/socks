@@ -12,7 +12,7 @@ urlpatterns = [
     path("academics/", include("apps.academics.urls")),
     path("students/", include("apps.students.urls")),
     path("imports/", include("apps.imports.urls")),
-    path("api/v1/", include("apps.accounts.api")),
+    path("api/v1/", include("apps.api.urls")),
     path("healthz", healthz, name="healthz"),
 ]
 

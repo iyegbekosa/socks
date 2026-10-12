@@ -1,0 +1,13 @@
+{% extends "core/base.html" %}
+{% block content %}
+<div class="card">
+  <h1>Welcome, {{ request.user.first_name|default:"there" }}</h1>
+  <dl class="facts">
+    <dt>Name</dt><dd>{{ student.full_name|default:request.user.get_full_name }}</dd>
+    <dt>Admission number</dt><dd>{{ request.user.admission_number }}</dd>
+    <dt>Class</dt><dd>{{ enrolment.arm.display_name|default:"—" }}</dd>
+    <dt>Term</dt><dd>{% if term %}{{ term.get_number_display }} ({{ term.session.name }}){% else %}—{% endif %}</dd>
+  </dl>
+  <p><a href="{% url 'accounts:password_change' %}">Change password</a></p>
+</div>
+{% endblock %}
