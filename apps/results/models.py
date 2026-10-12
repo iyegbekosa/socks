@@ -213,6 +213,8 @@ class ClassResult(models.Model):
     published_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
+    # Why the last computation after approval failed (ids and counts only); empty when none.
+    compute_error = models.CharField(max_length=300, blank=True, default="")
 
     class Meta:
         constraints = [

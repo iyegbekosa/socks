@@ -10,4 +10,9 @@ urlpatterns = [
     path("students/import", views.StudentImportView.as_view(), name="students_import"),
     path("imports/<int:pk>", views.ImportDetailView.as_view(), name="import_detail"),
     path("scores", views.ScoresView.as_view(), name="scores"),
+    path(
+        "results/<int:class_arm>/approve",
+        views.ResultsApproveView.as_view(),
+        name="results_approve",
+    ),
 ]

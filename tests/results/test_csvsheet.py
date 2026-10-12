@@ -167,7 +167,7 @@ def test_upload_after_publish_refused_and_audited(client_a, w):
         arm=w.arm, term=w.term, defaults={"status": ClassResult.Status.PUBLISHED}
     )
     r = upload(client_a, w, out.getvalue())
-    assert r.status_code == 400 and "locked" in r.content.decode()
+    assert r.status_code == 409 and "locked" in r.content.decode()
     assert not Score.objects.filter(offering=w.offering).exists()
     assert AuditEvent.objects.filter(action="results.edit_refused").exists()
 

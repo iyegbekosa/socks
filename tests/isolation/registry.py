@@ -138,6 +138,15 @@ def _scores_url(score) -> str:
     return f"/api/v1/scores?offering={score.offering_id}&term={score.term_id}"
 
 
+def _reviewed_class_result():
+    """A class result awaiting approval (with its arm and current term) in the active schema."""
+    from apps.results.models import ClassResult
+    from tests.results.factories import make_sheet_world
+
+    w = make_sheet_world()
+    return ClassResult.objects.create(arm=w.arm, term=w.term, status=ClassResult.Status.REVIEWED)
+
+
 def _tiny_csv() -> dict:
     from django.core.files.uploadedfile import SimpleUploadedFile
 
@@ -204,6 +213,15 @@ ISOLATION_CASES: list[IsolationCase] = [
         url=_scores_url,
         make_obj=_score_in_active_schema,
         body={"cells": [{"student": 1, "component": 1, "value": "9", "version": 1}]},
+    ),
+    # Approval is the principal's only, so school A's admin is refused outright (403);
+    # tests/api/test_results_api.py::test_principal_in_a_cannot_approve_school_b_class covers
+    # a verified principal in school A posting school B's arm id (404, B unchanged).
+    IsolationCase(
+        "api:results_approve",
+        "POST",
+        url=lambda r: f"/api/v1/results/{r.arm_id}/approve",
+        make_obj=_reviewed_class_result,
     ),
 ]
 

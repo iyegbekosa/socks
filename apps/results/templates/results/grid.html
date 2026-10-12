@@ -52,6 +52,18 @@
       </tbody>
     </table>
   </div>
+  {% if data.class_status == "draft" %}
+  {% if data.sheet_status == "draft" %}
+  <form method="post" action="{% url 'results:sheet_submit' offering.pk %}">{% csrf_token %}
+    <p class="muted">Submit when every cell is filled. You can recall the sheet while the class is still in draft.</p>
+    <button type="submit">Submit score sheet</button>
+  </form>
+  {% else %}
+  <form method="post" action="{% url 'results:sheet_recall' offering.pk %}">{% csrf_token %}
+    <button type="submit">Recall score sheet</button>
+  </form>
+  {% endif %}
+  {% endif %}
   <p>
     <a class="button" href="{% url 'results:grid_csv' offering.pk %}">Download CSV</a>
     <a href="{% url 'results:my_sheets' %}">Back to my sheets</a>

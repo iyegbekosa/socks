@@ -16,12 +16,13 @@ from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Count, F, Sum
 from django.utils import timezone
 
 from apps.academics.models import ClassArm, SubjectOffering, Term
 from apps.core.locks import school_lock
 from apps.results.models import (
+    AssessmentComponent,
     ResultSummary,
     Score,
     ScoreSheet,
@@ -30,8 +31,7 @@ from apps.results.models import (
     components_for,
     grade_for,
 )
-from apps.results.scope import students_taking
-from apps.students.models import Enrolment, Student
+from apps.results.scope import ranked_students, required_offerings, students_taking
 
 logger = logging.getLogger(__name__)
 
@@ -266,8 +266,9 @@ def _ids(values: Iterable[int]) -> str:
 def _prior_totals(student_ids: Sequence[int], term: Term) -> dict[int, dict[int, list[Decimal]]]:
     """Each student's per-subject totals in the session's earlier terms, in term order.
 
-    Per (student, term, subject): the computed ``SubjectResult.total`` when present, otherwise
-    the sum of that term's entered (non-null) scores; no entered scores means absent.
+    Per (student, term, subject): the computed ``SubjectResult.total`` when present. Otherwise
+    the sum of that term's scores, but only when the student has a non-null score for every
+    component of the offering's section; a partly filled term counts as absent.
     """
     earlier = list(
         Term.objects.filter(session_id=term.session_id, number__lt=term.number).order_by("number")
@@ -279,13 +280,30 @@ def _prior_totals(student_ids: Sequence[int], term: Term) -> dict[int, dict[int,
         student_id__in=student_ids, term__in=earlier
     ).values_list("student_id", "term_id", "offering__subject_id", "total"):
         found[(st, term_id, subject_id)] = total
-    raw = (
-        Score.objects.filter(student_id__in=student_ids, term__in=earlier, value__isnull=False)
-        .values("student_id", "term_id", "offering__subject_id")
-        .annotate(total=Sum("value"))
+    per_section = dict(
+        AssessmentComponent.objects.values("section")
+        .annotate(n=Count("pk"))
         .order_by()
+        .values_list("section", "n")
+    )
+    raw = (
+        Score.objects.filter(
+            student_id__in=student_ids,
+            term__in=earlier,
+            value__isnull=False,
+            component__section=F("offering__arm__level__section"),
+        )
+        .values("student_id", "term_id", "offering_id", "offering__subject_id")
+        .annotate(
+            total=Sum("value"),
+            filled=Count("component", distinct=True),
+            section=F("offering__arm__level__section"),
+        )
+        .order_by("offering_id")
     )
     for row in raw:
+        if row["filled"] != per_section.get(row["section"]):
+            continue
         key = (row["student_id"], row["term_id"], row["offering__subject_id"])
         found.setdefault(key, subject_total([row["total"]]))
     out: dict[int, dict[int, list[Decimal]]] = defaultdict(lambda: defaultdict(list))
@@ -311,12 +329,12 @@ def compute_class(arm: ClassArm, term: Term) -> None:
         school_lock(f"results:{arm.pk}:{term.pk}")
         section = arm.level.section
         offerings = list(
-            SubjectOffering.objects.filter(arm=arm, session_id=term.session_id)
+            required_offerings(arm, term)
             .select_related("subject", "teacher")
             .order_by("subject__name", "pk")
         )
         if not offerings:
-            raise ValidationError("This class has no subjects for the session.")
+            raise ValidationError("This class has no subjects with students for the session.")
         submitted = set(
             ScoreSheet.objects.filter(
                 offering__in=offerings, term=term, status=ScoreSheet.Status.SUBMITTED
@@ -332,17 +350,7 @@ def compute_class(arm: ClassArm, term: Term) -> None:
             raise ValidationError("The assessment components for this section do not total 100.")
         comps = components_for(section)
 
-        ranked = list(
-            Student.objects.filter(
-                status=Student.Status.ACTIVE,
-                enrolments__arm=arm,
-                enrolments__session_id=term.session_id,
-                enrolments__status=Enrolment.Status.ACTIVE,
-            )
-            .distinct()
-            .order_by("pk")
-            .values_list("pk", flat=True)
-        )
+        ranked = list(ranked_students(arm, term).order_by("pk").values_list("pk", flat=True))
         ranked_set = set(ranked)
         scores: dict[int, dict[int, dict[int, Decimal]]] = defaultdict(dict)
         for off in offerings:
@@ -392,7 +400,10 @@ def compute_class(arm: ClassArm, term: Term) -> None:
             logger.warning("Student %s takes no subjects; left out of class ranking.", st)
 
         written = [s.student_id for s in data.summaries]
-        SubjectResult.objects.filter(term=term, offering__in=offerings).delete()
+        # Every offering of the arm: one that has lost its takers keeps no stale rows.
+        SubjectResult.objects.filter(
+            term=term, offering__arm=arm, offering__session_id=term.session_id
+        ).delete()
         ResultSummary.objects.filter(term=term, arm=arm).delete()
         ResultSummary.objects.filter(term=term, student_id__in=written).delete()
         SubjectResult.objects.bulk_create(

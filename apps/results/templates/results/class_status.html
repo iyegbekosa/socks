@@ -1,0 +1,64 @@
+{% extends "core/base.html" %}
+{% block title %}Class results: {{ arm.display_name }}{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Class results — {{ arm.display_name }}</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% for e in errors %}<p role="alert" class="error">{{ e }}</p>{% endfor %}
+  {% if not term %}
+  <p class="muted">Set a current term first</p>
+  {% else %}
+  <p class="muted">Session {{ term.session.name }}, {{ term.get_number_display }}.</p>
+  <p>Class results: <strong>{{ status_label }}</strong></p>
+  {% if klass.compute_error %}
+  <p role="alert" class="error">Computing the results failed, so the class is back to reviewed: {{ klass.compute_error }}</p>
+  {% endif %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Subject</th><th>Teacher</th><th>Score sheet</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <td>{{ r.offering.subject.name }}</td>
+          <td>{{ r.teacher }}</td>
+          <td>{% if r.required %}{{ r.status|capfirst }}{% else %}<span class="muted">No students take this subject</span>{% endif %}</td>
+        </tr>
+      {% empty %}<tr><td colspan="3" class="muted">This class has no subjects this session.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if is_ft %}<p><a href="{% url 'results:class_comments' arm.pk %}">Comments &amp; ratings</a></p>{% endif %}
+  {% if can_review %}
+  <form method="post" action="{% url 'results:class_review' arm.pk %}">{% csrf_token %}
+    <p class="muted">Check every subject is submitted and every student has your comment.</p>
+    <button type="submit">Mark as reviewed</button>
+  </form>
+  {% endif %}
+  {% if can_approve %}
+  <form method="post" action="{% url 'results:class_approve' arm.pk %}">{% csrf_token %}
+    <button type="submit">Approve and compute results</button>
+  </form>
+  {% endif %}
+  {% if can_publish %}
+  <form method="post" action="{% url 'results:class_publish' arm.pk %}">{% csrf_token %}
+    <button type="submit">Publish results</button>
+  </form>
+  {% endif %}
+  {% if can_unlock %}
+  <form method="post" action="{% url 'results:class_unlock' arm.pk %}">{% csrf_token %}
+    <h2>Unlock</h2>
+    <p class="muted">Returns the class to draft and removes its computed results. Choose the score sheets to reopen for their teachers.</p>
+    {% for r in submitted %}
+    <p><label><input type="checkbox" name="sheets" value="{{ r.sheet.pk }}"> {{ r.offering.subject.name }}</label></p>
+    {% endfor %}
+    <p>
+      <label for="reason">Reason (required, up to 300 characters)</label>
+      <textarea id="reason" name="reason" maxlength="300" required>{{ reason }}</textarea>
+    </p>
+    <button type="submit">Unlock</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

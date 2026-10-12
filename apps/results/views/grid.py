@@ -127,6 +127,12 @@ def grid_csv(request, offering_pk):
     return response
 
 
+class _Locked(Exception):
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
 def _upload_errors(request, offering) -> list[str]:
     term, data, problem = _sheet(offering)
     if data is None or term is None:
@@ -145,7 +151,7 @@ def _upload_errors(request, offering) -> list[str]:
         # Not wrapped in atomic(): a locked refusal must keep its results.edit_refused audit.
         result = save_cells(offering, term, parsed.cells, by=request.user, request=request)
     except ResultsLocked as exc:
-        return [exc.message]
+        raise _Locked(exc.message) from exc
     except VersionConflict:
         return ["Someone changed scores while you were uploading — try again"]
     except ValidationError as exc:
@@ -159,7 +165,11 @@ def _upload_errors(request, offering) -> list[str]:
 @require_roles(TEACHER)
 def grid_upload(request, offering_pk):
     offering = _offering_or_403(request, offering_pk)
-    errors = _upload_errors(request, offering)
+    code = 400
+    try:
+        errors = _upload_errors(request, offering)
+    except _Locked as exc:
+        errors, code = [exc.message], 409  # results are locked (FR-08)
     if not errors:
         return redirect("results:grid", offering_pk=offering.pk)
     term, data, problem = _sheet(offering)
@@ -176,5 +186,5 @@ def grid_upload(request, offering_pk):
             "upload_errors": shown,
             "more_errors": len(errors) - len(shown),
         },
-        status=400,
+        status=code,
     )

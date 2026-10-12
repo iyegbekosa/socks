@@ -13,7 +13,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.academics.models import SubjectOffering, Term
+from apps.academics.models import ClassArm, SubjectOffering, Term
 from apps.academics.scope import students_visible_to
 from apps.academics.services import current_session, current_term
 from apps.accounts.roles import (
@@ -42,6 +42,7 @@ from apps.results.scores import (
     save_cells,
     sheet_rows,
 )
+from apps.results.workflow import ResultsStateError, approve_class
 from apps.students.models import Enrolment, Student
 from apps.tenancy.limits import PlanLimitExceeded
 
@@ -278,3 +279,27 @@ class ScoresView(APIView):
                 details = [{"field": "non_field_errors", "message": m} for m in exc.messages]
             raise ApiError("VALIDATION_ERROR", "Some scores are invalid.", 400, details) from exc
         return Response({"versions": result.versions})
+
+
+class ResultsApproveView(APIView):
+    """POST: the principal approves a reviewed class for the current term (FR-08).
+
+    202 ``{"status": "approved"}``; the results are computed in the background.
+    """
+
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["post", "options"]
+
+    def post(self, request: Request, class_arm: int) -> Response:
+        user = request.user
+        if user.is_student or not user.has_role(PRINCIPAL):  # type: ignore[union-attr]
+            raise ApiError("FORBIDDEN", "Only the principal can approve class results.", 403)
+        arm = get_object_or_404(ClassArm.objects.select_related("level"), pk=class_arm)
+        term = current_term()
+        if term is None:
+            raise ApiError("VALIDATION_ERROR", "Set a current term first", 400)
+        try:
+            approve_class(arm, term, by=user, request=request)
+        except ResultsStateError as exc:
+            raise ApiError("RESULTS_STATE", " ".join(exc.messages), 409) from exc
+        return Response({"status": "approved"}, status=status.HTTP_202_ACCEPTED)

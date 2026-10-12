@@ -454,3 +454,28 @@ def test_cumulative_prefers_computed_earlier_result(school_a):
         _submit([maths], t3)
         compute_class(arm, t3)
         assert SubjectResult.objects.get(term=t3).cumulative == D("70.00")
+
+
+def test_cumulative_ignores_partly_filled_earlier_term(school_a):
+    """A 1st term with CA only (no exam, no computed result) counts as absent."""
+    with schema_context("school_a"):
+        Term.objects.filter(is_current=True).update(is_current=False)
+        session = default_session()
+        t1, t3 = _term(session, 1), _term(session, 3, current=True)
+        level, _ = ClassLevel.objects.get_or_create(
+            name="JSS 3", defaults={"section": "jss", "order": 11}
+        )
+        arm = ClassArm.objects.create(level=level, suffix="E")
+        ca, exam = _jss_structure()
+        teacher = StaffFactory()
+        maths = _offerings(arm, session, teacher, ["Mathematics"])["Mathematics"]
+        st = StudentProfileFactory(enrolment__arm=arm, enrolment__session=session)
+        _enter(st, maths, t1, [ca], (20,), teacher)  # CA only
+        Score.objects.create(
+            student=st, offering=maths, term=t1, component=exam, value=None, entered_by=teacher
+        )
+        _enter(st, maths, t3, [ca, exam], (30, 50), teacher)  # 80
+        _submit([maths], t3)
+        compute_class(arm, t3)
+        assert SubjectResult.objects.get(term=t3).cumulative == D("80.00")
+        assert ResultSummary.objects.get(term=t3).cumulative_average == D("80.00")

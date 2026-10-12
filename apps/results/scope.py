@@ -1,11 +1,11 @@
 from typing import Any
 
-from django.db.models import QuerySet
+from django.db.models import Exists, OuterRef, Q, QuerySet
 
-from apps.academics.models import SubjectOffering
+from apps.academics.models import ClassArm, SubjectOffering, Term
 from apps.academics.services import current_session
 from apps.accounts.roles import TEACHER
-from apps.results.models import Score
+from apps.results.models import ElectiveChoice, Score
 from apps.students.models import Enrolment, Student
 
 
@@ -20,6 +20,33 @@ def students_taking(offering: SubjectOffering) -> QuerySet[Student]:
     if not offering.is_compulsory:
         qs = qs.filter(elective_choices__offering=offering)
     return qs.distinct().order_by("last_name", "first_name", "pk")
+
+
+def ranked_students(arm: ClassArm, term: Term) -> QuerySet[Student]:
+    """Active students with an active enrolment in the arm for the term's session."""
+    return Student.objects.filter(
+        status=Student.Status.ACTIVE,
+        enrolments__arm_id=arm.pk,
+        enrolments__session_id=term.session_id,
+        enrolments__status=Enrolment.Status.ACTIVE,
+    ).distinct()
+
+
+def required_offerings(arm: ClassArm, term: Term) -> QuerySet[SubjectOffering]:
+    """The arm's offerings for the term's session with at least one ranked taker.
+
+    A ranked taker is a student in ``students_taking``: active, actively enrolled in the arm
+    and, for an elective, holding an ``ElectiveChoice`` for it. Offerings with no takers need
+    no score sheet and produce no results.
+    """
+    ranked = ranked_students(arm, term)
+    takers = Q(
+        Exists(ElectiveChoice.objects.filter(offering=OuterRef("pk"), student__in=ranked)),
+        is_compulsory=False,
+    )
+    if ranked.exists():
+        takers |= Q(is_compulsory=True)
+    return SubjectOffering.objects.filter(arm=arm, session_id=term.session_id).filter(takers)
 
 
 def can_enter_scores(user: Any, offering: SubjectOffering) -> bool:
