@@ -97,8 +97,17 @@ def set_electives(
         current = set(
             ElectiveChoice.objects.filter(offering=offering).values_list("student_id", flat=True)
         )
+        stale = current - set(
+            Enrolment.objects.filter(
+                arm_id=offering.arm_id,
+                session_id=offering.session_id,
+                status=Enrolment.Status.ACTIVE,
+                student__status=Student.Status.ACTIVE,
+                student_id__in=current,
+            ).values_list("student_id", flat=True)
+        )
         added = sorted(wanted - current)
-        removed = sorted(current - wanted)
+        removed = sorted((current - wanted) | stale)
         # Task 4: refuse removal when scores exist
         for sid in removed:
             if scope.has_student_scores(offering, Student.objects.get(pk=sid)):

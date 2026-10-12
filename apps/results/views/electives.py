@@ -6,6 +6,7 @@ from django.views.decorators.cache import never_cache
 
 from apps.academics.models import FormTeacher, SubjectOffering
 from apps.accounts.roles import SCHOOL_ADMIN, TEACHER, require_roles
+from apps.core.parsing import parse_id
 from apps.results.models import ElectiveChoice
 from apps.results.services import set_electives
 from apps.students.models import Enrolment, Student
@@ -43,11 +44,12 @@ def electives_page(request, offering_pk):
         ElectiveChoice.objects.filter(offering=offering).values_list("student_id", flat=True)
     )
     if request.method == "POST":
-        posted = [i for i in request.POST.getlist("students") if i.isdigit()]
+        parsed = [parse_id(i) for i in request.POST.getlist("students")]
+        posted = [i for i in parsed if i is not None]
         try:
-            if len(posted) != len(request.POST.getlist("students")):
+            if len(posted) != len(parsed):
                 raise ValidationError("Choose only students from the list.")
-            set_electives(offering, [int(i) for i in posted], by=request.user, request=request)
+            set_electives(offering, posted, by=request.user, request=request)
         except ValidationError as exc:
             for message in exc.messages:
                 messages.error(request, message)
@@ -58,6 +60,6 @@ def electives_page(request, offering_pk):
         else:
             messages.success(request, "Saved.")
             return redirect("results:electives", offering_pk=offering.pk)
-        chosen = {int(i) for i in posted}
+        chosen = set(posted)
     ctx.update(rows=[{"student": s, "checked": s.pk in chosen} for s in students])
     return render(request, "results/electives.html", ctx)

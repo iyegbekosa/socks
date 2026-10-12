@@ -142,7 +142,10 @@ def test_form_teacher_can_save(client_a, world):
         assert {c.student_id for c in ElectiveChoice.objects.all()} == {s[0].pk, s[2].pk}
         assert AuditEvent.objects.filter(action="results.elective_changed").exists()
     r = client_a.get(url)
-    assert r.content.decode().count("checked") == 2
+    body = r.content.decode()
+    for i, st in enumerate(s):
+        tag = f'value="{st.pk}" checked>'
+        assert (tag in body) == (i != 1)
 
 
 def test_bad_post_saves_nothing(client_a, world):
@@ -170,3 +173,58 @@ def test_arm_detail_links_only_elective(client_a, world):
     body = r.content.decode()
     assert reverse("results:electives", args=[world["elective"].pk]) in body
     assert reverse("results:electives", args=[world["compulsory"].pk]) not in body
+
+
+def test_non_ascii_and_huge_ids_rejected(client_a, world):
+    login_verified(client_a, world["admin"])
+    url = reverse("results:electives", args=[world["elective"].pk])
+    for bad in ("\u00b2", "9" * 5000):
+        r = client_a.post(url, {"students": [world["students"][0].pk, bad]})
+        assert r.status_code == 200
+        assert "Choose only students from the list" in r.content.decode()
+    with schema_context("school_a"):
+        assert ElectiveChoice.objects.count() == 0
+
+
+def test_moved_student_choice_removed_and_audited(world):
+    s = world["students"]
+    with schema_context("school_a"):
+        set_electives(world["elective"], [s[0].pk, s[1].pk], by=world["admin"])
+        other_arm = ClassArm.objects.get(suffix="B")
+        Enrolment.objects.filter(student=s[0]).update(arm=other_arm)
+        assert s[0].pk not in {x.pk for x in students_taking(world["elective"])}
+        set_electives(world["elective"], [s[1].pk], by=world["admin"])
+        assert {c.student_id for c in ElectiveChoice.objects.all()} == {s[1].pk}
+        ev = AuditEvent.objects.filter(action="results.elective_changed").latest("pk")
+        assert ev.after["removed"] == [s[0].pk]
+
+
+def test_status_withdrawn_student_excluded(world):
+    with schema_context("school_a"):
+        st = world["students"][0]
+        ElectiveChoice.objects.create(student=st, offering=world["elective"])
+        st.status = "withdrawn"
+        st.save()
+        assert st.pk not in {x.pk for x in students_taking(world["elective"])}
+
+
+def test_form_teacher_of_other_arm_forbidden(client_a, world):
+    with schema_context("school_a"):
+        other_arm = ClassArm.objects.get(suffix="B")
+        FormTeacher.objects.filter(teacher=world["ft"]).update(arm=other_arm)
+        client_a.force_login(world["ft"])
+    url = reverse("results:electives", args=[world["elective"].pk])
+    assert client_a.get(url).status_code == 403
+
+
+def test_form_teacher_of_other_session_forbidden(client_a, world):
+    with schema_context("school_a"):
+        from apps.academics.models import AcademicSession
+
+        sess = AcademicSession.objects.create(
+            name="2027/2028", start_date=date(2027, 9, 1), end_date=date(2028, 7, 31)
+        )
+        FormTeacher.objects.filter(teacher=world["ft"]).update(session=sess)
+        client_a.force_login(world["ft"])
+    url = reverse("results:electives", args=[world["elective"].pk])
+    assert client_a.get(url).status_code == 403
