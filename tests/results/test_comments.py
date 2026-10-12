@@ -203,3 +203,47 @@ def test_withdrawn_student_not_listed_or_accepted(client_a, w):
 def test_links(client_a, w):
     client_a.force_login(w.ft)
     assert url(w) in client_a.get(reverse("results:my_sheets")).content.decode()
+
+
+def test_lowering_days_open_below_stored_present_is_refused(client_a, w):
+    client_a.force_login(w.ft)
+    s = w.students[0]
+    client_a.post(url(w), {"days_open": "100", f"dp_{s.pk}": "60"})
+    r = client_a.post(url(w), {"days_open": "50"})
+    assert r.status_code == 400 and "cannot be more than" in r.content.decode()
+    c = ReportComment.objects.get(student=s)
+    assert (c.days_present, c.days_open) == (60, 100)
+
+
+def test_principal_only_cannot_write_form_teacher_fields(client_a, w):
+    login_verified(client_a, principal())
+    s = w.students[0]
+    t0 = Trait.objects.first()
+    data = {
+        f"ct_{s.pk}": "x", f"dp_{s.pk}": "5", f"rt_{s.pk}_{t0.pk}": "3", "days_open": "10",
+    }  # fmt: skip
+    assert client_a.post(url(w), data).status_code == 302
+    assert not ReportComment.objects.exists() and not Rating.objects.exists()
+
+
+def test_dual_role_on_reviewed_class_only_principal_comment(client_a, w):
+    set_roles(w.ft, ["teacher", "principal"], by=None)
+    login_verified(client_a, w.ft)
+    ClassResult.objects.create(arm=w.arm, term=w.term, status="reviewed")
+    s = w.students[0]
+    data = {f"pc_{s.pk}": "ok", f"ct_{s.pk}": "x" * 600, f"dp_{s.pk}": "abc", "days_open": "zz"}
+    assert client_a.post(url(w), data).status_code == 302
+    c = ReportComment.objects.get(student=s)
+    assert (c.principal_comment, c.class_teacher_comment, c.days_open) == ("ok", "", None)
+
+
+def test_no_term_unrelated_teacher_403(client_a, w):
+    from apps.academics.models import Term
+
+    Term.objects.update(is_current=False)
+    other = StaffFactory()
+    set_roles(other, ["teacher"], by=None)
+    client_a.force_login(other)
+    assert client_a.get(url(w)).status_code == 403
+    client_a.force_login(w.ft)
+    assert client_a.get(url(w)).status_code == 200

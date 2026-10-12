@@ -1,9 +1,10 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
@@ -216,31 +217,25 @@ def _page(request, arm, term, is_ft, is_pr, status, *, post=None, parsed=None, c
 
 
 def _save(request, arm: ClassArm, term: Term, is_ft: bool, is_pr: bool):
-    students = _students(arm, term)
-    traits = list(Trait.objects.all())
-    parsed = parse_post(
-        request.POST,
-        {s.pk for s in students},
-        {t.pk for t in traits},
-        ft=is_ft,
-        pr=is_pr,
-    )
     with transaction.atomic():
         school_lock(f"results:{arm.pk}:{term.pk}")
         cr, _ = ClassResult.objects.get_or_create(arm=arm, term=term)
         edit_ft, edit_pr = _editable(cr.status, is_ft, is_pr)
         if not edit_ft and not edit_pr:
-            parsed.errors.append(MOVED_ON)
+            parsed = Parsed(errors=[MOVED_ON])
             return _page(
                 request, arm, term, is_ft, is_pr, cr.status, post=request.POST, parsed=parsed,
                 code=409,
             )  # fmt: skip
-        if not edit_ft:
-            parsed.comments, parsed.present, parsed.ratings = {}, {}, {}
-            parsed.days_open_posted = False
-        if not edit_pr:
-            parsed.principal = {}
-        _check_attendance(parsed, term)
+        students = _students(arm, term)
+        parsed = parse_post(
+            request.POST,
+            {s.pk for s in students},
+            {t.pk for t in Trait.objects.all()},
+            ft=edit_ft,
+            pr=edit_pr,
+        )
+        _check_attendance(parsed, term, [s.pk for s in students])
         if not parsed.ok:
             return _page(
                 request, arm, term, is_ft, is_pr, cr.status, post=request.POST, parsed=parsed,
@@ -261,23 +256,25 @@ def _save(request, arm: ClassArm, term: Term, is_ft: bool, is_pr: bool):
                 obj=cr,
                 after={"arm_id": arm.pk, "term_id": term.pk, "student_ids": rating_ids},
             )
-    from django.contrib import messages
-    from django.shortcuts import redirect
-
     messages.success(request, "Saved")
     return redirect("results:class_comments", arm_pk=arm.pk)
 
 
-def _check_attendance(parsed: Parsed, term: Term) -> None:
-    stored = dict(
-        ReportComment.objects.filter(term=term, student_id__in=parsed.present).values_list(
-            "student_id", "days_open"
-        )
-    )
-    for sid, present in parsed.present.items():
+def _check_attendance(parsed: Parsed, term: Term, student_ids: list[int]) -> None:
+    stored = {
+        sid: (dp, do)
+        for sid, dp, do in ReportComment.objects.filter(
+            term=term, student_id__in=student_ids
+        ).values_list("student_id", "days_present", "days_open")
+    }
+    # Every student whose present/open pair may change must satisfy present <= open.
+    check = student_ids if parsed.days_open_posted else list(parsed.present)
+    for sid in check:
+        s_present, s_open = stored.get(sid, (None, None))
+        present = parsed.present[sid] if sid in parsed.present else s_present
+        opened = parsed.days_open if parsed.days_open_posted else s_open
         if present is None:
             continue
-        opened = parsed.days_open if parsed.days_open_posted else stored.get(sid)
         if opened is None:
             parsed.row_error(sid, "Enter the days school opened before days present.")
         elif present > opened:
@@ -347,7 +344,10 @@ def class_comments(request, arm_pk):
     arm = get_object_or_404(ClassArm.objects.select_related("level"), pk=pk if pk else 0)
     term = current_term()
     if term is None:
-        if getattr(request.user, "kind", None) != "staff":
+        user = request.user
+        if getattr(user, "kind", None) != "staff" or not (
+            user.has_role(PRINCIPAL) or FormTeacher.objects.filter(arm=arm, teacher=user).exists()
+        ):
             raise PermissionDenied
         return render(request, "results/class_comments.html", {"arm": arm, "term": None})
     is_ft, is_pr = _roles(request, arm, term)
