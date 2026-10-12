@@ -174,8 +174,7 @@ def test_upload_stores_verified_and_base_url_and_shows_invites(
     assert "Invites sent: 2" in body
     assert "Print passwords" not in body
     assert (
-        client_a.post(reverse("imports:passwords_confirm", args=[job.pk, 1, 1])).status_code
-        == 404
+        client_a.post(reverse("imports:passwords_confirm", args=[job.pk, 1, 1])).status_code == 404
     )
 
 
