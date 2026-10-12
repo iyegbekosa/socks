@@ -246,22 +246,33 @@ def test_services_take_advisory_lock(admin_user):
         assert any("pg_advisory_xact_lock" in q["sql"] for q in ctx.captured_queries)
 
 
-def test_set_current_integrity_error_is_friendly(client_a, admin_user):
+def test_set_current_integrity_error_is_friendly(client_a, admin_user, caplog):
     with schema_context("school_a"):
         term = make(by=admin_user).terms.get(number=1)
     login_verified(client_a, admin_user)
-    with mock.patch("apps.academics.views.set_current_term", side_effect=IntegrityError):
+    with (
+        mock.patch(
+            "apps.academics.views.set_current_term", side_effect=IntegrityError("secret detail")
+        ),
+        caplog.at_level("WARNING", logger="apps.academics.views"),
+    ):
         r = client_a.post(reverse("academics:set_current", args=[term.pk]), follow=True)
     assert r.status_code == 200
     assert "Someone else changed this at the same time" in r.content.decode()
+    assert "academics conflict: IntegrityError" in caplog.text
+    assert "secret detail" not in caplog.text
 
 
-def test_create_integrity_error_is_friendly(client_a, admin_user):
+def test_create_integrity_error_is_friendly(client_a, admin_user, caplog):
     login_verified(client_a, admin_user)
-    with mock.patch("apps.academics.forms.create_session", side_effect=IntegrityError):
+    with (
+        mock.patch("apps.academics.forms.create_session", side_effect=IntegrityError),
+        caplog.at_level("WARNING", logger="apps.academics.views"),
+    ):
         r = client_a.post(reverse("academics:session_create"), full_data())
     assert r.status_code == 200
     assert "Someone else changed this at the same time" in r.content.decode()
+    assert "academics conflict: IntegrityError" in caplog.text
 
 
 @pytest.mark.parametrize("role", ["principal", "proprietor"])

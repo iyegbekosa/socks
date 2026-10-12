@@ -1,3 +1,5 @@
+import logging
+
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -37,6 +39,8 @@ from apps.academics.services import (
 )
 from apps.accounts.roles import PRINCIPAL, PROPRIETOR, SCHOOL_ADMIN, require_roles
 
+logger = logging.getLogger(__name__)
+
 CONFLICT_MESSAGE = "Someone else changed this at the same time — please try again."
 
 
@@ -59,7 +63,8 @@ def session_create(request):
         if form.is_valid():
             try:
                 session = form.save(by=request.user, request=request)
-            except IntegrityError:
+            except IntegrityError as exc:
+                logger.warning("academics conflict: %s", type(exc).__name__)
                 session = None
                 messages.error(request, CONFLICT_MESSAGE)
             if session is not None:
@@ -76,7 +81,8 @@ def set_current(request, term_id):
     term = get_object_or_404(Term, pk=term_id)
     try:
         set_current_term(term, by=request.user, request=request)
-    except IntegrityError:
+    except IntegrityError as exc:
+        logger.warning("academics conflict: %s", type(exc).__name__)
         messages.error(request, CONFLICT_MESSAGE)
     else:
         messages.success(request, f"{term} is now the current term.")
@@ -87,7 +93,8 @@ def _save(request, form, ok_message):
     """Run form.save, turning a lost race into a friendly message. Returns the object or None."""
     try:
         obj = form.save(by=request.user, request=request)
-    except IntegrityError:
+    except IntegrityError as exc:
+        logger.warning("academics conflict: %s", type(exc).__name__)
         messages.error(request, CONFLICT_MESSAGE)
         return None
     if obj is not None:
@@ -137,7 +144,8 @@ def arm_delete(request, arm_id):
         delete_arm(arm, by=request.user, request=request)
     except ValidationError as exc:
         messages.error(request, " ".join(exc.messages))
-    except IntegrityError:
+    except IntegrityError as exc:
+        logger.warning("academics conflict: %s", type(exc).__name__)
         messages.error(request, CONFLICT_MESSAGE)
     else:
         messages.success(request, f"Deleted {label}.")
@@ -185,7 +193,8 @@ def subject_delete(request, subject_id):
         delete_subject(subject, by=request.user, request=request)
     except ValidationError as exc:
         messages.error(request, " ".join(exc.messages))
-    except IntegrityError:
+    except IntegrityError as exc:
+        logger.warning("academics conflict: %s", type(exc).__name__)
         messages.error(request, CONFLICT_MESSAGE)
     else:
         messages.success(request, f"Deleted {label}.")
@@ -290,7 +299,8 @@ def arm_detail(request, arm_id):
             # The transaction rolled back: nothing was saved. Show the errors on this page.
             for message in exc.messages:
                 messages.error(request, message)
-        except IntegrityError:
+        except IntegrityError as exc:
+            logger.warning("academics conflict: %s", type(exc).__name__)
             messages.error(request, CONFLICT_MESSAGE)
         else:
             messages.success(request, "Saved." if changed else "Nothing changed.")
