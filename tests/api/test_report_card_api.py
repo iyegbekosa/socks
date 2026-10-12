@@ -112,7 +112,8 @@ def test_bad_ids_are_404(client_a, c, student, term):
 
 def test_anonymous_is_refused(client_a, c):
     r = client_a.get(url(c.st.pk, c.w.term.pk))
-    assert r.status_code in (401, 403)
+    assert r.status_code == 401
+    assert r.json()["error"]["code"] == "NOT_AUTHENTICATED"
     assert "Location" not in r
 
 

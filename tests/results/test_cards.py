@@ -353,29 +353,83 @@ def test_generate_does_nothing_unless_published(acc, uploads):
     assert not AuditEvent.objects.filter(action="results.report_cards_generated").exists()
 
 
-def test_unlock_during_generation_stops_and_removes_this_runs_cards(
+def test_real_unlock_during_generation_stops_and_removes_this_runs_cards(
     acc, uploads, django_capture_on_commit_callbacks
 ):
+    """unlock_class deletes the summaries and subject results with the status change; the run
+    must stop cleanly and remove what it wrote itself (the unlock hook is disabled here)."""
+    _publish(acc)
+    admin = staff("school_admin")
+    admin.is_verified = lambda: True
+    sheets = list(ScoreSheet.objects.filter(term=acc.term))
+    real = cards.render_card
+    rendered = []
+
+    def unlock_after_first_card(student, term, **kwargs):
+        rendered.append(student.pk)
+        if len(rendered) == 2:  # an admin unlocks once the 1st card is stored
+            unlock_class(acc.arm, acc.term, sheets=sheets[:1], reason="Typo", by=admin)
+        return real(student, term, **kwargs)
+
+    with (
+        mock.patch("apps.results.workflow.on_class_unlocked"),
+        mock.patch("apps.results.cards.render_card", side_effect=unlock_after_first_card),
+        django_capture_on_commit_callbacks(execute=True),  # files are deleted on commit
+    ):
+        assert generate_report_cards(acc.arm, acc.term) == 0
+    assert len(rendered) == 2
+    assert not ResultSummary.objects.filter(term=acc.term).exists()
+    assert not ReportCard.objects.exists()
+    assert len(uploads.files) == 1
+    assert sorted(uploads.destroyed) == sorted(uploads.files)
+    assert not AuditEvent.objects.filter(action="results.report_cards_generated").exists()
+
+
+def test_status_only_unlock_during_generation_also_stops(
+    acc, uploads, django_capture_on_commit_callbacks
+):
+    """The re-check under the lock catches an unlock that happened after the render."""
     _publish(acc)
     real = cards.render_card
     rendered = []
 
     def render_then_unlock(student, term, **kwargs):
         rendered.append(student.pk)
-        if len(rendered) == 3:  # an admin unlocks while the 3rd card renders
+        pdf = real(student, term, **kwargs)
+        if len(rendered) == 3:
             ClassResult.objects.filter(arm=acc.arm, term=acc.term).update(status="draft")
-        return real(student, term, **kwargs)
+        return pdf
 
     with (
         mock.patch("apps.results.cards.render_card", side_effect=render_then_unlock),
-        django_capture_on_commit_callbacks(execute=True),  # files are deleted on commit
+        django_capture_on_commit_callbacks(execute=True),
     ):
         assert generate_report_cards(acc.arm, acc.term) == 0
-    assert len(rendered) == 3
     assert not ReportCard.objects.exists()
     assert len(uploads.files) == 2
     assert sorted(uploads.destroyed) == sorted(uploads.files)
-    assert not AuditEvent.objects.filter(action="results.report_cards_generated").exists()
+
+
+def test_missing_results_while_still_published_skips_that_student(acc, uploads, caplog):
+    _publish(acc)
+    from apps.results.models import SubjectResult
+
+    b = acc.students["B"]
+    real = cards.render_card
+
+    def render(student, term, **kwargs):
+        if student.pk == b.pk:
+            raise ResultSummary.DoesNotExist
+        return real(student, term, **kwargs)
+
+    with (
+        mock.patch("apps.results.cards.render_card", side_effect=render),
+        caplog.at_level(logging.WARNING, logger="apps.results.cards"),
+    ):
+        assert generate_report_cards(acc.arm, acc.term) == 5
+    assert not ReportCard.objects.filter(student=b).exists()
+    assert f"student {b.pk}" in caplog.text and "Pupil" not in caplog.text
+    assert SubjectResult.objects.exists()
 
 
 def test_storage_limit_stops_and_shows_on_class_page(acc, uploads, client_a, caplog):
@@ -532,6 +586,16 @@ def test_student_downloads_own_card_after_publish(client_a, dl):
 def test_student_card_404_before_publish(client_a, dl):
     with schema_context("school_a"):
         ClassResult.objects.filter(arm=dl.w.arm, term=dl.w.term).update(status="approved")
+    client_a.force_login(dl.st.user)
+    assert client_a.get(card_url(dl.st.pk, dl.w.term.pk)).status_code == 404
+
+
+def test_student_card_from_an_earlier_class_is_404(client_a, dl):
+    """The student moved arm: the stored card was generated for the old class."""
+    with schema_context("school_a"):
+        level = ClassLevel.objects.create(name="Basic 6", section="jss", order=8)
+        old_arm = ClassArm.objects.create(level=level, suffix="Z")
+        ReportCard.objects.filter(pk=dl.card.pk).update(arm=old_arm)
     client_a.force_login(dl.st.user)
     assert client_a.get(card_url(dl.st.pk, dl.w.term.pk)).status_code == 404
 

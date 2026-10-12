@@ -14,6 +14,7 @@ import logging
 from collections.abc import Iterable
 from typing import Any
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage, storages
 from django.db import connection, transaction
@@ -67,6 +68,8 @@ def _png_data_uri(raw: bytes) -> str:
     """Re-encode an image as a PNG at most ``LOGO_WIDTH`` px wide, as a ``data:`` URI."""
     from PIL import Image
 
+    # Pillow's default MAX_IMAGE_PIXELS guard applies; a decompression bomb raises (or warns,
+    # an error under -W error) and load_logo() renders the card without a logo.
     with Image.open(io.BytesIO(raw)) as opened:
         opened.load()
         img: Image.Image = opened
@@ -260,6 +263,8 @@ def _delete_files(names: list[str]) -> None:
 
 def _save_card(student: Student, term: Term, arm: ClassArm, pdf: bytes) -> str:
     """Store one card and upsert its row; the caller holds the class lock."""
+    # Uploaded inside the caller's transaction: if it later rolls back, the file stays in
+    # Cloudinary unlinked and unmetered until the next run overwrites the same name.
     name = default_storage.save(card_name(student, term), ContentFile(pdf))
     now = timezone.now()
     card = ReportCard.objects.select_for_update().filter(student=student, term=term).first()
@@ -304,6 +309,18 @@ def _audit(arm: ClassArm, term: Term, count: int) -> None:
     )
 
 
+def _stop_unpublished(arm: ClassArm, term: Term, written: list[tuple[int, str]]) -> int:
+    logger.info(
+        "Class %s term %s was unlocked during report-card generation; "
+        "removing %s cards from this run.",
+        arm.pk,
+        term.pk,
+        len(written),
+    )
+    _discard(arm, term, written)
+    return 0
+
+
 def generate_report_cards(arm: ClassArm, term: Term) -> int:
     """Render and store a card for every student with a result summary in this published
     class, returning how many were stored.
@@ -324,7 +341,19 @@ def generate_report_cards(arm: ClassArm, term: Term) -> int:
         student = Student.objects.select_related("user").filter(pk=student_id).first()
         if student is None:
             continue
-        pdf = render_card(student, term, logo=logo)  # slow: outside any lock
+        try:
+            pdf = render_card(student, term, logo=logo)  # slow: outside any lock
+        except ObjectDoesNotExist:
+            # unlock_class deletes the class's summaries and subject results together with the
+            # status change, so missing data usually means the class was unlocked mid-run.
+            if not _is_published(arm, term):
+                return _stop_unpublished(arm, term, written)
+            logger.warning(
+                "Report card for student %s term %s skipped: its results are missing.",
+                student_id,
+                term.pk,
+            )
+            continue
         try:
             with transaction.atomic():
                 _lock(arm, term)
@@ -332,15 +361,7 @@ def generate_report_cards(arm: ClassArm, term: Term) -> int:
                     raise _NotPublished
                 name = _save_card(student, term, arm, pdf)
         except _NotPublished:
-            logger.info(
-                "Class %s term %s was unlocked during report-card generation; "
-                "removing %s cards from this run.",
-                arm.pk,
-                term.pk,
-                len(written),
-            )
-            _discard(arm, term, written)
-            return 0
+            return _stop_unpublished(arm, term, written)
         except PlanLimitExceeded:
             logger.warning(
                 "Report cards for class %s term %s stopped at the storage limit after %s of %s.",
@@ -402,9 +423,12 @@ def downloadable_card(user: Any, raw_student: Any, raw_term: Any) -> ReportCard 
             ).exists()
         ):
             return None
-    elif kind == "staff":
+        # A card generated for an earlier class (the student moved arm) is not this one's.
+        return ReportCard.objects.filter(
+            student_id=student_id, term_id=term_id, arm_id=summary.arm_id
+        ).first()
+    if kind == "staff":
         if not students_visible_to(user).filter(pk=student_id).exists():
             return None
-    else:
-        return None
-    return ReportCard.objects.filter(student_id=student_id, term_id=term_id).first()
+        return ReportCard.objects.filter(student_id=student_id, term_id=term_id).first()
+    return None
