@@ -5,7 +5,9 @@ from django.core.cache import cache
 from django.urls import reverse
 from django_tenants.utils import schema_context
 
+from apps.accounts.identifiers import classify_identifier
 from apps.accounts.roles import set_roles
+from apps.accounts.views.login import student_id_limit
 from apps.audit.models import AuditEvent
 from apps.core.logging import ContextFilter
 from tests.accounts.factories import DEFAULT_PASSWORD, StaffFactory, StudentFactory
@@ -319,6 +321,8 @@ def test_student_success_resets_identifier_keys(client_a):
     for _ in range(4):
         _post_from(client_a, adm, "10.0.3.1", "bad")
     assert _post_from(client_a, adm, "10.0.3.1").status_code == 302
+    with schema_context("school_a"):
+        assert student_id_limit.count(f"login:id:{classify_identifier(adm)[1]}") == 0
     client_a.logout()
     for _ in range(5):
         assert _post_from(client_a, adm, "10.0.3.1", "bad").status_code == 200
