@@ -1,9 +1,10 @@
 from typing import Any
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
 from apps.academics.models import Term
+from apps.accounts.roles import SCHOOL_ADMIN
 from apps.audit.services import record
 from apps.core.locks import school_lock
 from apps.fees.models import (
@@ -14,6 +15,8 @@ from apps.fees.models import (
     FeeStructureLine,
     StudentDiscount,
 )
+
+THRESHOLD_FIELD = "manual_approval_threshold_kobo"
 
 
 def _lines_snapshot(structure: FeeStructure) -> list[dict[str, Any]]:
@@ -57,25 +60,33 @@ def save_discount(discount: Discount, *, by: Any, request: Any = None) -> Discou
 
 
 def save_settings(values: dict[str, Any], *, by: Any, request: Any = None) -> FeeSettings:
-    """``values`` maps FeeSettings field names to new values."""
+    """``values`` maps FeeSettings field names to new values.
+
+    Only a school admin may change ``manual_approval_threshold_kobo`` (Ruling H): otherwise
+    a bursar could raise it, record a large payment that confirms at once, and lower it.
+    The audit lists only the fields that changed (the note as ``note_changed``, not its text).
+    """
+    if THRESHOLD_FIELD in values and not (by is not None and by.has_role(SCHOOL_ADMIN)):
+        raise PermissionDenied("Only a school admin can change the approval threshold.")
     with transaction.atomic():
         school_lock("fees:settings")
         conf = FeeSettings.load()
-        numeric = [f for f in values if f != "bank_transfer_note"]
+        changed = [f for f, v in values.items() if getattr(conf, f) != v]
+        numeric = [f for f in changed if f != "bank_transfer_note"]
         before = {f: getattr(conf, f) for f in numeric}
-        note_changed = "bank_transfer_note" in values and (
-            values["bank_transfer_note"] != conf.bank_transfer_note
-        )
         for field, value in values.items():
             setattr(conf, field, value)
         conf.save()
+        after: dict[str, Any] = {f: getattr(conf, f) for f in numeric}
+        if "bank_transfer_note" in changed:
+            after["note_changed"] = True
         record(
             "fees.settings_saved",
             request=request,
             actor=by,
             obj=conf,
             before=before,
-            after={**{f: getattr(conf, f) for f in numeric}, "note_changed": note_changed},
+            after=after,
         )
     return conf
 

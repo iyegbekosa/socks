@@ -11,7 +11,7 @@ from django.views.decorators.http import require_POST
 from apps.accounts.roles import require_roles
 from apps.core.parsing import parse_id
 from apps.fees import manual
-from apps.fees.forms import ManualPaymentForm, RejectForm
+from apps.fees.forms import ManualPaymentForm
 from apps.fees.models import Invoice, ManualPayment
 from apps.fees.scope import MANAGE_ROLES, VIEW_ROLES, can_manage_fees
 from apps.fees.views.setup import _require_manage, _settings_or_defaults
@@ -150,14 +150,9 @@ def manual_decide(request, pk):
                 msg += " Part of it was more than the balance and is flagged for review."
             messages.success(request, msg)
         else:
-            form = RejectForm(request.POST)
-            if not form.is_valid():
-                return _pending_page(
-                    request,
-                    status=400,
-                    reject_errors={mp.pk: [manual.MSG_REASON]},
-                )
-            manual.reject(mp, reason=form.cleaned_data["reason"], by=request.user, request=request)
+            # The service checks permission and state first, then the reason.
+            reason = request.POST.get("reason", "")
+            manual.reject(mp, reason=reason, by=request.user, request=request)
             messages.success(request, "Payment rejected.")
     except manual.ManualStateError as exc:
         return _pending_page(request, error=exc.messages[0], status=409)

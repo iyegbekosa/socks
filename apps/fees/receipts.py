@@ -33,9 +33,20 @@ def receipt_name(receipt: Receipt) -> str:
     return f"receipts/{receipt.year}/{receipt.pk}.pdf"
 
 
+def _reference(payment: Any) -> str:
+    """The gateway reference, or the teller/reference number of a manual payment."""
+    if payment.gateway_reference:
+        return payment.gateway_reference
+    if payment.manual_id is not None:
+        return payment.manual.reference_no
+    return ""
+
+
 def _receipt_for_payment(payment_id: int) -> Receipt | None:
     return (
-        Receipt.objects.select_related("payment__student__user", "payment__recorded_by")
+        Receipt.objects.select_related(
+            "payment__student__user", "payment__recorded_by", "payment__manual"
+        )
         .filter(payment_id=payment_id)
         .first()
     )
@@ -65,7 +76,7 @@ def receipt_context(receipt: Receipt, *, logo: str | None) -> dict[str, Any]:
         "student_name": student.full_name,
         "admission_number": student.admission_number or "",
         "method": payment.get_method_display(),
-        "reference": payment.gateway_reference or "",
+        "reference": _reference(payment),
         "lines": lines,
         "total": naira_display(payment.amount_kobo),
         "unallocated": naira_display(payment.unallocated_kobo) if payment.unallocated_kobo else "",

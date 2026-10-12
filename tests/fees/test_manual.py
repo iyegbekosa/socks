@@ -512,3 +512,122 @@ def test_links(school_a, client_a):
         client_a.force_login(make_staff("proprietor"))
         body = client_a.get(reverse("fees:invoice", args=[w.inv.pk])).content.decode()
         assert "Record payment" not in body
+
+
+# --- fix round 1 --------------------------------------------------------------------------
+
+
+def _settings_post(threshold="1000000", **extra):
+    data = {
+        "allow_part_payment": "on",
+        "min_part_payment": "0",
+        "manual_approval_threshold": threshold,
+        "bank_transfer_note": "",
+    }
+    data.update(extra)
+    return data
+
+
+def test_bursar_cannot_change_threshold(school_a, client_a):
+    with schema_context("school_a"):
+        bursar = make_staff("bursar")
+        FeeSettings.load()
+    login_verified(client_a, bursar)
+    r = client_a.get(reverse("fees:settings"))
+    assert r.status_code == 200
+    body = r.content.decode()
+    assert 'name="manual_approval_threshold"' in body and "disabled" in body
+    # a forged POST changes the other fields but never the threshold
+    r = client_a.post(reverse("fees:settings"), _settings_post(min_part_payment="500"))
+    assert r.status_code == 302
+    with schema_context("school_a"):
+        conf = FeeSettings.load()
+        assert conf.manual_approval_threshold_kobo == 5_000_000
+        assert conf.min_part_payment_kobo == 50_000
+        ev = AuditEvent.objects.get(action="fees.settings_saved")
+        assert "manual_approval_threshold_kobo" not in ev.after
+        assert ev.before == {"min_part_payment_kobo": 0}
+        assert ev.after == {"min_part_payment_kobo": 50_000}
+        with pytest.raises(PermissionDenied):
+            from apps.fees import services
+
+            services.save_settings({"manual_approval_threshold_kobo": 1}, by=bursar)
+        assert FeeSettings.load().manual_approval_threshold_kobo == 5_000_000
+
+
+def test_admin_changes_threshold_with_before_after_audit(school_a, client_a):
+    with schema_context("school_a"):
+        admin = make_staff("school_admin")
+        FeeSettings.load()
+    login_verified(client_a, admin)
+    body = client_a.get(reverse("fees:settings")).content.decode()
+    assert 'name="manual_approval_threshold"' in body
+    r = client_a.post(reverse("fees:settings"), _settings_post(threshold="10000"))
+    assert r.status_code == 302
+    with schema_context("school_a"):
+        assert FeeSettings.load().manual_approval_threshold_kobo == 1_000_000
+        ev = AuditEvent.objects.get(action="fees.settings_saved")
+        assert ev.before == {"manual_approval_threshold_kobo": 5_000_000}
+        assert ev.after == {"manual_approval_threshold_kobo": 1_000_000}
+
+
+def test_manual_payment_keeps_threshold_in_force(school_a):
+    with schema_context("school_a"):
+        w = _mworld()
+        mp = _record(w, 6_000_000)
+        assert mp.threshold_kobo == 5_000_000
+        conf = FeeSettings.load()
+        conf.manual_approval_threshold_kobo = 1_000_000
+        conf.save()
+        assert _record(w, 500_000).threshold_kobo == 1_000_000
+        mp.refresh_from_db()
+        assert mp.threshold_kobo == 5_000_000
+
+
+def test_dual_role_user_cannot_approve_own_record(school_a):
+    from apps.accounts.roles import set_roles
+
+    with schema_context("school_a"):
+        w = _mworld()
+        set_roles(w.bursar, ["bursar", "school_admin"], by=None)
+        mp = _record(w, 6_000_000)
+        with pytest.raises(PermissionDenied):
+            manual.approve(mp, by=w.bursar)
+        with pytest.raises(PermissionDenied):
+            manual.reject(mp, reason=REASON, by=w.bursar)
+        assert not Payment.objects.exists()
+
+
+def test_decide_checks_permission_and_state_before_reason(school_a, client_a):
+    with schema_context("school_a"):
+        w = _mworld()
+        mp = _record(w, 6_000_000)
+        decided = _record(w, 6_000_000)
+        manual.reject(decided, reason=REASON, by=w.admin)
+    login_verified(client_a, w.bursar)
+    r = client_a.post(reverse("fees:manual_decide", args=[mp.pk]), {"action": "reject"})
+    assert r.status_code == 403
+    login_verified(client_a, w.admin)
+    r = client_a.post(reverse("fees:manual_decide", args=[decided.pk]), {"action": "reject"})
+    assert r.status_code == 409
+
+
+def test_paid_at_is_noon_lagos_whatever_the_active_timezone(school_a):
+    with timezone.override(ZoneInfo("UTC")):
+        assert manual.paid_at_for(PAID_ON) == datetime(2026, 10, 1, 11, 0, tzinfo=ZoneInfo("UTC"))
+        assert manual.paid_at_for(PAID_ON).astimezone(LAGOS).hour == 12
+
+
+@pytest.mark.pdf
+def test_receipt_shows_teller_number(school_a, uploads, django_capture_on_commit_callbacks):
+    from apps.fees import receipts
+    from tests.results.test_cards import pdf_text
+
+    with schema_context("school_a"):
+        w = _mworld()
+        mp = _record(w, 6_000_000, method="teller", reference_no="TLR-55501")
+        payment = manual.approve(mp, by=w.admin)
+        assert receipts.generate_receipt(payment.pk) is True
+        receipt = Receipt.objects.get(payment=payment)
+        text = pdf_text(uploads.files[f"dev/school_a/receipts/{receipt.year}/{receipt.pk}.pdf"])
+        assert "TLR-55501" in text

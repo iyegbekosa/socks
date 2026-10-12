@@ -13,6 +13,7 @@ import logging
 import os
 from datetime import date, datetime, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.base import ContentFile
@@ -60,13 +61,17 @@ class ManualStateError(ValidationError):
     """The manual payment was already approved or rejected."""
 
 
+LAGOS = ZoneInfo("Africa/Lagos")
+
+
 def _now_date() -> date:
-    return timezone.localdate()
+    """Today in Lagos, whatever timezone is active."""
+    return timezone.localtime(timezone.now(), LAGOS).date()
 
 
 def paid_at_for(paid_on: date) -> datetime:
     """Noon, Africa/Lagos, on the day paid."""
-    return timezone.make_aware(datetime.combine(paid_on, time(12, 0)))
+    return datetime.combine(paid_on, time(12, 0), tzinfo=LAGOS)
 
 
 # --- photos ---------------------------------------------------------------------------------
@@ -269,6 +274,7 @@ def _record_locked(
             photo_name=photo_name,
             status=ManualPayment.APPROVED if immediate else ManualPayment.PENDING,
             recorded_by=by,
+            threshold_kobo=threshold,
             decided_by=by if immediate else None,
             decided_at=timezone.now() if immediate else None,
         )
@@ -347,14 +353,17 @@ def approve(mp: ManualPayment, *, by: Any, request: Any = None) -> Payment:
 
 
 def reject(mp: ManualPayment, *, reason: str, by: Any, request: Any = None) -> ManualPayment:
-    """Reject with a reason, kept on the row only (never in the audit metadata)."""
+    """Reject with a reason, kept on the row only (never in the audit metadata).
+
+    Permission and state are checked (under the row lock) before the reason, so a recorder
+    gets ``PermissionDenied`` and a decided record ``ManualStateError`` whatever the reason."""
     reason = " ".join((reason or "").split())
-    if not reason:
-        raise ValidationError({"reason": [MSG_REASON]})
-    if len(reason) > 500:
-        raise ValidationError({"reason": ["Use at most 500 characters."]})
     with transaction.atomic():
         locked = _lock_pending(mp, by)
+        if not reason:
+            raise ValidationError({"reason": [MSG_REASON]})
+        if len(reason) > 500:
+            raise ValidationError({"reason": ["Use at most 500 characters."]})
         locked.status = ManualPayment.REJECTED
         locked.decided_by = by
         locked.decided_at = timezone.now()

@@ -10,7 +10,7 @@ from django.views.decorators.cache import never_cache
 
 from apps.academics.models import ClassLevel, Term
 from apps.academics.services import current_session, current_term
-from apps.accounts.roles import require_roles
+from apps.accounts.roles import SCHOOL_ADMIN, require_roles
 from apps.core.parsing import parse_id
 from apps.fees import services
 from apps.fees.forms import (
@@ -55,16 +55,17 @@ def _save_or_conflict(request, save):
 @require_roles(*VIEW_ROLES)
 def settings_page(request):
     can_edit = can_manage_fees(request.user)
+    can_edit_threshold = can_edit and request.user.has_role(SCHOOL_ADMIN)
     conf = FeeSettings.load() if can_edit else _settings_or_defaults()
     if request.method == "POST":
         _require_manage(request)
-        form = FeeSettingsForm(request.POST)
+        form = FeeSettingsForm(request.POST, conf=conf, can_edit_threshold=can_edit_threshold)
         if form.is_valid():
             services.save_settings(form.values(), by=request.user, request=request)
             messages.success(request, "Fee settings saved.")
             return redirect("fees:settings")
     else:
-        form = FeeSettingsForm(conf=conf)
+        form = FeeSettingsForm(conf=conf, can_edit_threshold=can_edit_threshold)
     return render(request, "fees/settings.html", {"form": form, "can_edit": can_edit})
 
 

@@ -133,3 +133,17 @@ def test_only_fee_managers(client_a, w):
     assert post(client_a, body(w)).status_code == 401
     login_verified(client_a, admin)
     assert post(client_a, body(w)).status_code == 201
+
+
+def test_unknown_json_keys_are_refused(client_a, w):
+    """Matches the API convention (scores cells): unknown keys are a validation error."""
+    login_verified(client_a, w.bursar)
+    r = post(client_a, {**body(w), "approved_by": w.bursar.pk})
+    assert r.status_code == 400
+    err = r.json()["error"]
+    assert err["code"] == "VALIDATION_ERROR"
+    assert err["details"] == [{"field": "approved_by", "message": "Unknown field."}]
+    r = post(client_a, body(w, invoices=[{"invoice": w.inv.pk, "amount_kobo": 1, "x": 1}]))
+    assert r.status_code == 400
+    with schema_context("school_a"):
+        assert not ManualPayment.objects.exists()

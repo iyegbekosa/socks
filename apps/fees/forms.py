@@ -156,7 +156,14 @@ class FeeSettingsForm(forms.Form):
         help_text="Shown to students when online payment is unavailable.",
     )
 
-    def __init__(self, *args: Any, conf: FeeSettings | None = None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        conf: FeeSettings | None = None,
+        can_edit_threshold: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        self.can_edit_threshold = can_edit_threshold
         if conf is not None:
             kwargs.setdefault(
                 "initial",
@@ -169,16 +176,27 @@ class FeeSettingsForm(forms.Form):
                 },
             )
         super().__init__(*args, **kwargs)
+        if not can_edit_threshold:
+            # Only a school admin may change who needs a second approver (Ruling H). A
+            # disabled field ignores posted data, and values() leaves it out.
+            field = self.fields["manual_approval_threshold"]
+            field.disabled = True
+            field.help_text = (
+                "Manual payments at or above this need a second person to approve. "
+                "Only a school admin can change it."
+            )
 
     def values(self) -> dict[str, Any]:
         d = self.cleaned_data
-        return {
+        values = {
             "allow_part_payment": d["allow_part_payment"],
             "min_part_payment_kobo": d["min_part_payment"] or 0,
-            "manual_approval_threshold_kobo": d["manual_approval_threshold"] or 0,
             "block_results_when_owing": d["block_results_when_owing"],
             "bank_transfer_note": d["bank_transfer_note"].strip(),
         }
+        if self.can_edit_threshold:
+            values["manual_approval_threshold_kobo"] = d["manual_approval_threshold"] or 0
+        return values
 
 
 class StructureForm(forms.Form):
@@ -348,7 +366,3 @@ class ManualPaymentForm(forms.Form):
             if kobo:
                 lines.append(PlannedLine(invoice.pk, kobo))
         return lines
-
-
-class RejectForm(forms.Form):
-    reason = forms.CharField(max_length=500, widget=forms.Textarea(attrs={"rows": 2}))

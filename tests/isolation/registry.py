@@ -58,7 +58,8 @@ class IsolationCase:
     # Multipart form data (e.g. an uploaded file), built per request; replaces the JSON body.
     multipart: Callable[[], dict] | None = None
     # no_cross_effect: counts rows in the active schema that the request could add; the
-    # harness calls it in both school A's and school B's schema.
+    # harness calls it in both school A's and school B's schema. With "refused", both
+    # schools' counts must stay unchanged.
     count_model: Callable[[], int] | None = None
     # Runs in school A's schema before the request (e.g. academic setup so a write succeeds).
     setup_a: Callable[[], None] | None = None
@@ -193,6 +194,12 @@ def _manual_payment_body(invoice) -> dict:
     }
 
 
+def _manual_payment_count() -> int:
+    from apps.fees.models import ManualPayment
+
+    return ManualPayment.objects.count()
+
+
 def _tiny_csv() -> dict:
     from django.core.files.uploadedfile import SimpleUploadedFile
 
@@ -279,7 +286,8 @@ ISOLATION_CASES: list[IsolationCase] = [
         make_obj=_published_report_card,
     ),
     # School A's bursar posts school B's student and invoice ids: unknown in A, so 404, and
-    # B's invoice is unchanged. tests/api/test_payments_manual_api.py covers roles.
+    # B's invoice is unchanged and no ManualPayment is created in either school.
+    # tests/api/test_payments_manual_api.py covers roles.
     IsolationCase(
         "api:payments_manual",
         "POST",
@@ -287,6 +295,7 @@ ISOLATION_CASES: list[IsolationCase] = [
         make_obj=_invoice_in_active_schema,
         body_for=_manual_payment_body,
         actor=bursar_actor,
+        count_model=_manual_payment_count,
         label="bursar",
     ),
     IsolationCase(
@@ -404,6 +413,11 @@ def assert_cross_school_refused(case, school_a, school_b, client_a) -> None:
         assert response.status_code in {401, 403, 404}, (
             f"{case.name}: expected 401/403/404, got {response.status_code}"
         )
+        if case.count_model is not None:
+            with schema_context(school_a.schema_name):
+                assert case.count_model() == count_a_before, (
+                    f"{case.name}: a refused request wrote rows in school A"
+                )
     elif case.expect == "no_cross_effect":
         assert 200 <= response.status_code < 300, (
             f"{case.name}: expected a 2xx response, got {response.status_code}"

@@ -258,6 +258,8 @@ class ManualPayment(models.Model):
     )
     decided_at = models.DateTimeField(null=True, blank=True)
     reject_reason = models.CharField(max_length=500, blank=True)
+    # FeeSettings.manual_approval_threshold_kobo in force when this was recorded.
+    threshold_kobo = models.BigIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
