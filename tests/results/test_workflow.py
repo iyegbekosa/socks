@@ -759,3 +759,280 @@ def test_publish_freshness_uses_database_time(w, django_capture_on_commit_callba
     assert computed >= k.approved_at
     publish_class(w.arm, w.term, by=w.principal)
     assert klass(w).status == "published"
+
+
+# --- recovery: queueing failures, retry compute, regenerate cards (final review I3) -------
+
+
+class BrokerDown(Exception):
+    pass
+
+
+def test_broker_failure_on_approve_shows_error_not_500(
+    client_a, w, django_capture_on_commit_callbacks, caplog
+):
+    reviewed(w)
+    login_verified(client_a, w.principal)
+    with (
+        mock.patch(
+            "apps.results.tasks.compute_class_task.apply_async",
+            side_effect=BrokerDown("amqp://user:secret@broker"),
+        ),
+        caplog.at_level("ERROR", logger="apps.results.workflow"),
+        django_capture_on_commit_callbacks(execute=True),
+    ):
+        r = client_a.post(reverse("results:class_approve", args=[w.arm.pk]))
+    assert r.status_code == 302
+    k = klass(w)
+    assert k.status == "approved"
+    assert k.compute_error == ClassResult.START_ERROR
+    assert "BrokerDown" in caplog.text and "secret" not in caplog.text
+    html = client_a.get(status_url(w)).content.decode()
+    assert "Could not start — please retry" in html
+    assert reverse("results:class_retry_compute", args=[w.arm.pk]) in html
+    with pytest.raises(ValidationError, match="Retry"):
+        publish_class(w.arm, w.term, by=w.principal)
+
+
+def test_broker_failure_on_publish_sets_cards_error(w, django_capture_on_commit_callbacks):
+    reviewed(w)
+    with django_capture_on_commit_callbacks(execute=True):
+        approve_class(w.arm, w.term, by=w.principal)
+    with (
+        mock.patch(
+            "apps.results.tasks.generate_report_cards_task.apply_async", side_effect=BrokerDown
+        ),
+        mock.patch("apps.results.tasks.notify_published_task.apply_async") as notify,
+        django_capture_on_commit_callbacks(execute=True),
+    ):
+        publish_class(w.arm, w.term, by=w.principal)
+    notify.assert_called_once()  # one failed enqueue does not stop the other
+    k = klass(w)
+    assert k.status == "published" and k.cards_error == ClassResult.START_ERROR
+
+
+def test_unexpected_compute_error_keeps_class_approved_with_generic_error(
+    w, django_capture_on_commit_callbacks, caplog
+):
+    reviewed(w)
+    with (
+        mock.patch(
+            "apps.results.workflow.compute_class",
+            side_effect=RuntimeError(f"bad row for {w.students[0].last_name}"),
+        ),
+        caplog.at_level("ERROR", logger="apps.results.workflow"),
+        django_capture_on_commit_callbacks(execute=True),
+    ):
+        approve_class(w.arm, w.term, by=w.principal)
+    k = klass(w)
+    assert k.status == "approved"
+    assert k.compute_error == ClassResult.COMPUTE_FAILED
+    assert not ResultSummary.objects.exists()
+    assert "RuntimeError" in caplog.text
+    assert w.students[0].last_name not in caplog.text
+    assert any(rec.exc_info for rec in caplog.records)  # the traceback is kept
+
+
+def test_retry_compute_succeeds(client_a, w, django_capture_on_commit_callbacks):
+    reviewed(w)
+    with (
+        mock.patch("apps.results.workflow.compute_class", side_effect=RuntimeError),
+        django_capture_on_commit_callbacks(execute=True),
+    ):
+        approve_class(w.arm, w.term, by=w.principal)
+    assert klass(w).compute_error == ClassResult.COMPUTE_FAILED
+
+    login_verified(client_a, w.admin)
+    with django_capture_on_commit_callbacks(execute=True):
+        r = client_a.post(reverse("results:class_retry_compute", args=[w.arm.pk]))
+    assert r.status_code == 302, r.content
+    k = klass(w)
+    assert k.status == "approved" and k.compute_error == ""
+    assert ResultSummary.objects.filter(arm=w.arm, term=w.term).count() == 3
+    assert audit_payloads("results.compute_retried") == [{"arm_id": w.arm.pk, "term_id": w.term.pk}]
+    html = client_a.get(status_url(w)).content.decode()
+    assert reverse("results:class_retry_compute", args=[w.arm.pk]) not in html
+    publish_class(w.arm, w.term, by=w.admin)
+    assert klass(w).status == "published"
+
+
+def test_retry_compute_when_computation_never_ran(w, django_capture_on_commit_callbacks):
+    reviewed(w)
+    approve_class(w.arm, w.term, by=w.principal)  # on_commit never runs: stale
+    with django_capture_on_commit_callbacks(execute=True):
+        workflow.retry_compute(w.arm, w.term, by=w.principal)
+    assert ResultSummary.objects.filter(arm=w.arm, term=w.term).count() == 3
+
+
+def test_retry_compute_refusals(client_a, w, django_capture_on_commit_callbacks):
+    with pytest.raises(workflow.ResultsStateError):
+        workflow.retry_compute(w.arm, w.term, by=w.principal)  # draft
+    reviewed(w)
+    with django_capture_on_commit_callbacks(execute=True):
+        approve_class(w.arm, w.term, by=w.principal)
+    with pytest.raises(workflow.ResultsStateError, match="already computed"):
+        workflow.retry_compute(w.arm, w.term, by=w.principal)
+    login_verified(client_a, w.principal)
+    r = client_a.post(reverse("results:class_retry_compute", args=[w.arm.pk]))
+    assert r.status_code == 409 and "already computed" in r.content.decode()
+    for user in (w.proprietor, w.ft):
+        with pytest.raises(PermissionDenied):
+            workflow.retry_compute(w.arm, w.term, by=user)
+    client_a.force_login(w.proprietor)
+    assert client_a.post(reverse("results:class_retry_compute", args=[w.arm.pk])).status_code == 403
+    client_a.force_login(w.ft)
+    assert client_a.post(reverse("results:class_retry_compute", args=[w.arm.pk])).status_code == 403
+    assert client_a.get(reverse("results:class_retry_compute", args=[w.arm.pk])).status_code == 405
+    assert not AuditEvent.objects.filter(action="results.compute_retried").exists()
+
+
+def _published_quietly(w, captured):
+    reviewed(w)
+    with captured(execute=True):
+        approve_class(w.arm, w.term, by=w.principal)
+    publish_class(w.arm, w.term, by=w.principal)  # on_commit not run: nothing queued
+
+
+def test_regenerate_report_cards(client_a, w, django_capture_on_commit_callbacks):
+    _published_quietly(w, django_capture_on_commit_callbacks)
+    ClassResult.objects.filter(arm=w.arm, term=w.term).update(cards_error=ClassResult.START_ERROR)
+    login_verified(client_a, w.principal)
+    html = client_a.get(status_url(w)).content.decode()
+    assert reverse("results:class_regenerate_cards", args=[w.arm.pk]) in html
+    with (
+        mock.patch("apps.results.tasks.generate_report_cards_task.apply_async") as enqueue,
+        mock.patch("apps.results.tasks.notify_published_task.apply_async") as notify,
+        django_capture_on_commit_callbacks(execute=True),
+    ):
+        r = client_a.post(reverse("results:class_regenerate_cards", args=[w.arm.pk]))
+    assert r.status_code == 302, r.content
+    enqueue.assert_called_once_with(args=[w.arm.pk, w.term.pk], queue="reports")
+    notify.assert_not_called()  # guardians were already told at publish
+    assert klass(w).cards_error == ""
+    assert audit_payloads("results.report_cards_regenerated") == [
+        {"arm_id": w.arm.pk, "term_id": w.term.pk, "notify": False}
+    ]
+
+
+def test_regenerate_also_queues_notifications_that_could_not_start(
+    w, django_capture_on_commit_callbacks
+):
+    reviewed(w)
+    with django_capture_on_commit_callbacks(execute=True):
+        approve_class(w.arm, w.term, by=w.principal)
+    with (
+        mock.patch("apps.results.tasks.generate_report_cards_task.apply_async"),
+        mock.patch("apps.results.tasks.notify_published_task.apply_async", side_effect=OSError),
+        django_capture_on_commit_callbacks(execute=True),
+    ):
+        publish_class(w.arm, w.term, by=w.principal)
+    assert klass(w).cards_error == ClassResult.NOTIFY_START_ERROR
+    with (
+        mock.patch("apps.results.tasks.generate_report_cards_task.apply_async") as enqueue,
+        mock.patch("apps.results.tasks.notify_published_task.apply_async") as notify,
+        django_capture_on_commit_callbacks(execute=True),
+    ):
+        workflow.regenerate_report_cards(w.arm, w.term, by=w.admin)
+    enqueue.assert_called_once()
+    notify.assert_called_once_with(args=[w.arm.pk, w.term.pk], queue="notifications")
+    assert klass(w).cards_error == ""
+
+
+def test_regenerate_refusals(client_a, w):
+    reviewed(w)
+    with pytest.raises(workflow.ResultsStateError):
+        workflow.regenerate_report_cards(w.arm, w.term, by=w.principal)
+    login_verified(client_a, w.principal)
+    r = client_a.post(reverse("results:class_regenerate_cards", args=[w.arm.pk]))
+    assert r.status_code == 409
+    for user in (w.proprietor, w.ft):
+        with pytest.raises(PermissionDenied):
+            workflow.regenerate_report_cards(w.arm, w.term, by=user)
+    client_a.force_login(w.proprietor)
+    r = client_a.post(reverse("results:class_regenerate_cards", args=[w.arm.pk]))
+    assert r.status_code == 403
+    assert not AuditEvent.objects.filter(action="results.report_cards_regenerated").exists()
+
+
+# --- navigation (final review I2, M12) ----------------------------------------------------
+
+
+def arm_detail_url(w):
+    return reverse("academics:arm_detail", args=[w.arm.pk])
+
+
+def test_arm_detail_links_to_class_status_for_managers(client_a, w):
+    status = status_url(w)
+    comments = reverse("results:class_comments", args=[w.arm.pk])
+    for user, verify, sees_comments in (
+        (w.principal, True, True),
+        (w.admin, True, False),
+        (w.proprietor, False, False),
+    ):
+        if verify:
+            login_verified(client_a, user)
+        else:
+            client_a.force_login(user)
+        r = client_a.get(arm_detail_url(w))
+        assert r.status_code == 200
+        html = r.content.decode()
+        assert status in html
+        assert (comments in html) is sees_comments
+        assert client_a.get(status).status_code == 200
+        assert (client_a.get(comments).status_code == 200) is sees_comments
+
+
+def test_class_status_shows_comments_link_only_to_those_who_can_open_it(client_a, w):
+    comments = reverse("results:class_comments", args=[w.arm.pk])
+    client_a.force_login(w.ft)
+    assert comments in client_a.get(status_url(w)).content.decode()
+    login_verified(client_a, w.principal)
+    assert comments in client_a.get(status_url(w)).content.decode()
+    login_verified(client_a, w.admin)
+    assert comments not in client_a.get(status_url(w)).content.decode()
+    assert client_a.get(comments).status_code == 403
+
+
+def test_published_class_lists_report_cards_for_staff(
+    client_a, w, django_capture_on_commit_callbacks
+):
+    from apps.results.models import ReportCard
+
+    _published_quietly(w, django_capture_on_commit_callbacks)
+    ranked = list(w.students)
+    ready = ranked[0]
+    ReportCard.objects.create(
+        student=ready,
+        term=w.term,
+        arm=w.arm,
+        file_name="report_cards/x.pdf",
+        generated_at=timezone.now(),
+    )
+    for user, verify in ((w.principal, True), (w.ft, False), (w.proprietor, False)):
+        if verify:
+            login_verified(client_a, user)
+        else:
+            client_a.force_login(user)
+        html = client_a.get(status_url(w)).content.decode()
+        assert reverse("results:report_card", args=[ready.pk, w.term.pk]) in html
+        for st in ranked[1:]:
+            assert reverse("results:report_card", args=[st.pk, w.term.pk]) not in html
+            assert st.full_name in html
+        assert html.count("not generated yet") == len(ranked) - 1
+
+
+def test_unpublished_class_lists_no_report_cards(client_a, w, django_capture_on_commit_callbacks):
+    reviewed(w)
+    with django_capture_on_commit_callbacks(execute=True):
+        approve_class(w.arm, w.term, by=w.principal)
+    login_verified(client_a, w.principal)
+    html = client_a.get(status_url(w)).content.decode()
+    assert "Report cards" not in html and "not generated yet" not in html
+
+
+def test_unlock_form_asks_for_no_personal_details(client_a, w, django_capture_on_commit_callbacks):
+    _published_quietly(w, django_capture_on_commit_callbacks)
+    login_verified(client_a, w.admin)
+    html = client_a.get(status_url(w)).content.decode()
+    assert "Do not include student names or personal details." in html
+    assert 'aria-describedby="reason-help"' in html

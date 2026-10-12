@@ -1,5 +1,6 @@
 import logging
 import re
+import sys
 
 from pythonjsonlogger.json import JsonFormatter as _BaseJsonFormatter
 
@@ -60,3 +61,16 @@ class RedactFilter(logging.Filter):
             if record.args is data:  # trace logs pass the context as the %-format args too
                 record.args = redacted
         return True
+
+
+class RedactedError(Exception):
+    """Stands in for a caught exception in a logged traceback: its type name, never its text
+    (exception messages can carry children's data)."""
+
+
+def log_exception_redacted(log: logging.Logger, msg: str, *args: object) -> None:
+    """``log.exception`` for the exception being handled, keeping the traceback frames and the
+    exception's type but dropping its message, args and chained exceptions."""
+    etype, _value, tb = sys.exc_info()
+    name = etype.__name__ if etype is not None else "Exception"
+    log.exception(msg + " (%s)", *args, name, exc_info=(RedactedError, RedactedError(name), tb))

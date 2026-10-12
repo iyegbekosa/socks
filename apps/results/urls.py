@@ -28,6 +28,16 @@ urlpatterns = [
     path("class/<int:arm_pk>/approve/", workflow.class_approve, name="class_approve"),
     path("class/<int:arm_pk>/publish/", workflow.class_publish, name="class_publish"),
     path("class/<int:arm_pk>/unlock/", workflow.class_unlock, name="class_unlock"),
+    path(
+        "class/<int:arm_pk>/retry-compute/",
+        workflow.class_retry_compute,
+        name="class_retry_compute",
+    ),
+    path(
+        "class/<int:arm_pk>/regenerate-cards/",
+        workflow.class_regenerate_cards,
+        name="class_regenerate_cards",
+    ),
     path("broadsheet/<str:arm_pk>/<str:term_pk>/", broadsheet.broadsheet, name="broadsheet"),
     path(
         "broadsheet/<str:arm_pk>/<str:term_pk>/csv/",

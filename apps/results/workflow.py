@@ -12,6 +12,7 @@ counts only.
 """
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -24,6 +25,7 @@ from apps.academics.models import ClassArm, FormTeacher, SubjectOffering, Term
 from apps.accounts.roles import PRINCIPAL, SCHOOL_ADMIN
 from apps.audit.services import record
 from apps.core.locks import school_lock
+from apps.core.logging import log_exception_redacted
 from apps.results.compute import compute_class
 from apps.results.models import (
     ClassResult,
@@ -59,10 +61,8 @@ class ResultsStateError(ValidationError):
 def on_class_published(arm: ClassArm, term: Term) -> None:
     """Runs on commit after a class is published: queues its report cards and the guardian
     notifications."""
-    from apps.results.tasks import generate_report_cards_task, notify_published_task
-
-    generate_report_cards_task.apply_async(args=[arm.pk, term.pk], queue="reports")
-    notify_published_task.apply_async(args=[arm.pk, term.pk], queue="notifications")
+    _start_cards(arm.pk, term.pk)
+    _start_notify(arm.pk, term.pk)
 
 
 def on_class_unlocked(arm: ClassArm, term: Term) -> None:
@@ -70,6 +70,64 @@ def on_class_unlocked(arm: ClassArm, term: Term) -> None:
     from apps.results.cards import remove_report_cards
 
     remove_report_cards(arm, term)
+
+
+# --- queueing background work --------------------------------------------------------------
+# These run on commit, after the state change is saved. A broker or queue failure must not
+# turn the request into a 500: it is logged (type only) and shown on the class page, where
+# "Retry compute" / "Regenerate report cards" start the work again.
+
+
+def _start(what: str, arm_id: int, term_id: int, enqueue: Callable[[], Any], **error: str) -> bool:
+    try:
+        enqueue()
+    except Exception as exc:
+        logger.error(
+            "Could not queue %s for class %s term %s (%s).",
+            what,
+            arm_id,
+            term_id,
+            type(exc).__name__,
+        )
+        ClassResult.objects.filter(arm_id=arm_id, term_id=term_id).update(**error)
+        return False
+    return True
+
+
+def _start_compute(arm_id: int, term_id: int) -> bool:
+    from apps.results.tasks import compute_class_task
+
+    return _start(
+        "computation",
+        arm_id,
+        term_id,
+        lambda: compute_class_task.apply_async(args=[arm_id, term_id], queue="default"),
+        compute_error=ClassResult.START_ERROR,
+    )
+
+
+def _start_cards(arm_id: int, term_id: int) -> bool:
+    from apps.results.tasks import generate_report_cards_task
+
+    return _start(
+        "report cards",
+        arm_id,
+        term_id,
+        lambda: generate_report_cards_task.apply_async(args=[arm_id, term_id], queue="reports"),
+        cards_error=ClassResult.START_ERROR,
+    )
+
+
+def _start_notify(arm_id: int, term_id: int) -> bool:
+    from apps.results.tasks import notify_published_task
+
+    return _start(
+        "notifications",
+        arm_id,
+        term_id,
+        lambda: notify_published_task.apply_async(args=[arm_id, term_id], queue="notifications"),
+        cards_error=ClassResult.NOTIFY_START_ERROR,
+    )
 
 
 # --- helpers -------------------------------------------------------------------------------
@@ -115,6 +173,23 @@ def _has_role(user: Any, *roles: str) -> bool:
     if user is None or not getattr(user, "is_authenticated", False) or not user.is_active:
         return False
     return getattr(user, "kind", None) == "staff" and bool(user.has_role(*roles))
+
+
+def needs_compute(klass: ClassResult | None) -> bool:
+    """An approved class whose computation failed, never started, or predates its approval."""
+    if klass is None or klass.status != ClassResult.Status.APPROVED:
+        return False
+    if klass.compute_error:
+        return True
+    first = ResultSummary.objects.filter(arm_id=klass.arm_id, term_id=klass.term_id).aggregate(
+        first=Min("computed_at")
+    )["first"]
+    return first is None or klass.approved_at is None or first < klass.approved_at
+
+
+def can_manage_class(user: Any) -> bool:
+    """Principal or school admin: publish, retry compute, regenerate report cards."""
+    return _has_role(user, PRINCIPAL, SCHOOL_ADMIN)
 
 
 def blank_cells(offering: SubjectOffering, term: Term) -> int:
@@ -256,8 +331,6 @@ def approve_class(arm: ClassArm, term: Term, *, by: Any, request: Any = None) ->
     """reviewed → approved, by the principal; computation runs on commit."""
     if not _has_role(by, PRINCIPAL):
         raise PermissionDenied
-    from apps.results.tasks import compute_class_task
-
     with transaction.atomic():
         school_lock(f"results:{arm.pk}:{term.pk}")
         klass = _locked_class(arm, term)
@@ -275,33 +348,108 @@ def approve_class(arm: ClassArm, term: Term, *, by: Any, request: Any = None) ->
             "results.class_approved", request=request, actor=by, obj=klass, after=_ids(arm, term)
         )
         arm_id, term_id = arm.pk, term.pk
-        transaction.on_commit(
-            lambda: compute_class_task.apply_async(args=[arm_id, term_id], queue="default")
-        )
+        transaction.on_commit(lambda: _start_compute(arm_id, term_id))
     return klass
 
 
 def run_compute(arm: ClassArm, term: Term) -> None:
-    """Compute an approved class. A failure (e.g. a blank cell) returns it to ``reviewed`` with
-    ``compute_error`` set. A class no longer approved is left alone."""
+    """Compute an approved class. A data problem (e.g. a blank cell) returns it to
+    ``reviewed`` with ``compute_error`` set to the reason. Any other failure keeps it
+    ``approved`` with a generic ``compute_error`` ("Retry compute" on the class page). A class
+    no longer approved is left alone."""
+    try:
+        _run_compute(arm, term)
+    except Exception:
+        log_exception_redacted(logger, "Computing class %s term %s failed", arm.pk, term.pk)
+        with transaction.atomic():
+            school_lock(f"results:{arm.pk}:{term.pk}")
+            ClassResult.objects.filter(
+                arm=arm, term=term, status=ClassResult.Status.APPROVED
+            ).update(compute_error=ClassResult.COMPUTE_FAILED)
+
+
+def _run_compute(arm: ClassArm, term: Term) -> None:
     with transaction.atomic():
         school_lock(f"results:{arm.pk}:{term.pk}")
         klass = ClassResult.objects.select_for_update().filter(arm=arm, term=term).first()
         if klass is None or klass.status != ClassResult.Status.APPROVED:
             return
         try:
-            compute_class(arm, term)
+            compute_class(arm, term)  # its own savepoint: a failure leaves nothing half-written
         except ValidationError as exc:
             reason = " ".join(exc.messages)[:300]
             logger.warning("Computing class %s term %s failed: %s", arm.pk, term.pk, reason)
             klass.status = ClassResult.Status.REVIEWED
             klass.compute_error = reason
             klass.save(update_fields=["status", "compute_error"])
+        except Exception:
+            log_exception_redacted(logger, "Computing class %s term %s failed", arm.pk, term.pk)
+            klass.compute_error = ClassResult.COMPUTE_FAILED
+            klass.save(update_fields=["compute_error"])
+        else:
+            if klass.compute_error:
+                klass.compute_error = ""
+                klass.save(update_fields=["compute_error"])
+
+
+def retry_compute(arm: ClassArm, term: Term, *, by: Any, request: Any = None) -> ClassResult:
+    """Queue the computation of an approved class again, by the principal or school admin,
+    when it failed, never started, or is older than the approval."""
+    if not can_manage_class(by):
+        raise PermissionDenied
+    with transaction.atomic():
+        school_lock(f"results:{arm.pk}:{term.pk}")
+        klass = _locked_class(arm, term)
+        if klass.status != ClassResult.Status.APPROVED:
+            raise ResultsStateError("Only an approved class can be computed again.")
+        if not needs_compute(klass):
+            raise ResultsStateError("This class's results are already computed.")
+        klass.compute_error = ""
+        klass.save(update_fields=["compute_error"])
+        record(
+            "results.compute_retried", request=request, actor=by, obj=klass, after=_ids(arm, term)
+        )
+        arm_id, term_id = arm.pk, term.pk
+        transaction.on_commit(lambda: _start_compute(arm_id, term_id))
+    return klass
+
+
+def regenerate_report_cards(
+    arm: ClassArm, term: Term, *, by: Any, request: Any = None
+) -> ClassResult:
+    """Queue a published class's report cards again, by the principal or school admin; also
+    queues the guardian notifications when those could not start at publish."""
+    if not can_manage_class(by):
+        raise PermissionDenied
+    with transaction.atomic():
+        school_lock(f"results:{arm.pk}:{term.pk}")
+        klass = _locked_class(arm, term)
+        if klass.status != ClassResult.Status.PUBLISHED:
+            raise ResultsStateError("Only a published class's report cards can be regenerated.")
+        renotify = klass.cards_error == ClassResult.NOTIFY_START_ERROR
+        klass.cards_error = ""
+        klass.save(update_fields=["cards_error"])
+        record(
+            "results.report_cards_regenerated",
+            request=request,
+            actor=by,
+            obj=klass,
+            after={**_ids(arm, term), "notify": renotify},
+        )
+        arm_id, term_id = arm.pk, term.pk
+
+        def start() -> None:
+            _start_cards(arm_id, term_id)
+            if renotify:
+                _start_notify(arm_id, term_id)
+
+        transaction.on_commit(start)
+    return klass
 
 
 def publish_class(arm: ClassArm, term: Term, *, by: Any, request: Any = None) -> ClassResult:
     """approved → published, by the principal or school admin, once results are computed."""
-    if not _has_role(by, PRINCIPAL, SCHOOL_ADMIN):
+    if not can_manage_class(by):
         raise PermissionDenied
     with transaction.atomic():
         school_lock(f"results:{arm.pk}:{term.pk}")
@@ -309,11 +457,8 @@ def publish_class(arm: ClassArm, term: Term, *, by: Any, request: Any = None) ->
         if klass.status != ClassResult.Status.APPROVED:
             raise ResultsStateError("Only an approved class can be published.")
         if klass.compute_error:
-            raise ValidationError("Computing the results failed; unlock and fix the class first.")
-        computed = ResultSummary.objects.filter(arm=arm, term=term).aggregate(
-            first=Min("computed_at")
-        )["first"]
-        if computed is None or klass.approved_at is None or computed < klass.approved_at:
+            raise ValidationError("Computing the results failed. Retry the computation first.")
+        if needs_compute(klass):
             raise ValidationError("The results have not been computed yet. Try again in a moment.")
         klass.status = ClassResult.Status.PUBLISHED
         klass.published_at = timezone.now()

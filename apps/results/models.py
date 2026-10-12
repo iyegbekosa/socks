@@ -218,6 +218,13 @@ class ClassResult(models.Model):
     # Why the last report-card run stopped early (e.g. "Storage limit reached"); empty when none.
     cards_error = models.CharField(max_length=100, blank=True, default="")
 
+    # Generic errors shown on the class page (never exception text).
+    START_ERROR = "Could not start — please retry"
+    COMPUTE_FAILED = "Computing the results failed — please retry"
+    CARDS_FAILED = "Report cards could not be generated — please regenerate them"
+    # Guardian notifications could not be queued: "Regenerate report cards" queues them again.
+    NOTIFY_START_ERROR = "Guardian notifications could not start — please regenerate"
+
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=["arm", "term"], name="results_classresult_unique"),

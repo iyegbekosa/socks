@@ -15,6 +15,7 @@ from apps.audit.services import record
 from apps.core.locks import school_lock
 from apps.core.parsing import parse_id
 from apps.results.models import ClassResult, Rating, ReportComment, Trait
+from apps.results.scope import can_open_comments
 from apps.students.models import Enrolment, Student
 
 MAX_COMMENT = 500
@@ -343,16 +344,11 @@ def class_comments(request, arm_pk):
     pk = parse_id(str(arm_pk))
     arm = get_object_or_404(ClassArm.objects.select_related("level"), pk=pk if pk else 0)
     term = current_term()
+    if not can_open_comments(request.user, arm, term):
+        raise PermissionDenied
     if term is None:
-        user = request.user
-        if getattr(user, "kind", None) != "staff" or not (
-            user.has_role(PRINCIPAL) or FormTeacher.objects.filter(arm=arm, teacher=user).exists()
-        ):
-            raise PermissionDenied
         return render(request, "results/class_comments.html", {"arm": arm, "term": None})
     is_ft, is_pr = _roles(request, arm, term)
-    if not is_ft and not is_pr:
-        raise PermissionDenied
     if request.method == "POST":
         return _save(request, arm, term, is_ft, is_pr)
     cr = ClassResult.objects.filter(arm=arm, term=term).first()

@@ -430,6 +430,66 @@ def test_missing_results_while_still_published_skips_that_student(acc, uploads, 
     assert not ReportCard.objects.filter(student=b).exists()
     assert f"student {b.pk}" in caplog.text and "Pupil" not in caplog.text
     assert SubjectResult.objects.exists()
+    klass = ClassResult.objects.get(arm=acc.arm, term=acc.term)
+    assert klass.cards_error == ClassResult.CARDS_FAILED  # shown, with "Regenerate"
+
+
+@pytest.mark.parametrize("where", ["render", "store"])
+def test_one_card_failing_skips_it_and_records_a_generic_error(acc, uploads, caplog, where):
+    _publish(acc)
+    b = acc.students["B"]
+    real_render, real_save = cards.render_card, cards._save_card
+
+    def render(student, term, **kwargs):
+        if where == "render" and student.pk == b.pk:
+            raise OSError(f"Pango choked on {student.last_name}")
+        return real_render(student, term, **kwargs)
+
+    def save(student, term, arm, pdf):
+        if where == "store" and student.pk == b.pk:
+            raise ConnectionError(f"Cloudinary 503 for {student.last_name}")
+        return real_save(student, term, arm, pdf)
+
+    with (
+        mock.patch("apps.results.cards.render_card", side_effect=render),
+        mock.patch("apps.results.cards._save_card", side_effect=save),
+        caplog.at_level(logging.WARNING, logger="apps.results.cards"),
+    ):
+        assert generate_report_cards(acc.arm, acc.term) == 5
+    assert not ReportCard.objects.filter(student=b).exists()
+    assert ReportCard.objects.count() == 5
+    klass = ClassResult.objects.get(arm=acc.arm, term=acc.term)
+    assert klass.cards_error == ClassResult.CARDS_FAILED
+    assert b.last_name not in klass.cards_error
+    assert f"student {b.pk}" in caplog.text
+    assert ("OSError" if where == "render" else "ConnectionError") in caplog.text
+    assert b.last_name not in caplog.text and "Pupil" not in caplog.text
+    assert any(rec.exc_info for rec in caplog.records)
+
+    generate_report_cards(acc.arm, acc.term)  # regenerating clears it
+    assert ClassResult.objects.get(pk=klass.pk).cards_error == ""
+
+
+def test_whole_run_failing_records_a_generic_error(acc, uploads, caplog):
+    _publish(acc)
+    with (
+        mock.patch("apps.results.cards.load_logo", side_effect=RuntimeError("Pupil secret")),
+        caplog.at_level(logging.WARNING, logger="apps.results.cards"),
+    ):
+        assert generate_report_cards(acc.arm, acc.term) == 0
+    klass = ClassResult.objects.get(arm=acc.arm, term=acc.term)
+    assert klass.cards_error == ClassResult.CARDS_FAILED
+    assert "RuntimeError" in caplog.text and "Pupil" not in caplog.text
+
+
+def test_a_successful_run_keeps_a_notification_queueing_error(acc, uploads):
+    _publish(acc)
+    ClassResult.objects.filter(arm=acc.arm, term=acc.term).update(
+        cards_error=ClassResult.NOTIFY_START_ERROR
+    )
+    assert generate_report_cards(acc.arm, acc.term) == 6
+    klass = ClassResult.objects.get(arm=acc.arm, term=acc.term)
+    assert klass.cards_error == ClassResult.NOTIFY_START_ERROR
 
 
 def test_storage_limit_stops_and_shows_on_class_page(acc, uploads, client_a, caplog):

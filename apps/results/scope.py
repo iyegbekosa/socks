@@ -2,9 +2,9 @@ from typing import Any
 
 from django.db.models import Exists, OuterRef, Q, QuerySet
 
-from apps.academics.models import ClassArm, SubjectOffering, Term
+from apps.academics.models import ClassArm, FormTeacher, SubjectOffering, Term
 from apps.academics.services import current_session
-from apps.accounts.roles import TEACHER
+from apps.accounts.roles import PRINCIPAL, TEACHER
 from apps.results.models import ElectiveChoice, Score
 from apps.students.models import Enrolment, Student
 
@@ -56,6 +56,24 @@ def can_enter_scores(user: Any, offering: SubjectOffering) -> bool:
     if user.is_student or offering.teacher_id is None or offering.teacher_id != user.pk:
         return False
     return bool(user.has_role(TEACHER))
+
+
+def can_open_comments(user: Any, arm: ClassArm, term: Term | None) -> bool:
+    """Who may open an arm's "Comments & ratings" page: the principal, or a teacher who is the
+    arm's form teacher (for the term's session; any session when there is no current term).
+    The page and every link to it use this one check."""
+    if user is None or not getattr(user, "is_authenticated", False) or not user.is_active:
+        return False
+    if getattr(user, "kind", None) != "staff":
+        return False
+    if user.has_role(PRINCIPAL):
+        return True
+    if not user.has_role(TEACHER):
+        return False
+    qs = FormTeacher.objects.filter(arm=arm, teacher=user)
+    if term is not None:
+        qs = qs.filter(session_id=term.session_id)
+    return qs.exists()
 
 
 def has_scores(section: str) -> bool:

@@ -27,6 +27,7 @@ from apps.academics.scope import students_visible_to
 from apps.audit.services import record
 from apps.branding.models import LOGO_WIDTH, get_branding
 from apps.core.locks import school_lock
+from apps.core.logging import log_exception_redacted
 from apps.core.parsing import parse_id
 from apps.core.pdf import fetch_url, render_pdf
 from apps.results.compute import ordinal, prior_term_totals
@@ -292,11 +293,17 @@ def _discard(arm: ClassArm, term: Term, written: list[tuple[int, str]]) -> None:
 
 
 def _set_cards_error(arm: ClassArm, term: Term, error: str) -> None:
+    """Record (or, with "", clear) why this run's cards are incomplete. An error is recorded
+    only while the class is still published; clearing keeps a notification-queueing error,
+    which only "Regenerate report cards" resolves."""
     with transaction.atomic():
         _lock(arm, term)
-        ClassResult.objects.filter(arm=arm, term=term).exclude(cards_error=error).update(
-            cards_error=error
-        )
+        qs = ClassResult.objects.filter(arm=arm, term=term).exclude(cards_error=error)
+        if error:
+            qs = qs.filter(status=ClassResult.Status.PUBLISHED)
+        else:
+            qs = qs.exclude(cards_error=ClassResult.NOTIFY_START_ERROR)
+        qs.update(cards_error=error)
 
 
 def _audit(arm: ClassArm, term: Term, count: int) -> None:
@@ -325,8 +332,19 @@ def generate_report_cards(arm: ClassArm, term: Term) -> int:
     class, returning how many were stored.
 
     Does nothing (0) unless the class is published. Stops and removes what it wrote (0) if
-    the class is unlocked mid-run. Stops on the storage limit, recording ``cards_error``.
+    the class is unlocked mid-run. Stops on the storage limit, recording ``cards_error``. A
+    card that fails for any other reason is skipped and counted; any failure leaves a generic
+    ``cards_error`` ("Regenerate report cards" on the class page).
     """
+    try:
+        return _generate(arm, term)
+    except Exception:
+        log_exception_redacted(logger, "Report cards for class %s term %s failed", arm.pk, term.pk)
+        _set_cards_error(arm, term, ClassResult.CARDS_FAILED)
+        return 0
+
+
+def _generate(arm: ClassArm, term: Term) -> int:
     if not _is_published(arm, term):
         return 0
     student_ids = list(
@@ -336,6 +354,7 @@ def generate_report_cards(arm: ClassArm, term: Term) -> int:
     )
     logo = load_logo()
     written: list[tuple[int, str]] = []
+    failed = 0
     for student_id in student_ids:
         student = Student.objects.select_related("user").filter(pk=student_id).first()
         if student is None:
@@ -352,6 +371,13 @@ def generate_report_cards(arm: ClassArm, term: Term) -> int:
                 student_id,
                 term.pk,
             )
+            failed += 1
+            continue
+        except Exception:
+            log_exception_redacted(
+                logger, "Report card for student %s term %s failed", student_id, term.pk
+            )
+            failed += 1
             continue
         try:
             with transaction.atomic():
@@ -372,8 +398,14 @@ def generate_report_cards(arm: ClassArm, term: Term) -> int:
             _set_cards_error(arm, term, STORAGE_ERROR)
             _audit(arm, term, len(written))
             return len(written)
+        except Exception:
+            log_exception_redacted(
+                logger, "Report card for student %s term %s failed", student_id, term.pk
+            )
+            failed += 1
+            continue
         written.append((student.pk, name))
-    _set_cards_error(arm, term, "")
+    _set_cards_error(arm, term, ClassResult.CARDS_FAILED if failed else "")
     _audit(arm, term, len(written))
     return len(written)
 

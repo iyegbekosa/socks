@@ -12,7 +12,11 @@
   <p class="muted">Session {{ term.session.name }}, {{ term.get_number_display }}.</p>
   <p>Class results: <strong>{{ status_label }}</strong></p>
   {% if klass.compute_error %}
+  {% if status == "reviewed" %}
   <p role="alert" class="error">Computing the results failed, so the class is back to reviewed: {{ klass.compute_error }}</p>
+  {% else %}
+  <p role="alert" class="error">Computing the results: {{ klass.compute_error }}</p>
+  {% endif %}
   {% endif %}
   {% if klass.cards_error %}
   <p role="alert" class="error">Report cards could not be generated: {{ klass.cards_error }}</p>
@@ -31,7 +35,7 @@
       </tbody>
     </table>
   </div>
-  {% if is_ft %}<p><a href="{% url 'results:class_comments' arm.pk %}">Comments &amp; ratings</a></p>{% endif %}
+  {% if can_comments %}<p><a href="{% url 'results:class_comments' arm.pk %}">Comments &amp; ratings</a></p>{% endif %}
   {% if show_broadsheet %}<p><a href="{% url 'results:broadsheet' arm.pk term.pk %}">Broadsheet</a></p>{% endif %}
   {% if can_review %}
   <form method="post" action="{% url 'results:class_review' arm.pk %}">{% csrf_token %}
@@ -49,6 +53,25 @@
     <button type="submit">Publish results</button>
   </form>
   {% endif %}
+  {% if can_retry_compute %}
+  <form method="post" action="{% url 'results:class_retry_compute' arm.pk %}">{% csrf_token %}
+    <p class="muted">The results have not been computed since approval.</p>
+    <button type="submit">Retry compute</button>
+  </form>
+  {% endif %}
+  {% if can_regenerate %}
+  <form method="post" action="{% url 'results:class_regenerate_cards' arm.pk %}">{% csrf_token %}
+    <button type="submit">Regenerate report cards</button>
+  </form>
+  {% endif %}
+  {% if cards %}
+  <h2>Report cards</h2>
+  <ul>
+    {% for c in cards %}
+    <li>{% if c.ready %}<a href="{% url 'results:report_card' c.student.pk term.pk %}">{{ c.student.full_name }}</a>{% else %}{{ c.student.full_name }} <span class="muted">— not generated yet</span>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
   {% if can_unlock %}
   <form method="post" action="{% url 'results:class_unlock' arm.pk %}">{% csrf_token %}
     <h2>Unlock</h2>
@@ -58,7 +81,8 @@
     {% endfor %}
     <p>
       <label for="reason">Reason (required, up to 300 characters)</label>
-      <textarea id="reason" name="reason" maxlength="300" required>{{ reason }}</textarea>
+      <textarea id="reason" name="reason" maxlength="300" required aria-describedby="reason-help">{{ reason }}</textarea>
+      <small id="reason-help" class="muted">Do not include student names or personal details.</small>
     </p>
     <button type="submit">Unlock</button>
   </form>

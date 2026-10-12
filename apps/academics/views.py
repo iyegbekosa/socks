@@ -31,6 +31,7 @@ from apps.academics.services import (
     assign_form_teacher,
     assign_offering,
     current_session,
+    current_term,
     delete_arm,
     delete_subject,
     preview_next_admission_number,
@@ -218,7 +219,14 @@ def arm_detail(request, arm_id):
     if request.method == "POST" and not can_edit:
         raise PermissionDenied
     session = current_session()
-    ctx = {"arm": arm, "can_edit": can_edit, "session": session}
+    from apps.results.scope import can_open_comments  # results builds on academics
+
+    ctx = {
+        "arm": arm,
+        "can_edit": can_edit,
+        "session": session,
+        "can_comments": can_open_comments(request.user, arm, current_term()),
+    }
     if session is None:
         return render(request, "academics/arm_detail.html", ctx)
 

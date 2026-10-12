@@ -11,15 +11,19 @@ from apps.academics.models import ClassArm, FormTeacher, SubjectOffering, Term
 from apps.academics.services import current_term
 from apps.accounts.roles import PRINCIPAL, PROPRIETOR, SCHOOL_ADMIN, TEACHER, require_roles
 from apps.core.parsing import parse_id
-from apps.results.models import ClassResult, ScoreSheet
-from apps.results.scope import required_offerings
+from apps.results.models import ClassResult, ReportCard, ResultSummary, ScoreSheet
+from apps.results.scope import can_open_comments, required_offerings
 from apps.results.views.grid import NO_TERM, WRONG_SESSION, _offering_or_403
 from apps.results.workflow import (
     ResultsStateError,
     approve_class,
+    can_manage_class,
     is_form_teacher,
+    needs_compute,
     publish_class,
     recall_sheet,
+    regenerate_report_cards,
+    retry_compute,
     review_class,
     submit_sheet,
     unlock_class,
@@ -66,6 +70,7 @@ def _context(request, arm: ClassArm, term: Term) -> dict[str, Any]:
         )
     submitted = [r for r in rows if r["status"] == ScoreSheet.Status.SUBMITTED]
     is_admin = user.has_role(SCHOOL_ADMIN)
+    published = status == ClassResult.Status.PUBLISHED
     return {
         "arm": arm,
         "term": term,
@@ -75,13 +80,28 @@ def _context(request, arm: ClassArm, term: Term) -> dict[str, Any]:
         "rows": rows,
         "submitted": submitted,
         "is_ft": is_form_teacher(user, arm, term),
+        "can_comments": can_open_comments(user, arm, term),
         "show_broadsheet": status in (ClassResult.Status.APPROVED, ClassResult.Status.PUBLISHED),
         "can_review": status == ClassResult.Status.DRAFT and is_form_teacher(user, arm, term),
         "can_approve": status == ClassResult.Status.REVIEWED and user.has_role(PRINCIPAL),
         "can_publish": status == ClassResult.Status.APPROVED
         and user.has_role(PRINCIPAL, SCHOOL_ADMIN),
         "can_unlock": is_admin and (status != ClassResult.Status.DRAFT or bool(submitted)),
+        "can_retry_compute": can_manage_class(user) and needs_compute(klass),
+        "can_regenerate": published and can_manage_class(user),
+        "cards": _cards(arm, term) if published else [],
     }
+
+
+def _cards(arm: ClassArm, term: Term) -> list[dict[str, Any]]:
+    """Each ranked student of a published class with their report card, if generated yet."""
+    have = set(ReportCard.objects.filter(arm=arm, term=term).values_list("student_id", flat=True))
+    return [
+        {"student": s.student, "ready": s.student_id in have}
+        for s in ResultSummary.objects.filter(arm=arm, term=term)
+        .select_related("student")
+        .order_by("student__last_name", "student__first_name", "student_id")
+    ]
 
 
 def _page(request, arm, term, *, errors=None, reason="", code=200):
@@ -150,6 +170,30 @@ def class_publish(request, arm_pk):
         arm_pk,
         lambda arm, term: publish_class(arm, term, by=request.user, request=request),
         "Class results published",
+    )
+
+
+@never_cache
+@require_POST
+@require_roles(PRINCIPAL, SCHOOL_ADMIN)
+def class_retry_compute(request, arm_pk):
+    return _act(
+        request,
+        arm_pk,
+        lambda arm, term: retry_compute(arm, term, by=request.user, request=request),
+        "Computing the class results again.",
+    )
+
+
+@never_cache
+@require_POST
+@require_roles(PRINCIPAL, SCHOOL_ADMIN)
+def class_regenerate_cards(request, arm_pk):
+    return _act(
+        request,
+        arm_pk,
+        lambda arm, term: regenerate_report_cards(arm, term, by=request.user, request=request),
+        "Report cards are being generated again.",
     )
 
 
