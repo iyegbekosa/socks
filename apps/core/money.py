@@ -2,6 +2,8 @@
 
 from decimal import Decimal, InvalidOperation
 
+MAX_KOBO = 10_000_000_000  # ₦100,000,000.00
+
 
 def kobo_from_naira(value: str | int | Decimal) -> int:
     if isinstance(value, bool) or isinstance(value, float):
@@ -17,6 +19,10 @@ def kobo_from_naira(value: str | int | Decimal) -> int:
     kobo = naira * 100
     if kobo != kobo.to_integral_value():
         raise ValueError("Naira amounts cannot have more than 2 decimal places.")
+    if kobo < 0:
+        raise ValueError("Amount cannot be negative.")
+    if kobo > MAX_KOBO:
+        raise ValueError("Amount is too large.")
     return int(kobo)
 
 

@@ -1,0 +1,42 @@
+{% extends "core/base.html" %}
+{% block title %}Fee structures{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Fee structures</h1>
+  {% include "fees/_nav.html" %}
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if term %}
+  <form method="get">
+    <label for="term">Term</label>
+    <select name="term" id="term">{% for t in terms %}<option value="{{ t.pk }}"{% if t.pk == term.pk %} selected{% endif %}>{{ t }}</option>{% endfor %}</select>
+    <button type="submit">Show</button>
+  </form>
+  <h2>{{ term }}</h2>
+  <table>
+    <thead><tr><th>Class level</th><th>Fees</th><th></th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.level.name }}</td>
+      <td>{% for line in row.lines %}{{ line.item.name }}{% if line.is_optional %} (optional){% endif %}{% if not forloop.last %}, {% endif %}{% empty %}<span class="muted">Not set</span>{% endfor %}</td>
+      <td><a href="{% url 'fees:structure_edit' row.level.pk term.pk %}">{% if can_edit %}Edit{% else %}View{% endif %}</a></td>
+    </tr>
+    {% empty %}<tr><td colspan="3">No class levels yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p>No terms yet. Ask the school admin to set up the academic session first.</p>{% endif %}
+  {% if can_edit %}
+  <h2>Copy structures to another term</h2>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="copy" value="1">
+    {% if copy_form.non_field_errors %}<p class="error" role="alert">{{ copy_form.non_field_errors|join:" " }}</p>{% endif %}
+    {% for field in copy_form %}{% include "fees/_field.html" %}{% endfor %}
+    <p class="hint">Levels that already have a structure in the target term are skipped.</p>
+    <button type="submit">Copy</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

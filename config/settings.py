@@ -49,6 +49,7 @@ TENANT_APPS = [
     "apps.students",
     "apps.imports",
     "apps.results",
+    "apps.fees",
     "django_otp",
     "django_otp.plugins.otp_totp",
 ]
@@ -184,6 +185,14 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@build2learn.loc
 
 # Dotted path of the SMS backend. Console in development; unset in production until the
 # real provider lands (P5), when send_sms raises ImproperlyConfigured.
+PAYSTACK_SECRET_KEY = env("PAYSTACK_SECRET_KEY", default="")
+PAYMENT_GATEWAY = env(
+    "PAYMENT_GATEWAY",
+    default="apps.fees.gateways.fake.FakeGateway"
+    if DEBUG
+    else "apps.fees.gateways.paystack.PaystackGateway",
+)
+PAYMENT_PLACEHOLDER_EMAIL_DOMAIN = env("PAYMENT_PLACEHOLDER_EMAIL_DOMAIN", default="build2learn.ng")
 SMS_BACKEND = env("SMS_BACKEND", default="apps.core.sms.ConsoleSmsBackend" if DEBUG else None)
 
 AUTH_PASSWORD_VALIDATORS = [

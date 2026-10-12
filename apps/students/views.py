@@ -27,6 +27,7 @@ from apps.accounts.roles import (
     TEACHER,
     require_roles,
 )
+from apps.fees.scope import can_manage_fees
 from apps.students.forms import AdmitForm, EditForm, attach_errors
 from apps.students.models import Enrolment, Student
 from apps.students.passwords import issue_one_time_passwords
@@ -162,6 +163,7 @@ def detail(request, pk: int):
             "show_private": full,  # date of birth and consent details
             "show_photo": bool(student.photo) and _can_see_photo(user, student),
             "can_edit": user.has_role(SCHOOL_ADMIN),
+            "can_manage_fees": can_manage_fees(user),
             "can_issue_password": user.has_role(SCHOOL_ADMIN)
             and student.status == Student.Status.ACTIVE,
             "can_withdraw": user.has_role(SCHOOL_ADMIN)

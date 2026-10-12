@@ -1,0 +1,27 @@
+{% extends "core/base.html" %}
+{% block title %}Fee discounts{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Fee discounts: {{ student.full_name }}</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if rows %}
+  <ul>
+    {% for row in rows %}
+    <li>{{ row.discount.name }} <span class="muted">({{ row.session.name }})</span>
+      {% if can_edit %}<form method="post" class="inline">{% csrf_token %}<input type="hidden" name="remove" value="{{ row.pk }}"><button type="submit" class="link">Remove</button></form>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<p>No discounts assigned.</p>{% endif %}
+  {% if can_edit %}
+  <h2>Assign a discount</h2>
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    {% for field in form %}{% include "fees/_field.html" %}{% endfor %}
+    <button type="submit">Assign</button>
+  </form>
+  {% endif %}
+  <p><a href="{% url 'students:detail' student.pk %}">Back to student</a></p>
+</div>
+{% endblock %}

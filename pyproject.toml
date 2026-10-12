@@ -23,6 +23,7 @@ dependencies = [
     "Pillow>=10.4",
     "openpyxl>=3.1",
     "defusedxml>=0.7",  # openpyxl uses it automatically to parse XLSX safely
+    "httpx>=0.27",  # Paystack adapter (Task 6)
     "weasyprint>=70",  # report card PDFs; needs Pango (see README)
 ]
 

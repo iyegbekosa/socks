@@ -1,0 +1,21 @@
+{% extends "core/base.html" %}
+{% block title %}Fee items{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Fee items</h1>
+  {% include "fees/_nav.html" %}
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if items %}
+  <ul>{% for item in items %}<li><a href="{% url 'fees:item_edit' item.pk %}">{{ item.name }}</a>{% if item.description %} <span class="muted">{{ item.description }}</span>{% endif %}</li>{% endfor %}</ul>
+  {% else %}<p>No fee items yet.</p>{% endif %}
+  {% if can_edit %}
+  <h2>Add a fee item</h2>
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    {% for field in form %}{% include "fees/_field.html" %}{% endfor %}
+    <button type="submit">Add</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

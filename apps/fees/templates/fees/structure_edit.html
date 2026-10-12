@@ -1,0 +1,27 @@
+{% extends "core/base.html" %}
+{% block title %}{{ level.name }} fees{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>{{ level.name }}: {{ term }}</h1>
+  {% if not has_items %}
+  <p>There are no fee items yet. <a href="{% url 'fees:items' %}">Add fee items</a> first.</p>
+  {% else %}
+  <p class="hint">Enter an amount in naira for each item that applies. Leave it blank to leave the item out.</p>
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    <fieldset{% if not can_edit %} disabled{% endif %}>
+    {% for item, amount, optional in form.rows %}
+    <div>
+      <label for="{{ amount.id_for_label }}">{{ item.name }}</label>{{ amount }}
+      <label for="{{ optional.id_for_label }}">{{ optional }} Optional</label>
+      {% for e in amount.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    </div>
+    {% endfor %}
+    </fieldset>
+    {% if can_edit %}<button type="submit">Save</button>{% endif %}
+  </form>
+  {% endif %}
+  <p><a href="{% url 'fees:structures' %}?term={{ term.pk }}">Back to fee structures</a></p>
+</div>
+{% endblock %}

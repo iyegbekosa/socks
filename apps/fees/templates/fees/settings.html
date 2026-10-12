@@ -1,0 +1,17 @@
+{% extends "core/base.html" %}
+{% block title %}Fee settings{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Fee settings</h1>
+  {% include "fees/_nav.html" %}
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    <fieldset{% if not can_edit %} disabled{% endif %}>
+    {% for field in form %}{% include "fees/_field.html" %}{% endfor %}
+    </fieldset>
+    {% if can_edit %}<button type="submit">Save</button>{% endif %}
+  </form>
+</div>
+{% endblock %}
