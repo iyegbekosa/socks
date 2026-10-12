@@ -101,3 +101,28 @@ def test_label_used_in_messages():
     with pytest.raises(ValidationError) as exc:
         same(SimpleUploadedFile("a.gif", b"x"), label="Logo", max_bytes=1_048_576)
     assert str(exc.value.messages[0]) == "Logo must be a .png, .jpg, .jpeg or .webp file."
+
+
+def _jpeg_with_comment():
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 40), "blue").save(buf, "JPEG", comment=b"PAYLOAD-123")
+    return buf.getvalue()
+
+
+def _png_with_comment():
+    from PIL.PngImagePlugin import PngInfo
+
+    info = PngInfo()
+    info.add_text("comment", "<?php PAYLOAD-123 ?>")
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 40), "blue").save(buf, "PNG", pnginfo=info)
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("name,make", [("a.jpg", _jpeg_with_comment), ("a.png", _png_with_comment)])
+@pytest.mark.parametrize("mode", ["jpeg", "same"])
+def test_comment_metadata_dropped(name, make, mode):
+    raw = make()
+    assert b"PAYLOAD-123" in raw
+    clean = photo if mode == "jpeg" else same
+    assert b"PAYLOAD-123" not in clean(SimpleUploadedFile(name, raw)).read()

@@ -1,5 +1,5 @@
 import io
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from unittest import mock
 
 import cloudinary
@@ -413,3 +413,97 @@ def test_reset_phone_for(school_a):
         assert reset_phone_for(email_only.user) is None
         staff = StaffFactory()
         assert reset_phone_for(staff) == staff.phone
+
+
+@pytest.mark.parametrize("name,fmt", [("a.jpg", "JPEG"), ("a.png", "PNG")])
+def test_photo_metadata_comment_not_uploaded(admin, upload, name, fmt):
+    from PIL.PngImagePlugin import PngInfo
+
+    buf = io.BytesIO()
+    img = Image.new("RGB", (40, 40), "blue")
+    if fmt == "JPEG":
+        img.save(buf, "JPEG", comment=b"PAYLOAD-123")
+    else:
+        info = PngInfo()
+        info.add_text("comment", "<?php PAYLOAD-123 ?> GPS")
+        img.save(buf, "PNG", pnginfo=info)
+    assert b"PAYLOAD-123" in buf.getvalue()
+    with schema_context("school_a"):
+        student = StudentProfileFactory()
+        set_student_photo(student, SimpleUploadedFile(name, buf.getvalue()), by=admin)
+    assert b"PAYLOAD-123" not in upload.call_args.args[0]
+
+
+def test_photo_upload_removed_if_save_fails(admin, upload):
+    with schema_context("school_a"):
+        student = StudentProfileFactory()
+        with (
+            mock.patch("apps.students.services.record", side_effect=RuntimeError("db")),
+            mock.patch("cloudinary.uploader.destroy") as destroy,
+            pytest.raises(RuntimeError),
+        ):
+            set_student_photo(student, SimpleUploadedFile("a.png", png_bytes()), by=admin)
+        upload.assert_called_once()
+        uploaded_id = upload.call_args.kwargs["public_id"]
+        assert destroy.call_args.args[0] == uploaded_id
+        student.refresh_from_db()
+        assert not student.photo
+
+
+def test_guardian_data_repr_hides_contacts():
+    text = repr(GuardianData("Ngozi Eze", "mother", "+2348031234567", "ngozi@mail.ng"))
+    assert "8031234567" not in text and "ngozi@" not in text
+
+
+def test_student_repr_hides_name_and_dob(school_a):
+    with schema_context("school_a"):
+        student = StudentProfileFactory(first_name="Zainab", date_of_birth=date(2014, 5, 17))
+        text = repr(student)
+    assert text == f"<Student pk={student.pk}>"
+    assert "Zainab" not in text and "2014" not in text
+
+
+@pytest.mark.parametrize("bad", ["2014-05-17", 20140517, datetime(2014, 5, 17, 9, 0)])
+def test_non_date_dob_is_field_error(admin, bad):
+    with schema_context("school_a"):
+        with pytest.raises(ValidationError) as exc:
+            admit(admin, date_of_birth=bad)
+        assert "date_of_birth" in exc.value.message_dict
+
+
+def test_update_student_merges_dob_and_field_errors(admin):
+    with schema_context("school_a"):
+        student, _ = admit(admin)
+        with pytest.raises(ValidationError) as exc:
+            update_student(
+                student,
+                {"date_of_birth": timezone.localdate() + timedelta(days=3), "sex": "X"},
+                by=admin,
+            )
+        assert {"date_of_birth", "sex"} <= set(exc.value.message_dict)
+        with pytest.raises(ValidationError) as exc:
+            update_student(student, {"date_of_birth": "yesterday"}, by=admin)
+        assert "date_of_birth" in exc.value.message_dict
+
+
+def test_numeric_guardian_phone_coerced(school_a):
+    with schema_context("school_a"):
+        student = StudentProfileFactory(guardian_phone=2348031112222)
+        assert student.guardian_phone == "+2348031112222"
+        student.guardian_phone = 12345
+        with pytest.raises(ValidationError) as exc:
+            student.full_clean()
+        assert "guardian_phone" in exc.value.message_dict
+
+
+def test_admission_takes_students_school_lock(admin):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    with schema_context("school_a"), CaptureQueriesContext(connection) as ctx:
+        admit(admin)
+    sqls = [q["sql"] for q in ctx.captured_queries]
+    lock = next(i for i, q in enumerate(sqls) if "pg_advisory_xact_lock" in q)
+    assert "'students'" in sqls[lock] or "students" in sqls[lock]
+    first_count = next(i for i, q in enumerate(sqls) if 'FROM "students_student"' in q)
+    assert lock < first_count

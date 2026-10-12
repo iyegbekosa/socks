@@ -35,3 +35,30 @@ def test_production_with_redis_starts():
 def test_debug_without_redis_starts():
     result = _import_settings(DEBUG="true", REDIS_URL="")
     assert result.returncode == 0, result.stderr
+
+
+def test_sentry_init_excludes_local_variables():
+    """Frame locals can hold children's data (DOB, guardian contacts): never send them."""
+    snippet = (
+        "import sentry_sdk; calls = []; "
+        "sentry_sdk.init = lambda **kw: calls.append(kw); "
+        "import django; django.setup(); "
+        "print(len(calls), calls[0]['include_local_variables'], calls[0]['send_default_pii'])"
+    )
+    env = {
+        **os.environ,
+        "DJANGO_SETTINGS_MODULE": "config.settings",
+        "SENTRY_DSN": "https://key@sentry.example/1",
+        "DEBUG": "true",
+        "REDIS_URL": "",
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", snippet],
+        cwd=settings.BASE_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "1 False False"

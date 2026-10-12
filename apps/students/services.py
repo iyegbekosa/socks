@@ -5,8 +5,8 @@ put them in audit before/after values (record field names instead).
 """
 
 import logging
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any
 
 from django.core.exceptions import ValidationError
@@ -23,7 +23,8 @@ from apps.academics.services import (
 from apps.accounts.services import create_student_user
 from apps.audit.services import record
 from apps.core.images import clean_image
-from apps.students.models import Enrolment, Student
+from apps.core.locks import school_lock
+from apps.students.models import Enrolment, Student, photo_upload_to
 from apps.students.passwords import generate_one_time_password
 from apps.tenancy.limits import PlanLimits
 
@@ -58,8 +59,9 @@ EDITABLE_FIELDS = (
 class GuardianData:
     name: str
     relationship: str
-    phone: str | None
-    email: str
+    # Contacts stay out of repr(): dataclass reprs land in tracebacks and error reports.
+    phone: str | None = field(repr=False)
+    email: str = field(repr=False)
 
     def as_fields(self, prefix: str) -> dict[str, Any]:
         return {
@@ -74,9 +76,11 @@ def _age_on(dob: date, today: date) -> int:
     return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
 
 
-def validate_date_of_birth(dob: date | None) -> None:
+def validate_date_of_birth(dob: Any) -> None:
     if dob is None:
         raise ValidationError({"date_of_birth": "Enter the date of birth."})
+    if isinstance(dob, datetime) or not isinstance(dob, date):
+        raise ValidationError({"date_of_birth": "Enter a valid date of birth."})
     today = timezone.localdate()
     if dob >= today:
         raise ValidationError({"date_of_birth": "The date of birth must be in the past."})
@@ -133,6 +137,8 @@ def admit_student(
     Raises ``ValidationError`` (field-keyed) or ``PlanLimitExceeded``; nothing is written then.
     """
     with transaction.atomic():
+        # Serialise admissions in this school so concurrent ones cannot both pass the limit.
+        school_lock("students")
         PlanLimits.for_current_school().check_can_add_students(1)
         arm, session = _check_arm_and_session(arm, session)
         student = Student(
@@ -208,10 +214,21 @@ def update_student(student: Student, data: dict[str, Any], *, by: Any, request: 
         candidate = Student.objects.get(pk=student.pk)
         for key, value in flat.items():
             setattr(candidate, key, value)
-        candidate.full_clean(exclude=["user"])
+        errors: dict[str, list[str]] = {}
+        exclude = ["user"]
+        if "date_of_birth" in flat and flat["date_of_birth"] != current.date_of_birth:
+            try:
+                validate_date_of_birth(flat["date_of_birth"])
+            except ValidationError as exc:
+                _merge(errors, exc)
+                exclude.append("date_of_birth")
+        try:
+            candidate.full_clean(exclude=exclude)
+        except ValidationError as exc:
+            _merge(errors, exc)
+        if errors:
+            raise ValidationError(errors)
         changed = [f for f in EDITABLE_FIELDS if getattr(candidate, f) != getattr(current, f)]
-        if "date_of_birth" in changed:
-            validate_date_of_birth(candidate.date_of_birth)
         if not changed:
             return student
         candidate.save(update_fields=changed)
@@ -233,16 +250,20 @@ def update_student(student: Student, data: dict[str, Any], *, by: Any, request: 
     return student
 
 
-def _delete_old_photo(name: str) -> None:
-    """Best-effort cleanup after commit; a storage failure must not undo a saved photo."""
+def _delete_photo(name: str, why: str) -> None:
+    """Best-effort storage cleanup; a storage failure is logged, never raised."""
     try:
         default_storage.delete(name)
     except Exception:
-        logger.exception("Could not delete replaced student photo %s", name)
+        logger.exception("Could not delete %s student photo %s", why, name)
 
 
 def set_student_photo(student: Student, upload, *, by: Any, request: Any = None) -> None:
-    """Validate, re-encode (JPEG, ≤600 px, quality 80) and store a private photo."""
+    """Validate, re-encode (JPEG, ≤600 px, quality 80) and store a private photo.
+
+    The upload happens before the row lock, so a slow upload never holds it. If saving the
+    row then fails, the new upload is deleted; the replaced photo is deleted on commit.
+    """
     content = clean_image(
         upload,
         max_bytes=PHOTO_MAX_BYTES,
@@ -253,20 +274,24 @@ def set_student_photo(student: Student, upload, *, by: Any, request: Any = None)
         quality=PHOTO_QUALITY,
         label="Photo",
     )
-    with transaction.atomic():
-        old_name = (
-            Student.objects.select_for_update()
-            .filter(pk=student.pk)
-            .values_list("photo", flat=True)
-            .first()
-            or ""
-        )
-        student.photo.save(content.name or "photo.jpg", content, save=False)
-        student.save(update_fields=["photo"])
-        new_name = student.photo.name or ""
-        if old_name and old_name != new_name:
-            transaction.on_commit(lambda: _delete_old_photo(old_name))
-        record("student.photo_changed", request=request, actor=by, obj=student)
+    new_name = default_storage.save(photo_upload_to(student, content.name or "photo.jpg"), content)
+    try:
+        with transaction.atomic():
+            old_name = (
+                Student.objects.select_for_update()
+                .filter(pk=student.pk)
+                .values_list("photo", flat=True)
+                .first()
+                or ""
+            )
+            Student.objects.filter(pk=student.pk).update(photo=new_name)
+            if old_name and old_name != new_name:
+                transaction.on_commit(lambda: _delete_photo(old_name, "replaced"))
+            record("student.photo_changed", request=request, actor=by, obj=student)
+    except BaseException:
+        _delete_photo(new_name, "unsaved")
+        raise
+    student.photo.name = new_name
 
 
 def withdraw_student(student: Student, *, by: Any, request: Any = None) -> None:

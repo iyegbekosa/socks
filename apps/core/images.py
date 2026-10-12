@@ -104,11 +104,13 @@ def clean_image(
         if output == "jpeg":
             fresh = _to_rgb(fresh)
             fmt, out_name = "JPEG", f"{stem}.jpg"
+            keep: dict = {}  # Pillow writes info["comment"] etc. into the output: drop all
         else:
-            fresh.info = {k: v for k, v in img.info.items() if k == "transparency"}
             fmt, out_name = expected, name
+            keep = {k: v for k, v in img.info.items() if k == "transparency"}
         if max_side is not None:
             fresh.thumbnail((max_side, max_side))
+        fresh.info = keep
         options = {"quality": quality} if fmt in ("JPEG", "WEBP") else {}
         clean = io.BytesIO()
         fresh.save(clean, fmt, **options)

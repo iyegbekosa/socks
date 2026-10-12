@@ -262,4 +262,10 @@ def _sentry_before_send(event, hint):
 if SENTRY_DSN:
     import sentry_sdk
 
-    sentry_sdk.init(dsn=SENTRY_DSN, send_default_pii=False, before_send=_sentry_before_send)
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        send_default_pii=False,
+        # Frame locals would carry children's data (DOB, guardian contacts) into events.
+        include_local_variables=False,
+        before_send=_sentry_before_send,
+    )

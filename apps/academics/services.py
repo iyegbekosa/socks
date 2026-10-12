@@ -25,15 +25,14 @@ from apps.academics.models import (
 )
 from apps.accounts.identifiers import looks_like_phone, normalise_admission_number
 from apps.audit.services import record
+from apps.core.locks import school_lock
 
 NAME_RE = re.compile(r"^(\d{4})/(\d{4})$")
-ACADEMICS_LOCK_KEY = 0x61636164656D6963  # "academic" as a bigint
 
 
 def academic_write_lock() -> None:
-    """Serialise session/term writes for this school until the transaction ends."""
-    with connection.cursor() as cursor:
-        cursor.execute("SELECT pg_advisory_xact_lock(%s)", [ACADEMICS_LOCK_KEY])
+    """Serialise session/term/structure writes for this school until the transaction ends."""
+    school_lock("academics")
 
 
 def _term_info(term: Term) -> dict:

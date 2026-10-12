@@ -89,6 +89,10 @@ class Student(models.Model):
     def __str__(self) -> str:
         return self.full_name
 
+    def __repr__(self) -> str:
+        # No name or DOB: reprs end up in tracebacks and error reports.
+        return f"<Student pk={self.pk}>"
+
     def save(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         update_fields = kwargs.get("update_fields")
         self._normalise(None if update_fields is None else set(update_fields))
@@ -114,7 +118,8 @@ class Student(models.Model):
         for name in PHONE_FIELDS:
             if only is not None and name not in only:
                 continue
-            raw = (getattr(self, name) or "").strip()
+            value = getattr(self, name)
+            raw = "" if value is None else str(value).strip()  # spreadsheets give numbers
             try:
                 setattr(self, name, normalise_ng_phone(raw) if raw else None)
             except ValueError as exc:
