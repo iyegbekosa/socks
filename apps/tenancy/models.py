@@ -37,10 +37,20 @@ class School(TenantMixin):
     # so signup can never adopt a schema that was already in the database.
     schema_created_by_provisioning = models.BooleanField(default=False)
 
+    # Online payments (FR-11): the school's Paystack subaccount. Only the bank name and the
+    # last 4 digits of the account number are kept here, never the full number.
+    paystack_subaccount_code = models.CharField(max_length=50, blank=True, default="")
+    payout_bank_name = models.CharField(max_length=120, blank=True, default="")
+    payout_account_last4 = models.CharField(max_length=4, blank=True, default="")
+
     auto_create_schema = True
 
     def __str__(self) -> str:
         return self.name
+
+    @property
+    def online_payments_ready(self) -> bool:
+        return bool(self.paystack_subaccount_code)
 
 
 class Domain(DomainMixin):

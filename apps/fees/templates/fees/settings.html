@@ -5,6 +5,7 @@
   <h1>Fee settings</h1>
   {% include "fees/_nav.html" %}
   {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if can_edit_threshold %}<p><a href="{% url 'fees:payout' %}">Online payments account</a></p>{% endif %}
   <form method="post">
     {% csrf_token %}
     {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}

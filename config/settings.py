@@ -263,6 +263,12 @@ LOGGING = {
         },
     },
     "root": {"handlers": ["console"], "level": LOG_LEVEL},
+    "loggers": {
+        # httpx logs every request URL at INFO; Paystack URLs carry account numbers and
+        # payment references (bank resolve, verify). Keep only warnings and errors.
+        "httpx": {"level": "WARNING"},
+        "httpcore": {"level": "WARNING"},
+    },
 }
 
 

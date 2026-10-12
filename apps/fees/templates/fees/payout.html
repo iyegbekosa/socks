@@ -1,0 +1,35 @@
+{% extends "core/base.html" %}
+{% block title %}Online payments account{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Online payments account</h1>
+  {% include "fees/_nav.html" %}
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+  {% if school.online_payments_ready %}
+  <p>Online payments are paid into <strong>{{ school.payout_bank_name }}</strong>, account ending <strong>{{ school.payout_account_last4 }}</strong>.</p>
+  <p class="hint">To change the account, check a new one below and confirm it.</p>
+  {% else %}
+  <p>Online payments are off. Add the bank account that should receive fee payments.</p>
+  {% endif %}
+
+  {% if pending %}
+  <h2>Confirm account</h2>
+  <p>Account name: <strong>{{ pending.account_name }}</strong></p>
+  <p>{{ pending.bank_name }}, account ending {{ pending_last4 }}</p>
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit" name="action" value="confirm">Confirm</button>
+    <button type="submit" name="action" value="cancel">Cancel</button>
+  </form>
+  {% elif banks_available %}
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    {% for field in form %}{% include "fees/_field.html" %}{% endfor %}
+    <button type="submit" name="action" value="check">Check account</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

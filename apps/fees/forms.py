@@ -366,3 +366,27 @@ class ManualPaymentForm(forms.Form):
             if kobo:
                 lines.append(PlannedLine(invoice.pk, kobo))
         return lines
+
+
+class PayoutAccountForm(forms.Form):
+    """Bank and 10-digit NUBAN for the school's payout (Paystack subaccount)."""
+
+    bank_code = forms.ChoiceField(label="Bank")
+    account_number = forms.CharField(
+        label="Account number",
+        max_length=20,
+        widget=forms.TextInput(attrs={"inputmode": "numeric", "autocomplete": "off"}),
+    )
+
+    def __init__(self, *args: Any, banks: list[Any], **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.bank_names = {bank.code: bank.name for bank in banks}
+        bank_field = self.fields["bank_code"]
+        assert isinstance(bank_field, forms.ChoiceField)
+        bank_field.choices = [("", "Choose a bank")] + [(bank.code, bank.name) for bank in banks]
+
+    def clean_account_number(self) -> str:
+        value = "".join(self.cleaned_data["account_number"].split())
+        if len(value) != 10 or not value.isascii() or not value.isdigit():
+            raise forms.ValidationError("Enter the 10-digit account number.")
+        return value

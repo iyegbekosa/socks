@@ -194,3 +194,56 @@ def remove_discount(row: StudentDiscount, *, by: Any, request: Any = None) -> No
         }
         record("fees.student_discount_set", request=request, actor=by, obj=row, before=before)
         row.delete()
+
+
+def save_payout_account(
+    gateway: Any,
+    *,
+    bank_code: str,
+    bank_name: str,
+    account_number: str,
+    by: Any,
+    request: Any = None,
+) -> Any:
+    """Create or update the current school's Paystack subaccount and keep its masked details.
+
+    Runs under a per-school lock with the School row locked, so two admins confirming at once
+    can't create two subaccounts. Raises ``GatewayUnavailable`` without changing anything.
+    """
+    from apps.tenancy.limits import _current_school
+    from apps.tenancy.models import School
+
+    current = _current_school()
+    if current is None:
+        raise PermissionDenied
+    with transaction.atomic():
+        school_lock("fees.payout_account")
+        school = School.objects.select_for_update().get(pk=current.pk)
+        existing = school.paystack_subaccount_code
+        code = gateway.save_subaccount(
+            code=existing or None,
+            business_name=school.name,
+            bank_code=bank_code,
+            account_number=account_number,
+        )
+        school.paystack_subaccount_code = code
+        school.payout_bank_name = bank_name
+        school.payout_account_last4 = account_number[-4:]
+        school.save(
+            update_fields=["paystack_subaccount_code", "payout_bank_name", "payout_account_last4"]
+        )
+        record(
+            "fees.subaccount_saved",
+            request=request,
+            actor=by,
+            obj=school,
+            after={
+                "bank_code": bank_code,
+                "account_last4": account_number[-4:],
+                "updated": bool(existing),
+            },
+        )
+    # Keep the request's tenant object (connection.tenant) in step with the saved row.
+    for name in ("paystack_subaccount_code", "payout_bank_name", "payout_account_last4"):
+        setattr(current, name, getattr(school, name))
+    return school

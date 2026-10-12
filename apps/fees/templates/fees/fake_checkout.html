@@ -1,0 +1,12 @@
+{% extends "core/base.html" %}
+{% load fees_money %}
+{% block title %}Test checkout{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Test checkout</h1>
+  <p class="hint">This page only exists in development. No real money moves.</p>
+  <p>Reference: <code>{{ reference }}</code></p>
+  <p>Amount: <strong>{{ amount_kobo|naira }}</strong></p>
+  <p>Status: {{ state.status }}</p>
+</div>
+{% endblock %}

@@ -66,7 +66,11 @@ def settings_page(request):
             return redirect("fees:settings")
     else:
         form = FeeSettingsForm(conf=conf, can_edit_threshold=can_edit_threshold)
-    return render(request, "fees/settings.html", {"form": form, "can_edit": can_edit})
+    return render(
+        request,
+        "fees/settings.html",
+        {"form": form, "can_edit": can_edit, "can_edit_threshold": can_edit_threshold},
+    )
 
 
 def _settings_or_defaults() -> FeeSettings:
