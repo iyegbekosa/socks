@@ -262,6 +262,12 @@ def _sentry_before_send(event, hint):
     tags = event.setdefault("tags", {})
     tags["schema"] = schema_name_var.get()
     tags["request_id"] = request_id_var.get()
+    # Request bodies, query strings and cookies can carry children's data (DOB,
+    # guardian contacts, search terms) and passwords: never send them.
+    request = event.get("request")
+    if isinstance(request, dict):
+        for key in ("data", "query_string", "cookies"):
+            request.pop(key, None)
     return event
 
 
@@ -273,5 +279,6 @@ if SENTRY_DSN:
         send_default_pii=False,
         # Frame locals would carry children's data (DOB, guardian contacts) into events.
         include_local_variables=False,
+        max_request_body_size="never",
         before_send=_sentry_before_send,
     )

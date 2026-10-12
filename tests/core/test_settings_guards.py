@@ -43,7 +43,8 @@ def test_sentry_init_excludes_local_variables():
         "import sentry_sdk; calls = []; "
         "sentry_sdk.init = lambda **kw: calls.append(kw); "
         "import django; django.setup(); "
-        "print(len(calls), calls[0]['include_local_variables'], calls[0]['send_default_pii'])"
+        "print(len(calls), calls[0]['include_local_variables'], calls[0]['send_default_pii'], "
+        "calls[0]['max_request_body_size'])"
     )
     env = {
         **os.environ,
@@ -61,4 +62,37 @@ def test_sentry_init_excludes_local_variables():
         timeout=60,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "1 False False"
+    assert result.stdout.strip() == "1 False False never"
+
+
+def test_sentry_before_send_drops_request_body_query_and_cookies():
+    """Request bodies carry children's data and passwords; never let them reach Sentry."""
+    from config.settings import _sentry_before_send
+
+    event = {
+        "request": {
+            "url": "https://school-a.localhost/students/",
+            "method": "POST",
+            "data": {
+                "date_of_birth": "01/02/2015",
+                "guardian_phone": "+2348031234567",
+                "new_password1": "Sup3rSecret!pw",
+            },
+            "query_string": "q=Adaeze+Okafor",
+            "cookies": {"sessionid": "abc123sessioncookie"},
+        }
+    }
+    out = _sentry_before_send(event, None)
+    dumped = repr(out)
+    for value in (
+        "01/02/2015",
+        "+2348031234567",
+        "Sup3rSecret!pw",
+        "Adaeze",
+        "abc123sessioncookie",
+    ):
+        assert value not in dumped
+    assert "data" not in out["request"]
+    assert "query_string" not in out["request"]
+    assert "cookies" not in out["request"]
+    assert out["request"]["url"] == "https://school-a.localhost/students/"
