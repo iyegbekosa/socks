@@ -68,7 +68,10 @@
     var st = tr._st || (tr._st = { inflight: false, pending: false });
     if (locked) return;
     if (st.inflight) { st.pending = true; return; }
-    var changed = rowInputs(tr).filter(dirty);
+    /* A cell still marked .conflict holds this tab's value over someone else's newer one; it
+       is not resent (that would overwrite theirs) until the user edits it again, which clears
+       the mark. */
+    var changed = rowInputs(tr).filter(function (i) { return dirty(i) && !i.classList.contains("conflict"); });
     if (!changed.length) return;
     var sent = {};
     changed.forEach(function (i) { sent[i.dataset.student + ":" + i.dataset.component] = i.value.trim(); });
