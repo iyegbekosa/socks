@@ -43,6 +43,7 @@ PAGE_SIZE = 50
 JUST_ADMITTED = "students:just_admitted"
 PASSWORD_TTL_SECONDS = 300
 FULL_VIEW_ROLES = (SCHOOL_ADMIN, PROPRIETOR, PRINCIPAL)
+SEARCH_INVALID_MESSAGE = "The search contains an invalid character. Try again without it."
 
 
 def _visible_student(request: Any, pk: int) -> Student:
@@ -89,6 +90,12 @@ def _no_store(response: HttpResponse) -> HttpResponse:
 def student_list(request):
     qs = students_visible_to(request.user).select_related("user")
     q = (request.GET.get("q") or "").strip()
+    search_error = ""
+    if "\x00" in q:
+        # PostgreSQL rejects NUL in text: answer 400 like the API does, never 500.
+        search_error = SEARCH_INVALID_MESSAGE
+        q = ""
+        qs = qs.none()
     for token in q.split():
         qs = qs.filter(
             Q(first_name__icontains=token)
@@ -112,10 +119,13 @@ def student_list(request):
     ]
     query = request.GET.copy()
     query.pop("page", None)
+    if search_error:
+        query.pop("q", None)
     return render(
         request,
         "students/list.html",
         {
+            "search_error": search_error,
             "rows": rows,
             "page": page,
             "q": q,
@@ -127,6 +137,7 @@ def student_list(request):
             and arm_id.isdigit()
             and session is not None,
         },
+        status=400 if search_error else 200,
     )
 
 

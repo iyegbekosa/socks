@@ -134,6 +134,14 @@ def test_list_search_by_name_and_admission_number(client_a, world):
     assert b"table-wrap" in r.content
 
 
+def test_list_search_with_nul_character_is_400_not_500(client_a, world):
+    as_role(client_a, "school_admin")
+    r = client_a.get(reverse("students:list"), {"q": "ok\x00oro"})
+    assert r.status_code == 400
+    assert b"invalid character" in r.content
+    assert b"Ada Okoro" not in r.content
+
+
 def test_admin_admits_and_sees_password_once(client_a, world):
     as_role(client_a, "school_admin")
     r = client_a.post(reverse("students:admit"), admit_payload(world))
