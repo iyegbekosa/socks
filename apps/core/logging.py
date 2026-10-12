@@ -10,7 +10,9 @@ _SEGMENT_SPLIT = re.compile(r"[_\-.]")
 REDACTED = "[REDACTED]"
 # Celery tasks whose arguments are secret (phone numbers, OTP codes). Celery's trace and
 # worker loggers attach the task context as ``extra={"data": {...}}``, args included.
-SECRET_ARG_TASKS = frozenset({"apps.core.sms.deliver_sms"})
+SECRET_ARG_TASKS = frozenset(
+    {"apps.core.sms.deliver_sms", "apps.accounts.tasks.send_password_reset"}
+)
 _TASK_ARG_KEYS = ("args", "kwargs", "argsrepr", "kwargsrepr")
 
 _STANDARD_ATTRS = frozenset(

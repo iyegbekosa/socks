@@ -1,9 +1,7 @@
-import logging
 import math
 
 from django.conf import settings
 from django.contrib import messages
-from django.db import connection
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.cache import never_cache
@@ -15,23 +13,21 @@ from apps.accounts.services import (
     check_reset_code,
     consume_reset_code,
     find_user_by_identifier,
-    issue_reset_code,
-    reset_email_for,
-    reset_phone_for,
-    send_reset_link_email,
 )
+from apps.accounts.tasks import send_password_reset
 from apps.accounts.views.login import id_limit as login_id_limit
 from apps.audit.services import record
 from apps.core.ratelimit import RateLimit
-from apps.core.request_id import client_ip
-from apps.core.sms import send_sms, sms_configured
+from apps.core.request_id import client_ip, get_request_id
+from apps.core.sms import sms_configured
 
 SESSION_KEY = "reset_identifier"
-SENT_MESSAGE = "If an account matches, we've sent a code to its registered phone."
+SENT_MESSAGE = (
+    "If an account matches, we've sent a reset link and/or code to its registered contacts."
+)
 LINK_SENT_MESSAGE = (
     "If an account matches, we've sent a password reset link to its registered email."
 )
-logger = logging.getLogger(__name__)
 BAD_CODE = "That code is wrong or has expired."
 
 id_limit = RateLimit("reset:id")
@@ -75,26 +71,13 @@ def reset_request_view(request):
             status=429,
         )
 
-    user = find_user_by_identifier(ident)
-    if user is not None:
-        email = reset_email_for(user)
-        if email:
-            try:
-                send_reset_link_email(user, email, request.build_absolute_uri("/"))
-            except Exception:  # noqa: BLE001 - must not reveal the account; never log the link
-                logger.warning("Reset link email could not be sent")
-            else:
-                # No address in the audit row: only that a link went out.
-                record("auth.password_reset_link_sent", request=request, obj=user)
-        if sms_configured():
-            phone = reset_phone_for(user)
-            code = issue_reset_code(user) if phone else None
-            if code:
-                send_sms(
-                    phone,  # type: ignore[arg-type]
-                    f"{connection.tenant.name}: your password reset code is {code}. "
-                    "It expires in 10 minutes.",
-                )
+    # Exactly one task for every request that passes the limits, so response time does not
+    # reveal whether the account exists. argsrepr keeps the identifier out of Celery logs.
+    send_password_reset.apply_async(
+        args=[ident, request.build_absolute_uri("/"), ip, get_request_id()],
+        argsrepr="('<redacted>',)",
+        kwargsrepr="{}",
+    )
     if not sms_configured():
         # No code to enter: tell everyone to check email, on the login page.
         messages.info(request, LINK_SENT_MESSAGE)
@@ -151,6 +134,7 @@ def reset_verify_view(request):
     form = ResetVerifyForm(found, request.POST)
     if not form.is_valid():
         return render(request, "accounts/reset_verify.html", {"form": form})
+    found.must_change_password = False
     form.save()  # set_password + save
     consume_reset_code(found)
     verify_user_limit.reset(user_key)

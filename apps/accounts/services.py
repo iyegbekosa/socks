@@ -102,6 +102,20 @@ def reset_phone_for(user: User) -> str | None:
     return phone or None
 
 
+def current_school_name() -> str:
+    """The school's name. In a Celery worker ``connection.tenant`` is a bare schema stand-in
+    without a name, so fall back to the tenant registry (which lives in the public schema)."""
+    name = getattr(connection.tenant, "name", None)  # type: ignore[attr-defined]
+    if name:
+        return str(name)
+    from django_tenants.utils import get_public_schema_name, get_tenant_model, schema_context
+
+    schema = connection.schema_name  # type: ignore[attr-defined]
+    with schema_context(get_public_schema_name()):
+        tenant = get_tenant_model().objects.get(schema_name=schema)
+    return str(tenant.name)
+
+
 def reset_email_for(user: User) -> str | None:
     """Reset links go to the main guardian's email (else the second guardian's) for students,
     and to the staff member's own email for staff."""
@@ -153,7 +167,7 @@ def send_reset_link_email(user: User, email: str, base_url: str) -> None:
     student = getattr(user, "student", None) if user.kind == User.Kind.STUDENT else None
     first_name = user.first_name or "your account"
     context = {
-        "school_name": connection.tenant.name,  # type: ignore[attr-defined]
+        "school_name": current_school_name(),
         "first_name": first_name,
         "name": student.full_name if student is not None else user.get_full_name() or first_name,
         "admission_number": user.admission_number if user.kind == User.Kind.STUDENT else None,
@@ -199,14 +213,25 @@ def consume_reset_code(user: User) -> None:
     cache.delete_many([_reset_key(user), _attempts_key(user)])
 
 
+def reset_eligible(user: User | None) -> bool:
+    """Who may reset a password. Pending staff invitees (unusable password) set their first
+    password via the invite link. Students with no usable password (imported) may use the
+    guardian-email link, which sets their first password."""
+    if user is None or not user.is_active:
+        return False
+    return user.kind == User.Kind.STUDENT or user.has_usable_password()
+
+
 def find_user_by_identifier(raw: str) -> User | None:
     """Active user matching an identifier, resolved exactly as login does, for password reset.
 
-    Pending invitees (unusable password) are excluded: they set their first password via the
-    invite link, so a reset code must not become a second way in.
+    Pending staff invitees (unusable password) are excluded (see ``reset_eligible``): they
+    set their first password via the invite link, so a reset code must not become a second way in.
     """
     kind, value = classify_identifier(raw)
-    qs = User.objects.filter(is_active=True).exclude(password__startswith=UNUSABLE_PASSWORD_PREFIX)
+    qs = User.objects.filter(is_active=True).exclude(
+        kind="staff", password__startswith=UNUSABLE_PASSWORD_PREFIX
+    )
     if kind == "email":
         qs = qs.filter(kind="staff", email=value)
     elif kind == "phone":

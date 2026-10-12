@@ -173,3 +173,92 @@ def test_sms_code_also_sent_when_configured(client_a, sms_outbox):
     r = _request(client_a, s.admission_number)
     assert r["Location"] == reverse("accounts:reset_verify")
     assert len(mail.outbox) == 1 and len(sms_outbox) == 1
+
+
+def test_every_request_enqueues_exactly_one_task_with_identical_response(client_a):
+    from apps.accounts.tasks import send_password_reset
+
+    with schema_context("school_a"):
+        s = StudentProfileFactory(guardian_email="mum@example.com").user
+    seen = []
+    for ident in (s.admission_number, "GFS/9999/0001"):
+        client_a.cookies.clear()
+        cache.clear()
+        with patch.object(send_password_reset, "apply_async") as enqueue:
+            r = client_a.post(reverse("accounts:reset"), {"identifier": ident}, follow=True)
+        assert enqueue.call_count == 1
+        assert enqueue.call_args.kwargs["argsrepr"] == "('<redacted>',)"
+        seen.append((r.redirect_chain, re.sub(r'value="[^"]*"', "", r.content.decode())))
+    assert seen[0] == seen[1]
+    assert mail.outbox == []  # the view itself sends nothing
+
+
+def test_eager_task_delivers_and_audits_ip(client_a):
+    with schema_context("school_a"):
+        s = StudentProfileFactory(guardian_email="mum@example.com").user
+    _request(client_a, s.admission_number)
+    assert len(mail.outbox) == 1
+    with schema_context("school_a"):
+        ev = AuditEvent.objects.get(action="auth.password_reset_link_sent")
+        assert ev.ip and ev.request_id
+
+
+def test_imported_student_with_unusable_password_can_reset(client_a):
+    with schema_context("school_a"):
+        u = StudentProfileFactory(guardian_email="mum@example.com").user
+        u.set_unusable_password()
+        u.must_change_password = True
+        u.save()
+    _request(client_a, u.admission_number)
+    assert len(mail.outbox) == 1
+    assert _set(client_a, _link(mail.outbox[0])).status_code == 302
+    with schema_context("school_a"):
+        u.refresh_from_db()
+        assert not u.must_change_password
+    assert _login(client_a, u.admission_number, NEW_PW).status_code == 302
+
+
+def test_pending_staff_invitee_gets_nothing(client_a):
+    with schema_context("school_a"):
+        u = StaffFactory()
+        u.set_unusable_password()
+        u.save()
+    _request(client_a, u.email)
+    assert mail.outbox == []
+
+
+def test_inactive_vs_matching_identical_and_no_email_for_inactive(client_a):
+    with schema_context("school_a"):
+        dead = StudentProfileFactory(guardian_email="a@example.com", user__is_active=False).user
+        live = StudentProfileFactory(guardian_email="b@example.com").user
+    pages = []
+    for ident in (dead.admission_number, live.admission_number):
+        client_a.cookies.clear()
+        cache.clear()
+        pages.append(client_a.post(reverse("accounts:reset"), {"identifier": ident}, follow=True))
+    strip = lambda p: re.sub(r'value="[^"]*"', "", p.content.decode())  # noqa: E731
+    assert strip(pages[0]) == strip(pages[1])
+    assert [m.to for m in mail.outbox] == [["b@example.com"]]
+
+
+def test_link_from_school_a_fails_on_school_b(client_a, client_b):
+    with schema_context("school_a"):
+        u = StaffFactory()
+    _request(client_a, u.email)
+    assert client_b.get(_path(_link(mail.outbox[0]))).status_code == 400
+
+
+def test_sms_reset_clears_must_change_password(client_a, sms_outbox):
+    with schema_context("school_a"):
+        u = StudentProfileFactory().user
+        u.must_change_password = True
+        u.save()
+    _request(client_a, u.admission_number)
+    code = re.search(r"code is (\d{6})\.", sms_outbox[-1].body).group(1)
+    client_a.post(
+        reverse("accounts:reset_verify"),
+        {"code": code, "new_password1": NEW_PW, "new_password2": NEW_PW},
+    )
+    with schema_context("school_a"):
+        u.refresh_from_db()
+        assert not u.must_change_password

@@ -102,7 +102,7 @@ def student_list(request):
         arms = ClassArm.objects.select_related("level")
     else:
         arms = arms_taught_by(request.user, session).select_related("level")
-    if arm_id.isdigit() and session is not None:
+    if arm_id.isascii() and arm_id.isdigit() and session is not None:
         qs = qs.filter(enrolments__arm_id=int(arm_id), enrolments__session=session).distinct()
     page = Paginator(qs.prefetch_related(_enrolment_prefetch()), PAGE_SIZE).get_page(
         request.GET.get("page")
@@ -301,9 +301,14 @@ def passwords(request):
         status=Student.Status.ACTIVE, user__is_active=True
     )
     arm_id = (request.POST.get("arm") or "").strip()
-    ids = [int(v) for v in request.POST.getlist("student_ids") if v.strip().isdigit()]
+    ids = [
+        int(v) for v in request.POST.getlist("student_ids") if v.isascii() and v.strip().isdigit()
+    ]
     session = current_session()
-    if arm_id.isdigit() and session is not None:
+    if arm_id.isascii() and arm_id.isdigit():
+        if session is None:
+            messages.error(request, "Set a current term first.")
+            return redirect("students:list")
         qs = qs.filter(
             enrolments__arm_id=int(arm_id),
             enrolments__session=session,

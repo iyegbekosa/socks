@@ -11,7 +11,7 @@ from django.views.decorators.debug import sensitive_post_parameters
 
 from apps.accounts.identifiers import classify_identifier
 from apps.accounts.models import User
-from apps.accounts.services import reset_link_token_generator
+from apps.accounts.services import reset_eligible, reset_link_token_generator
 from apps.accounts.views.login import id_limit as login_id_limit
 from apps.audit.services import record
 
@@ -64,9 +64,8 @@ def _get_user(uidb64: str) -> User | None:
 
 def _usable(user: User | None, token: str) -> bool:
     return bool(
-        user is not None
-        and user.is_active
-        and user.has_usable_password()  # pending invitees use their invite instead
+        reset_eligible(user)  # pending staff invitees use their invite instead
+        and user is not None
         and reset_link_token_generator.check_token(user, token)
     )
 

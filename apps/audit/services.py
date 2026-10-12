@@ -36,6 +36,8 @@ def record(
     obj: Any = None,
     before: dict | None = None,
     after: dict | None = None,
+    ip: str | None = None,
+    request_id: str | None = None,
 ) -> AuditEvent:
     if actor is None and request is not None:
         user = getattr(request, "user", None)
@@ -55,6 +57,8 @@ def record(
         object_id=object_id,
         before=_clean(before),
         after=_clean(after),
-        ip=client_ip(request) if request is not None else None,
-        request_id=get_request_id() if get_request_id() != "-" else "",
+        ip=ip if ip is not None else (client_ip(request) if request is not None else None),
+        request_id=request_id
+        if request_id is not None
+        else (get_request_id() if get_request_id() != "-" else ""),
     )

@@ -73,7 +73,7 @@ def test_issue_two_passwords_full_flow(client_a, admin, two_students):
         assert len(pw) == 10 and set(pw) <= set(ALPHABET)
     with schema_context("school_a"):
         evs = AuditEvent.objects.filter(action="student.password_issued")
-        assert evs.count() >= 2
+        assert evs.count() == 2
         assert not any(pw in str(e.__dict__) for e in evs for pw in pws)
     from django_tenants.test.client import TenantClient
 
@@ -159,3 +159,22 @@ def test_buttons_on_detail_and_list(client_a, admin, two_students):
         "Print passwords for this class"
         not in client_a.get(reverse("students:list")).content.decode()
     )
+
+
+def test_withdrawn_and_unknown_ids_skipped_and_odd_digits_ok(client_a, admin, two_students):
+    with schema_context("school_a"):
+        gone = StudentProfileFactory(status="withdrawn")
+    r = client_a.post(
+        reverse("students:passwords"),
+        {"student_ids": [two_students[0].pk, gone.pk, 999999, "²"]},
+    )
+    assert r.status_code == 200 and len(_passwords(r.content.decode())) == 1
+
+
+def test_teacher_out_of_scope_not_reachable_but_admin_arm_without_term(client_a, admin):
+    from apps.academics.models import Term
+
+    with schema_context("school_a"):
+        Term.objects.all().delete()
+    r = client_a.post(reverse("students:passwords"), {"arm": "1"}, follow=True)
+    assert "Set a current term first" in r.content.decode()

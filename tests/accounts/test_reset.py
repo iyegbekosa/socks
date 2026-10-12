@@ -13,7 +13,9 @@ from tests.students.factories import StudentProfileFactory
 
 pytestmark = pytest.mark.django_db
 NEW_PW = "Brand-new-pass-7731"
-GENERIC = "If an account matches, we&#x27;ve sent a code to its registered phone."
+GENERIC = (
+    "If an account matches, we&#x27;ve sent a reset link and/or code to its registered contacts."
+)
 
 
 @pytest.fixture(autouse=True)
