@@ -1,0 +1,22 @@
+{% extends "core/base.html" %}
+{% block title %}Electives: {{ offering.subject.name }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>{{ offering.subject.name }} — {{ arm.display_name }}</h1>
+  <p class="muted">Session {{ offering.session.name }}</p>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if offering.is_compulsory %}
+  <p>This subject is compulsory — every student in the class takes it</p>
+  {% else %}
+  <form method="post">
+    {% csrf_token %}
+    <p>Tick the students who take this subject.</p>
+    {% for row in rows %}
+    <p><label><input type="checkbox" name="students" value="{{ row.student.pk }}"{% if row.checked %} checked{% endif %}> {{ row.student.last_name }}, {{ row.student.first_name }}</label></p>
+    {% empty %}<p class="muted">No active students in this class.</p>{% endfor %}
+    <button type="submit">Save</button>
+  </form>
+  {% endif %}
+  <p><a href="{% url 'academics:arm_detail' arm.pk %}">Back</a></p>
+</div>
+{% endblock %}

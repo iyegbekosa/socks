@@ -4,7 +4,8 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
-from apps.academics.models import SECTION_CHOICES
+from apps.academics.models import SECTION_CHOICES, SubjectOffering
+from apps.students.models import Enrolment, Student
 
 
 class AssessmentComponent(models.Model):
@@ -92,3 +93,35 @@ def grade_for(section: str, total: Decimal | float | int | str) -> GradeBand:
     if band is None:
         raise LookupError(f"No grade band for {rounded} in {section}; the scale is broken.")
     return band
+
+
+class ElectiveChoice(models.Model):
+    """A student's choice to take a non-compulsory subject offering."""
+
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="elective_choices")
+    offering = models.ForeignKey(
+        SubjectOffering, on_delete=models.PROTECT, related_name="elective_choices"
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "offering"], name="results_electivechoice_unique"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.student_id} / {self.offering_id}"
+
+    def clean(self) -> None:
+        if self.offering_id is None or self.student_id is None:
+            return
+        if self.offering.is_compulsory:
+            raise ValidationError("This subject is compulsory, so it has no elective choices.")
+        if not Enrolment.objects.filter(
+            student_id=self.student_id,
+            arm_id=self.offering.arm_id,
+            session_id=self.offering.session_id,
+            status=Enrolment.Status.ACTIVE,
+        ).exists():
+            raise ValidationError("The student is not in this class for this session.")

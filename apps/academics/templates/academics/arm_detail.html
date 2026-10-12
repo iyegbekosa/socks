@@ -18,7 +18,7 @@
     </select>
     <h2>Subjects</h2>
     <table>
-      <thead><tr><th>Subject</th><th>Teacher</th><th>Compulsory</th></tr></thead>
+      <thead><tr><th>Subject</th><th>Teacher</th><th>Compulsory</th><th></th></tr></thead>
       <tbody>
         {% for row in rows %}
         <tr>
@@ -30,8 +30,9 @@
             </select>
           </td>
           <td><input type="checkbox" name="compulsory_{{ row.subject.pk }}"{% if row.is_compulsory %} checked{% endif %}{% if not can_edit %} disabled{% endif %}></td>
+          <td>{% if row.offering_id and not row.is_compulsory %}<a href="{% url 'results:electives' row.offering_id %}">Electives</a>{% endif %}</td>
         </tr>
-        {% empty %}<tr><td colspan="3" class="muted">No subjects apply to this class's section yet.</td></tr>{% endfor %}
+        {% empty %}<tr><td colspan="4" class="muted">No subjects apply to this class's section yet.</td></tr>{% endfor %}
       </tbody>
     </table>
     {% if can_edit %}<button type="submit">Save</button>{% endif %}

@@ -315,6 +315,7 @@ def arm_detail(request, arm_id):
             {
                 "subject": subject,
                 "teacher_id": off.teacher_id if off else None,
+                "offering_id": off.pk if off else None,
                 "is_compulsory": off.is_compulsory if off else True,
             }
         )
