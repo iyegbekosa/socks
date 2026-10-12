@@ -475,3 +475,28 @@ def test_score_fks_protect(w):
             obj.delete()
     assert SubjectOffering.objects.filter(pk=w.offering.pk).exists()
     assert ClassLevel.objects.exists()
+
+
+def test_save_takes_a_shared_lock_on_the_class_row(w):
+    """Saves for different subjects of an arm share the class row lock (FOR SHARE); class
+    transitions keep FOR UPDATE, so they still exclude every save (final review M8)."""
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    from apps.results.workflow import submit_sheet
+
+    with CaptureQueriesContext(connection) as q:
+        save_cells(w.offering, w.term, [cell(w.students[0], w.comps[0], "5")], by=w.teacher)
+    on_class = [x["sql"] for x in q.captured_queries if '"results_classresult"' in x["sql"]]
+    on_class += [x["sql"] for x in q.captured_queries if " results_classresult " in x["sql"]]
+    assert any(s.rstrip().endswith("FOR SHARE") for s in on_class), on_class
+    assert not any("FOR UPDATE" in s for s in on_class)
+
+    with CaptureQueriesContext(connection) as q:
+        try:
+            submit_sheet(w.offering, w.term, by=w.teacher)
+        except ValidationError:
+            pass  # blank cells: the class row was still locked first
+    assert any(
+        "results_classresult" in x["sql"] and "FOR UPDATE" in x["sql"] for x in q.captured_queries
+    )

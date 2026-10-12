@@ -215,6 +215,18 @@ def save_cells(
         raise
 
 
+def _shared_class_lock(arm_id: int, term_id: int) -> ClassResult:
+    """Read the class row ``FOR SHARE``. Saves for different subjects of one arm hold it
+    together, so they no longer queue behind one another; a class transition still takes the
+    row ``FOR UPDATE``, which waits for every save holding it (and blocks new ones), so no
+    score can change while the class moves on. Django has no FOR SHARE option, hence raw."""
+    table = ClassResult._meta.db_table
+    return ClassResult.objects.raw(
+        f"SELECT * FROM {table} WHERE arm_id = %s AND term_id = %s FOR SHARE",
+        [arm_id, term_id],
+    )[0]
+
+
 def _save_cells(
     offering: SubjectOffering, term: Term, cells: list[CellInput], *, by: Any, request: Any
 ) -> SaveResult:
@@ -222,7 +234,7 @@ def _save_cells(
         school_lock(f"scores:{offering.pk}:{term.pk}")
         _status_rows(offering, term)
         sheet = ScoreSheet.objects.select_for_update().get(offering=offering, term=term)
-        klass = ClassResult.objects.select_for_update().get(arm_id=offering.arm_id, term=term)
+        klass = _shared_class_lock(offering.arm_id, term.pk)
         if not _editable(sheet, klass):
             raise ResultsLocked()
 
