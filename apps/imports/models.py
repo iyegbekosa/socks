@@ -31,6 +31,12 @@ class ImportJob(models.Model):
     arms = models.JSONField(default=list, blank=True)
     # Students admitted by this job: their one-time passwords are printed from here.
     admitted_student_ids = models.JSONField(default=list, blank=True)
+    # Staff invites sent by this job.
+    invited_count = models.PositiveIntegerField(default=0)
+    # Whether the uploading session passed a TOTP check: MFA-role invites need it.
+    started_verified = models.BooleanField(default=False)
+    # Site root captured at upload (honours https/proxy); invite links are built from it.
+    base_url = models.CharField(max_length=255, blank=True)
     message = models.CharField(max_length=200, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="import_jobs"

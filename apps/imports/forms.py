@@ -8,7 +8,8 @@ from apps.imports.parsing import ALLOWED_EXTENSIONS, MAX_BYTES
 
 class ImportForm(forms.Form):
     kind = forms.ChoiceField(
-        choices=[(ImportJob.Kind.STUDENTS, "Students")], label="What are you importing?"
+        choices=[(ImportJob.Kind.STUDENTS, "Students"), (ImportJob.Kind.STAFF, "Staff")],
+        label="What are you importing?",
     )
     file = forms.FileField(
         label="File", help_text="A .csv or .xlsx file, at most 5 MB and 2,000 rows."

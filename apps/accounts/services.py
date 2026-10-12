@@ -254,7 +254,7 @@ def _send_invite_on_commit(user: User, base_url: str, *, send_sms: bool = True) 
     """Queue the invite email/SMS for after the surrounding transaction commits."""
     from apps.core import sms
 
-    school_name = connection.tenant.name  # type: ignore[attr-defined]
+    school_name = current_school_name()  # connection.tenant is a bare stand-in in workers
     link = invite_link(user, base_url)
     email, phone = user.email, user.phone
 

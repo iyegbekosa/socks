@@ -31,7 +31,8 @@ RECENT_JOBS = 10
 def new(request):
     form = ImportForm(request.POST or None, request.FILES or None)
     if request.method == "POST" and form.is_valid():
-        if current_session() is None:
+        kind = form.cleaned_data["kind"]
+        if kind == ImportJob.Kind.STUDENTS and current_session() is None:
             form.add_error(None, "Set a current term before importing students.")
         else:
             upload = form.cleaned_data["file"]
@@ -42,10 +43,14 @@ def new(request):
             else:
                 try:
                     job = ImportJob.objects.create(
-                        kind=form.cleaned_data["kind"],
+                        kind=kind,
                         file_name=name,
                         original_name=(upload.name or "")[:255],
                         created_by=request.user,
+                        started_verified=bool(
+                            getattr(request.user, "is_verified", lambda: False)()
+                        ),
+                        base_url=request.build_absolute_uri("/").rstrip("/")[:255],
                     )
                 except BaseException:
                     delete_upload(name)

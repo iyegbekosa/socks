@@ -12,7 +12,9 @@
     <dt>Rows in file</dt><dd>{{ job.total_rows }}</dd>
     <dt>Saved</dt><dd>{{ job.ok_rows }}</dd>
     <dt>Problems</dt><dd>{{ job.error_rows }}</dd>
-  </dl>
+    </dl>
+  {% if job.kind == "staff" %}<p>Invites sent: {{ job.invited_count }}</p>
+  <p class="muted">Staff set their own password from the link in their invite.</p>{% endif %}
   {% if job.admitted_student_ids %}
   <h2>Passwords</h2>
   <p class="muted">Imported students have no password yet. This prints one-time passwords for the students imported here only.</p>
@@ -39,6 +41,6 @@
   </div>
   {% if more_errors %}<p class="muted">{{ more_errors }} more in errors.csv.</p>{% endif %}
   {% endif %}
-  <p><a href="{% url 'imports:new' %}">Import another file</a> · <a href="{% url 'students:list' %}">Students</a></p>
+  <p><a href="{% url 'imports:new' %}">Import another file</a> · {% if job.kind == "staff" %}<a href="{% url 'staff:list' %}">Staff</a>{% else %}<a href="{% url 'students:list' %}">Students</a>{% endif %}</p>
 </div>
 {% endblock %}

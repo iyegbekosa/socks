@@ -8,6 +8,7 @@ from apps.audit.services import record
 from apps.core.tasks import TenantTask
 from apps.imports.models import ImportJob
 from apps.imports.parsing import ImportFileError
+from apps.imports.staff import import_staff
 from apps.imports.students import import_students
 from config.celery import app
 
@@ -52,6 +53,8 @@ def run_import(job_id: int) -> None:
         _audit("import.started", job)
         if job.kind == ImportJob.Kind.STUDENTS:
             import_students(job)
+        elif job.kind == ImportJob.Kind.STAFF:
+            import_staff(job, verified=job.started_verified)
         else:
             raise ImportFileError("This kind of import is not available yet.")
     except ImportFileError as exc:
