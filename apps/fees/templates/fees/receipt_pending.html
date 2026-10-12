@@ -1,0 +1,9 @@
+{% extends "core/base.html" %}
+{% block title %}Receipt{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Receipt {{ receipt.number }}</h1>
+  <p role="status">Your receipt is being prepared.</p>
+  <p class="muted">Please check again in a few minutes.</p>
+</div>
+{% endblock %}

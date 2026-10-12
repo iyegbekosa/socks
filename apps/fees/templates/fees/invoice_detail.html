@@ -36,7 +36,10 @@
       <td>{{ al.payment.paid_at|date:"j M Y" }}</td>
       <td>{{ al.payment.get_method_display }}</td>
       <td>{{ al.amount_kobo|naira }}</td>
-      <td>{{ al.payment.receipt.number }}</td>
+      <td>{{ al.payment.receipt.number }} · <a href="{% url 'fees:receipt_download' al.payment.receipt.pk %}">Receipt</a>
+        {% if can_manage and not al.payment.receipt.pdf_name %}
+        <form method="post" action="{% url 'fees:receipt_regenerate' al.payment.receipt.pk %}" style="display:inline">{% csrf_token %}<button type="submit">Regenerate</button></form>
+        {% endif %}</td>
     </tr>
     {% empty %}<tr><td colspan="4">No payments recorded yet.</td></tr>
     {% endfor %}

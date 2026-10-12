@@ -200,6 +200,7 @@ def invoice_detail(request, invoice_id):
             "optional_form": optional_form,
             "adjustment_form": adjustment_form,
             "can_edit": can_edit and invoice.status != Invoice.CARRIED,
+            "can_manage": can_edit,
             "error": error,
         },
         status=status,

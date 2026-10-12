@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Receipt {{ number }}</title>
+<style>
+  @page { size: A4 portrait; margin: 14mm 12mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "DejaVu Sans", "Helvetica", "Arial", sans-serif; font-size: 9.5pt; color: #111; line-height: 1.35; }
+  h1, h2, p { margin: 0; }
+  .school { display: flex; align-items: center; gap: 4mm; border-bottom: 1.2mm solid {{ primary_color }}; padding-bottom: 3mm; }
+  .school .logo { max-height: 20mm; max-width: 30mm; }
+  .school h1 { font-size: 15pt; color: {{ primary_color }}; }
+  .school .motto { font-style: italic; font-size: 8.5pt; }
+  .school .address { font-size: 8pt; color: #444; }
+  .title { margin: 5mm 0 3mm; font-size: 12pt; text-transform: uppercase; letter-spacing: 0.04em; color: {{ primary_color }}; }
+  table { border-collapse: collapse; width: 100%; }
+  .facts td { padding: 1mm 1.5mm; vertical-align: top; }
+  .facts .label { color: #555; width: 38mm; }
+  .facts .value { font-weight: bold; }
+  .lines { margin-top: 5mm; }
+  .lines th { background: {{ primary_color }}; color: #fff; padding: 1.5mm; text-align: left; }
+  .lines td { padding: 1.5mm; border-bottom: 0.2mm solid #bbb; }
+  .lines .num { text-align: right; }
+  .total td { font-weight: bold; border-top: 0.5mm solid #111; padding-top: 2mm; }
+</style>
+</head>
+<body>
+  <div class="school">
+    {% if logo %}<img class="logo" src="{{ logo }}" alt="">{% endif %}
+    <div>
+      <h1>{{ school_name }}</h1>
+      {% if motto %}<p class="motto">{{ motto }}</p>{% endif %}
+      {% if address %}<p class="address">{{ address }}</p>{% endif %}
+    </div>
+  </div>
+  <h2 class="title">Payment receipt</h2>
+  <table class="facts">
+    <tr><td class="label">Receipt number</td><td class="value">{{ number }}</td></tr>
+    <tr><td class="label">Date</td><td class="value">{{ paid_at|date:"j F Y" }}</td></tr>
+    <tr><td class="label">Student</td><td class="value">{{ student_name }}</td></tr>
+    {% if admission_number %}<tr><td class="label">Admission number</td><td class="value">{{ admission_number }}</td></tr>{% endif %}
+    <tr><td class="label">Method</td><td class="value">{{ method }}</td></tr>
+    {% if reference %}<tr><td class="label">Reference</td><td class="value">{{ reference }}</td></tr>{% endif %}
+  </table>
+  <table class="lines">
+    <thead><tr><th>Invoice</th><th class="num">Amount paid</th><th class="num">Remaining balance</th></tr></thead>
+    <tbody>
+    {% for line in lines %}
+      <tr><td>{{ line.term }}</td><td class="num">{{ line.amount }}</td><td class="num">{{ line.balance }}</td></tr>
+    {% endfor %}
+    {% if unallocated %}<tr><td>Not allocated to an invoice</td><td class="num">{{ unallocated }}</td><td></td></tr>{% endif %}
+    </tbody>
+    <tfoot><tr class="total"><td>Total paid</td><td class="num">{{ total }}</td><td></td></tr></tfoot>
+  </table>
+  <p style="margin-top:6mm">{% if online %}Paid online{% else %}Recorded by: {{ recorded_by }}{% endif %}</p>
+</body>
+</html>

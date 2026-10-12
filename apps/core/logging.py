@@ -16,6 +16,8 @@ SECRET_ARG_TASKS = frozenset(
         "apps.core.sms.deliver_sms",
         "apps.accounts.tasks.send_password_reset",
         "apps.results.tasks.notify_published_task",
+        "apps.fees.tasks.generate_receipt_task",
+        "apps.fees.tasks.send_receipt_task",
     }
 )
 _TASK_ARG_KEYS = ("args", "kwargs", "argsrepr", "kwargsrepr")
