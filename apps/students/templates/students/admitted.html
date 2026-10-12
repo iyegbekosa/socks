@@ -2,6 +2,11 @@
 {% block title %}Student admitted{% endblock %}
 {% block content %}
 <div class="card">
+  {% if expired %}
+  <h1>{{ student.full_name }} has been admitted</h1>
+  <p class="error" role="alert">The password is no longer available; issue a new one.</p>
+  <p><a href="{% url 'students:detail' student.pk %}">View student</a></p>
+  {% else %}
   <h1>{{ student.full_name }} has been admitted</h1>
   <dl class="facts">
     <dt>Class</dt><dd>{{ enrolment.arm.display_name|default:"—" }}</dd>
@@ -11,5 +16,6 @@
   <p class="error" role="alert">Print or write this down now. The password is shown only once and cannot be viewed again. The student must change it at first login.</p>
   <p class="no-print"><button type="button" onclick="window.print()">Print</button></p>
   <p class="no-print"><a href="{% url 'students:detail' student.pk %}">View student</a> · <a href="{% url 'students:admit' %}">Admit another</a></p>
+  {% endif %}
 </div>
 {% endblock %}

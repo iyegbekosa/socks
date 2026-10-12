@@ -19,14 +19,14 @@
   <dl class="facts">
     <dt>Name</dt><dd>{{ student.guardian_name }} ({{ student.get_guardian_relationship_display }})</dd>
     <dt>Phone</dt><dd>{{ student.guardian_phone|default:"—" }}</dd>
-    <dt>Email</dt><dd>{{ student.guardian_email|default:"—" }}</dd>
+    {% if show_emails %}<dt>Email</dt><dd>{{ student.guardian_email|default:"—" }}</dd>{% endif %}
   </dl>
   {% if student.guardian2_name %}
   <h2>Second guardian</h2>
   <dl class="facts">
     <dt>Name</dt><dd>{{ student.guardian2_name }}{% if student.guardian2_relationship %} ({{ student.get_guardian2_relationship_display }}){% endif %}</dd>
     <dt>Phone</dt><dd>{{ student.guardian2_phone|default:"—" }}</dd>
-    <dt>Email</dt><dd>{{ student.guardian2_email|default:"—" }}</dd>
+    {% if show_emails %}<dt>Email</dt><dd>{{ student.guardian2_email|default:"—" }}</dd>{% endif %}
   </dl>
   {% endif %}
   {% if show_private %}

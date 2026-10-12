@@ -1,9 +1,12 @@
+import time
 from datetime import date, timedelta
+from types import SimpleNamespace
 from unittest import mock
 
 import cloudinary
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import IntegrityError
 from django.urls import reverse
 from django_tenants.utils import schema_context
 
@@ -80,7 +83,7 @@ def world(school_a):
         _wipe()
 
 
-def staff(school, roles, *, mfa=False):
+def staff(roles):
     with schema_context("school_a"):
         u = StaffFactory()
         set_roles(u, roles, by=u)
@@ -96,7 +99,7 @@ def login(client, user):
 
 
 def as_role(client, *roles):
-    u = staff(None, list(roles))
+    u = staff(list(roles))
     login(client, u)
     return u
 
@@ -205,7 +208,7 @@ def test_no_current_session_prompts(client_a, world):
 
 
 def test_teacher_scope_404_for_other_class(client_a, world):
-    t = staff(None, ["teacher"])
+    t = staff(["teacher"])
     with schema_context("school_a"):
         FormTeacher.objects.create(arm=world["a"], session=world["session"], teacher=t)
         Student.objects.filter(pk=world["other"].pk).update(photo="students/photos/x.jpg")
@@ -286,7 +289,7 @@ def test_withdraw_get_405_and_post_audited(client_a, world):
 
 
 def test_withdrawn_hidden_from_teacher_visible_to_principal(client_a, world):
-    t = staff(None, ["teacher"])
+    t = staff(["teacher"])
     with schema_context("school_a"):
         FormTeacher.objects.create(arm=world["a"], session=world["session"], teacher=t)
         from apps.students.services import withdraw_student
@@ -334,3 +337,119 @@ def test_edit_photo_upload_audited(client_a, world):
 def test_home_links_students_for_staff(client_a, world):
     as_role(client_a, "teacher")
     assert reverse("students:list").encode() in client_a.get(reverse("home")).content
+
+
+def _integrity(constraint, sqlstate="23505"):
+    exc = IntegrityError("boom")
+    cause = Exception("cause")
+    cause.sqlstate = sqlstate  # type: ignore[attr-defined]
+    cause.diag = SimpleNamespace(constraint_name=constraint)  # type: ignore[attr-defined]
+    exc.__cause__ = cause
+    return exc
+
+
+def test_admission_number_integrity_error_is_field_error(client_a, world):
+    as_role(client_a, "school_admin")
+    err = _integrity("accounts_user_admission_number_key")
+    with mock.patch("apps.students.views.admit_student", side_effect=err):
+        r = client_a.post(reverse("students:admit"), admit_payload(world))
+    assert r.status_code == 200
+    assert r.context["form"].errors.get("admission_number")
+
+
+def test_unrelated_integrity_error_propagates(client_a, world):
+    as_role(client_a, "school_admin")
+    err = _integrity("accounts_user_phone_key")
+    with mock.patch("apps.students.views.admit_student", side_effect=err):
+        with pytest.raises(IntegrityError):
+            client_a.post(reverse("students:admit"), admit_payload(world))
+
+
+def test_invalid_photo_saves_nothing(client_a, world):
+    as_role(client_a, "school_admin")
+    pk = world["mine"].pk
+    data = admit_payload(world, first_name="Changed", date_of_birth="01/03/2014")
+    for k in ("arm", "consent", "consent_method"):
+        data.pop(k)
+    data["photo"] = SimpleUploadedFile("x.gif", b"GIF89a not an allowed type")
+    r = client_a.post(reverse("students:edit", args=[pk]), data)
+    assert r.status_code == 200 and r.context["form"].errors.get("photo")
+    with schema_context("school_a"):
+        assert Student.objects.get(pk=pk).first_name == "Ada"
+        assert not AuditEvent.objects.filter(action="student.updated").exists()
+
+
+def test_two_admissions_each_show_own_password(client_a, world):
+    as_role(client_a, "school_admin")
+    r1 = client_a.post(reverse("students:admit"), admit_payload(world, first_name="One"))
+    r2 = client_a.post(
+        reverse("students:admit"),
+        admit_payload(world, first_name="Two", guardian_phone="08031234568"),
+    )
+    stash = client_a.session["students:just_admitted"]
+    pw = {pk: v["password"] for pk, v in stash.items()}
+    assert len(pw) == 2
+    for r in (r2, r1):  # confirm in the opposite order
+        pk = r["Location"].strip("/").split("/")[-2]
+        body = client_a.get(r["Location"]).content.decode()
+        assert pw[pk] in body
+        other = [v for k, v in pw.items() if k != pk][0]
+        assert other not in body
+
+
+def test_stale_password_not_shown_and_removed(client_a, world):
+    as_role(client_a, "school_admin")
+    r = client_a.post(reverse("students:admit"), admit_payload(world))
+    pw = next(iter(client_a.session["students:just_admitted"].values()))["password"]
+    with mock.patch("apps.students.views.time.time", return_value=time.time() + 301):
+        body = client_a.get(r["Location"]).content.decode()
+    assert pw not in body and "no longer available" in body
+    assert "students:just_admitted" not in client_a.session
+
+
+def test_teacher_never_sees_guardian_emails(client_a, world):
+    with schema_context("school_a"):
+        Student.objects.filter(pk=world["mine"].pk).update(
+            guardian_email="secret@mail.ng", guardian2_name="Two", guardian2_email="two@mail.ng"
+        )
+    t = staff(["teacher"])
+    with schema_context("school_a"):
+        FormTeacher.objects.create(arm=world["a"], session=world["session"], teacher=t)
+    login(client_a, t)
+    body = client_a.get(reverse("students:detail", args=[world["mine"].pk])).content.decode()
+    assert "secret@mail.ng" not in body and "two@mail.ng" not in body
+    assert world["mine"].guardian_name in body
+    client_a.logout()
+    as_role(client_a, "bursar")
+    body = client_a.get(reverse("students:detail", args=[world["mine"].pk])).content.decode()
+    assert "secret@mail.ng" in body
+
+
+def test_teacher_list_dropdown_and_filters_stay_in_scope(client_a, world):
+    t = staff(["teacher"])
+    with schema_context("school_a"):
+        FormTeacher.objects.create(arm=world["a"], session=world["session"], teacher=t)
+    login(client_a, t)
+    r = client_a.get(reverse("students:list"))
+    assert [a.pk for a in r.context["arms"]] == [world["a"].pk]
+    assert b"JSS 2B" not in r.content
+    r = client_a.get(reverse("students:list"), {"arm": world["b"].pk})
+    assert b"Bola" not in r.content
+    r = client_a.get(reverse("students:list"), {"q": "Yusuf"})
+    assert b"Bola" not in r.content
+    assert client_a.post(reverse("students:withdraw", args=[world["other"].pk])).status_code == 404
+    with schema_context("school_a"):
+        Student.objects.filter(pk=world["mine"].pk).update(photo="students/photos/m.jpg")
+    r = client_a.get(reverse("students:photo", args=[world["mine"].pk]))
+    assert r.status_code == 302
+
+
+def test_list_query_count_is_flat(client_a, world, django_assert_max_num_queries):
+    with schema_context("school_a"):
+        for _ in range(48):
+            StudentProfileFactory(enrolment__arm=world["a"], enrolment__session=world["session"])
+    as_role(client_a, "school_admin")
+    client_a.get(reverse("students:list"))  # warm up
+    with django_assert_max_num_queries(40):
+        r = client_a.get(reverse("students:list"))
+    assert len(r.context["rows"]) == 50

@@ -2,8 +2,16 @@ from django import forms
 from django.core.exceptions import ValidationError
 
 from apps.academics.models import ClassArm
+from apps.core.images import clean_image
 from apps.students.models import RELATIONSHIP_CHOICES, Student
-from apps.students.services import GuardianData
+from apps.students.services import (
+    PHOTO_FORMATS,
+    PHOTO_MAX_BYTES,
+    PHOTO_MAX_PIXELS,
+    PHOTO_QUALITY,
+    PHOTO_SIDE,
+    GuardianData,
+)
 
 DATE_FORMATS = ["%d/%m/%Y", "%Y-%m-%d"]
 BLANK = [("", "Choose…")]
@@ -113,6 +121,26 @@ class AdmitForm(StudentProfileForm):
 
 class EditForm(StudentProfileForm):
     photo = forms.FileField(required=False, label="Replace photo")
+
+    def clean_photo(self):  # type: ignore[no-untyped-def]
+        """Validate before anything is saved; the service re-encodes again on write."""
+        upload = self.cleaned_data.get("photo")
+        if upload:
+            try:
+                clean_image(
+                    upload,
+                    max_bytes=PHOTO_MAX_BYTES,
+                    allowed=PHOTO_FORMATS,
+                    max_pixels=PHOTO_MAX_PIXELS,
+                    output="jpeg",
+                    max_side=PHOTO_SIDE,
+                    quality=PHOTO_QUALITY,
+                    label="Photo",
+                )
+            except ValidationError as exc:
+                raise ValidationError(exc.messages) from None
+            upload.seek(0)
+        return upload
 
 
 def attach_errors(form: forms.Form, exc: ValidationError) -> None:

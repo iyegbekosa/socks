@@ -1,5 +1,6 @@
 """Student admin pages. Children's data: nothing here logs DOB, contacts, photos or passwords."""
 
+import time
 from typing import Any
 
 from django.contrib import messages
@@ -14,9 +15,10 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
 from apps.academics.models import ClassArm
-from apps.academics.scope import students_visible_to, teacher_students
+from apps.academics.scope import arms_taught_by, students_visible_to, teacher_students
 from apps.academics.services import current_session
 from apps.accounts.roles import (
+    BURSAR,
     PRINCIPAL,
     PROPRIETOR,
     SCHOOL_ADMIN,
@@ -36,7 +38,8 @@ from apps.tenancy.limits import PlanLimitExceeded
 
 PAGE_SIZE = 50
 JUST_ADMITTED = "students:just_admitted"
-CONFLICT_MESSAGE = "Someone else changed this at the same time — please try again."
+UNIQUE_VIOLATION = "23505"
+PASSWORD_TTL_SECONDS = 300
 FULL_VIEW_ROLES = (SCHOOL_ADMIN, PROPRIETOR, PRINCIPAL)
 
 
@@ -46,12 +49,11 @@ def _visible_student(request: Any, pk: int) -> Student:
     )
 
 
-def _enrolment_for_display(student: Student) -> Enrolment | None:
+def _enrolment_for_display(student: Student, session: Any) -> Enrolment | None:
     """The current session's enrolment, else the most recent one (needs prefetched rows)."""
     rows = list(student.enrolments.all())
     if not rows:
         return None
-    session = current_session()
     for row in rows:
         if session is not None and row.session_id == session.pk:
             return row
@@ -66,6 +68,13 @@ def _can_see_photo(user: Any, student: Student) -> bool:
     if user.has_role(*FULL_VIEW_ROLES):
         return True
     return user.has_role(TEACHER) and teacher_students(user).filter(pk=student.pk).exists()
+
+
+def _fresh(entry: Any, now: float) -> bool:
+    try:
+        return now - float(entry["at"]) <= PASSWORD_TTL_SECONDS
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def _no_store(response: HttpResponse) -> HttpResponse:
@@ -86,13 +95,19 @@ def student_list(request):
             | Q(user__admission_number__icontains=token)
         )
     arm_id = (request.GET.get("arm") or "").strip()
-    session = current_session()
+    session = current_session()  # once per request
+    if request.user.has_role(*FULL_VIEW_ROLES, BURSAR):
+        arms = ClassArm.objects.select_related("level")
+    else:
+        arms = arms_taught_by(request.user, session).select_related("level")
     if arm_id.isdigit() and session is not None:
         qs = qs.filter(enrolments__arm_id=int(arm_id), enrolments__session=session).distinct()
     page = Paginator(qs.prefetch_related(_enrolment_prefetch()), PAGE_SIZE).get_page(
         request.GET.get("page")
     )
-    rows = [{"student": s, "enrolment": _enrolment_for_display(s)} for s in page.object_list]
+    rows = [
+        {"student": s, "enrolment": _enrolment_for_display(s, session)} for s in page.object_list
+    ]
     query = request.GET.copy()
     query.pop("page", None)
     return render(
@@ -103,7 +118,7 @@ def student_list(request):
             "page": page,
             "q": q,
             "arm_id": arm_id,
-            "arms": ClassArm.objects.select_related("level"),
+            "arms": arms,
             "querystring": query.urlencode(),
             "can_admit": request.user.has_role(SCHOOL_ADMIN),
         },
@@ -126,7 +141,8 @@ def detail(request, pk: int):
         "students/detail.html",
         {
             "student": student,
-            "enrolment": _enrolment_for_display(student),
+            "enrolment": _enrolment_for_display(student, current_session()),
+            "show_emails": user.has_role(*FULL_VIEW_ROLES, BURSAR),
             "show_private": full,  # date of birth and consent details
             "show_photo": bool(student.photo) and _can_see_photo(user, student),
             "can_edit": user.has_role(SCHOOL_ADMIN),
@@ -136,11 +152,13 @@ def detail(request, pk: int):
     )
 
 
-def _admit_error(form: AdmitForm, exc: IntegrityError) -> None:
-    if "admission_number" in str(exc):
-        form.add_error("admission_number", "That admission number is already in use.")
-    else:
-        form.add_error(None, CONFLICT_MESSAGE)
+def _is_admission_number_clash(exc: IntegrityError) -> bool:
+    """True only for the unique violation on accounts_user.admission_number."""
+    cause = exc.__cause__
+    if getattr(cause, "sqlstate", None) != UNIQUE_VIOLATION:
+        return False
+    diag = getattr(cause, "diag", None)
+    return "admission_number" in (getattr(diag, "constraint_name", None) or "")
 
 
 @never_cache
@@ -175,9 +193,16 @@ def admit(request):
         except PlanLimitExceeded as exc:
             form.add_error(None, exc.message)
         except IntegrityError as exc:
-            _admit_error(form, exc)
+            if not _is_admission_number_clash(exc):
+                raise
+            form.add_error("admission_number", "That admission number is already in use.")
         else:
-            request.session[JUST_ADMITTED] = {"pk": student.pk, "password": password}
+            stash = request.session.get(JUST_ADMITTED)
+            stash = stash if isinstance(stash, dict) else {}
+            now = time.time()
+            stash = {k: v for k, v in stash.items() if _fresh(v, now)}  # drop stale entries
+            stash[str(student.pk)] = {"password": password, "at": now}
+            request.session[JUST_ADMITTED] = stash
             return redirect("students:admitted", pk=student.pk)
     return render(request, "students/admit.html", {"form": form}, status=200)
 
@@ -186,14 +211,24 @@ def admit(request):
 def admitted(request, pk: int):
     """One-time confirmation: the password is popped from the session on first view."""
     student = get_object_or_404(Student.objects.select_related("user"), pk=pk)
-    stash = request.session.pop(JUST_ADMITTED, None)
-    if not isinstance(stash, dict) or stash.get("pk") != student.pk:
+    stash = request.session.get(JUST_ADMITTED)
+    stash = stash if isinstance(stash, dict) else {}
+    entry = stash.pop(str(student.pk), None)
+    if stash:
+        request.session[JUST_ADMITTED] = stash
+    else:
+        request.session.pop(JUST_ADMITTED, None)
+    if not isinstance(entry, dict):
         return redirect("students:detail", pk=student.pk)
+    if not _fresh(entry, time.time()):
+        response = render(request, "students/admitted.html", {"student": student, "expired": True})
+        response["Referrer-Policy"] = "no-referrer"
+        return _no_store(response)
     enrolment = student.enrolments.select_related("arm__level").first()
     response = render(
         request,
         "students/admitted.html",
-        {"student": student, "enrolment": enrolment, "password": stash.get("password")},
+        {"student": student, "enrolment": enrolment, "password": entry.get("password")},
     )
     response["Referrer-Policy"] = "no-referrer"
     return _no_store(response)
@@ -221,8 +256,6 @@ def edit(request, pk: int):
             attach_errors(form, exc)
         except PlanLimitExceeded as exc:
             form.add_error(None, exc.message)
-        except IntegrityError:
-            form.add_error(None, CONFLICT_MESSAGE)
         else:
             messages.success(request, "Student updated.")
             return redirect("students:detail", pk=student.pk)
