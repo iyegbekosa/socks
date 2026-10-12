@@ -2,9 +2,9 @@ from typing import Any
 
 from django import forms
 
-from apps.academics.models import AcademicSession, Term
-from apps.core.money import kobo_from_naira
-from apps.fees.models import Discount, FeeItem, FeeSettings, StudentDiscount
+from apps.academics.models import AcademicSession, ClassLevel, Term
+from apps.core.money import kobo_from_naira, naira_display
+from apps.fees.models import Discount, FeeItem, FeeSettings, FeeStructureLine, StudentDiscount
 
 NAIRA_ATTRS = {"inputmode": "decimal", "autocomplete": "off"}
 
@@ -231,3 +231,52 @@ class StudentDiscountForm(forms.Form):
             ).exists():
                 raise forms.ValidationError("This student already has that discount this session.")
         return data
+
+
+class GenerateInvoicesForm(forms.Form):
+    term = forms.ModelChoiceField(queryset=Term.objects.select_related("session"))
+    levels = forms.ModelMultipleChoiceField(
+        queryset=ClassLevel.objects.all(),
+        required=False,
+        label="Class levels",
+        help_text="Leave empty to invoice every class level.",
+    )
+
+
+class _OptionalLineField(forms.ModelChoiceField):
+    def label_from_instance(self, obj: Any) -> str:
+        return f"{obj.item.name} ({naira_display(obj.amount_kobo)})"
+
+
+class OptionalItemForm(forms.Form):
+    line = _OptionalLineField(queryset=FeeStructureLine.objects.none(), label="Optional item")
+
+    def __init__(self, *args: Any, lines: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        field = self.fields["line"]
+        assert isinstance(field, forms.ModelChoiceField)
+        field.queryset = lines
+
+
+class AdjustmentForm(forms.Form):
+    amount = forms.CharField(
+        max_length=21,
+        widget=forms.TextInput(attrs=NAIRA_ATTRS),
+        label="Amount (naira)",
+        help_text="Use a minus sign for a credit, for example -3000.",
+    )
+    reason = forms.CharField(max_length=200)
+
+    def clean_amount(self) -> int:
+        text = self.cleaned_data["amount"].strip()
+        negative = text.startswith("-")
+        kobo = parse_naira(text[1:] if negative else text, label="Amount")
+        if kobo == 0:
+            raise forms.ValidationError("Enter an amount other than zero.")
+        return -kobo if negative else kobo
+
+    def clean_reason(self) -> str:
+        reason = " ".join(self.cleaned_data["reason"].split())
+        if not reason:
+            raise forms.ValidationError("Give a reason for the adjustment.")
+        return reason

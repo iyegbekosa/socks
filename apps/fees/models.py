@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 from django.db.models import Q
 
@@ -132,3 +133,89 @@ class StudentDiscount(models.Model):
 
     def __str__(self) -> str:
         return f"{self.student_id}: {self.discount_id} ({self.session_id})"
+
+
+class Invoice(models.Model):
+    """One per (student, term). Totals are integer kobo; ``total_kobo`` is the sum of lines."""
+
+    UNPAID, PART_PAID, PAID, CARRIED = "unpaid", "part_paid", "paid", "carried"
+    STATUS_CHOICES = [
+        (UNPAID, "Unpaid"),
+        (PART_PAID, "Part paid"),
+        (PAID, "Paid"),
+        (CARRIED, "Carried forward"),
+    ]
+
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="invoices")
+    term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="invoices")
+    total_kobo = models.BigIntegerField(default=0)
+    paid_kobo = models.BigIntegerField(default=0)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=UNPAID)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["term__session__start_date", "term__number", "pk"]
+        indexes = [models.Index(fields=["term", "status"], name="fees_invoice_term_status")]
+        constraints = [
+            models.UniqueConstraint(fields=["student", "term"], name="fees_invoice_unique"),
+            models.CheckConstraint(condition=Q(total_kobo__gte=0), name="fees_invoice_total_gte0"),
+            models.CheckConstraint(condition=Q(paid_kobo__gte=0), name="fees_invoice_paid_gte0"),
+            models.CheckConstraint(
+                condition=Q(paid_kobo__lte=models.F("total_kobo")),
+                name="fees_invoice_paid_lte_total",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"Invoice {self.pk} ({self.term_id})"
+
+    @property
+    def balance_kobo(self) -> int:
+        return self.total_kobo - self.paid_kobo
+
+
+class InvoiceLine(models.Model):
+    FEE, OPTIONAL, DISCOUNT, BROUGHT_FORWARD, ADJUSTMENT = (
+        "fee",
+        "optional",
+        "discount",
+        "brought_forward",
+        "adjustment",
+    )
+    KIND_CHOICES = [
+        (FEE, "Fee"),
+        (OPTIONAL, "Optional item"),
+        (DISCOUNT, "Discount"),
+        (BROUGHT_FORWARD, "Balance brought forward"),
+        (ADJUSTMENT, "Adjustment"),
+    ]
+
+    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name="lines")
+    kind = models.CharField(max_length=16, choices=KIND_CHOICES)
+    description = models.CharField(max_length=200)
+    item = models.ForeignKey(
+        FeeItem, on_delete=models.PROTECT, null=True, blank=True, related_name="invoice_lines"
+    )
+    amount_kobo = models.BigIntegerField()  # negative for discounts and credits
+    reason = models.CharField(max_length=200, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["pk"]
+        constraints = [
+            models.CheckConstraint(
+                condition=~Q(kind="adjustment", reason=""),
+                name="fees_line_adjustment_reason",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.kind}: {self.amount_kobo}"

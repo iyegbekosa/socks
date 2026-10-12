@@ -1,0 +1,54 @@
+{% extends "core/base.html" %}
+{% load fees_money %}
+{% block title %}Invoice{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Invoice: {{ student.full_name }}</h1>
+  {% include "fees/_nav.html" %}
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <p>{{ invoice.term }}{% if arm %} · {{ arm }}{% endif %}{% if student.admission_number %} · {{ student.admission_number }}{% endif %}</p>
+  <p>Status: <strong>{{ invoice.get_status_display }}</strong></p>
+  <table>
+    <thead><tr><th>Item</th><th>Amount</th><th>Reason</th></tr></thead>
+    <tbody>
+    {% for line in lines %}
+    <tr>
+      <td>{{ line.description }}{% if line.kind == "optional" %} <span class="muted">(optional)</span>{% endif %}</td>
+      <td>{{ line.amount_kobo|naira }}</td>
+      <td>{{ line.reason }}</td>
+    </tr>
+    {% empty %}<tr><td colspan="3">No lines.</td></tr>
+    {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr><th>Total</th><td>{{ invoice.total_kobo|naira }}</td><td></td></tr>
+      <tr><th>Paid</th><td>{{ invoice.paid_kobo|naira }}</td><td></td></tr>
+      <tr><th>Balance</th><td>{{ invoice.balance_kobo|naira }}</td><td></td></tr>
+    </tfoot>
+  </table>
+  <h2>Payments</h2>
+  <p>No payments recorded yet.</p>
+  {% if can_edit %}
+  <h2>Add optional item</h2>
+  {% if optional_form.fields.line.queryset.exists %}
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="optional">
+    {% if optional_form.non_field_errors %}<p class="error" role="alert">{{ optional_form.non_field_errors|join:" " }}</p>{% endif %}
+    {% for field in optional_form %}{% include "fees/_field.html" %}{% endfor %}
+    <button type="submit">Add optional item</button>
+  </form>
+  {% else %}<p class="muted">No optional items left to add for this class and term.</p>{% endif %}
+  <h2>Add adjustment</h2>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="adjustment">
+    {% if adjustment_form.non_field_errors %}<p class="error" role="alert">{{ adjustment_form.non_field_errors|join:" " }}</p>{% endif %}
+    {% for field in adjustment_form %}{% include "fees/_field.html" %}{% endfor %}
+    <button type="submit">Add adjustment</button>
+  </form>
+  {% endif %}
+  <p><a href="{% url 'fees:invoices' %}?term={{ invoice.term_id }}">Back to invoices</a></p>
+</div>
+{% endblock %}

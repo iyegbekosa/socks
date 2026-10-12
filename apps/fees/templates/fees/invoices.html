@@ -1,0 +1,59 @@
+{% extends "core/base.html" %}
+{% load fees_money %}
+{% block title %}Invoices{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Invoices</h1>
+  {% include "fees/_nav.html" %}
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if term %}
+  <form method="get">
+    <label for="term">Term</label>
+    <select name="term" id="term">{% for t in terms %}<option value="{{ t.pk }}"{% if t.pk == term.pk %} selected{% endif %}>{{ t }}</option>{% endfor %}</select>
+    <label for="level">Class level</label>
+    <select name="level" id="level"><option value="">All levels</option>{% for lv in levels %}<option value="{{ lv.pk }}"{% if level and lv.pk == level.pk %} selected{% endif %}>{{ lv.name }}</option>{% endfor %}</select>
+    <label for="arm">Class</label>
+    <select name="arm" id="arm"><option value="">All classes</option>{% for a in arms %}<option value="{{ a.pk }}"{% if arm and a.pk == arm.pk %} selected{% endif %}>{{ a }}</option>{% endfor %}</select>
+    <button type="submit">Show</button>
+  </form>
+  <h2>{{ term }}</h2>
+  <table>
+    <thead><tr><th>Student</th><th>Admission no.</th><th>Class</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.invoice.student.full_name }}</td>
+      <td>{{ row.invoice.student.admission_number|default:"" }}</td>
+      <td>{{ row.arm|default:"" }}</td>
+      <td>{{ row.invoice.total_kobo|naira }}</td>
+      <td>{{ row.invoice.paid_kobo|naira }}</td>
+      <td>{{ row.invoice.balance_kobo|naira }}</td>
+      <td>{{ row.invoice.get_status_display }}</td>
+      <td><a href="{% url 'fees:invoice' row.invoice.pk %}">View</a></td>
+    </tr>
+    {% empty %}<tr><td colspan="8">No invoices for this term{% if level or arm %} and class{% endif %} yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if page and page.paginator.num_pages > 1 %}
+  <p>
+    {% if page.has_previous %}<a href="?term={{ term.pk }}{% if level %}&amp;level={{ level.pk }}{% endif %}{% if arm %}&amp;arm={{ arm.pk }}{% endif %}&amp;page={{ page.previous_page_number }}">Previous</a>{% endif %}
+    Page {{ page.number }} of {{ page.paginator.num_pages }}
+    {% if page.has_next %}<a href="?term={{ term.pk }}{% if level %}&amp;level={{ level.pk }}{% endif %}{% if arm %}&amp;arm={{ arm.pk }}{% endif %}&amp;page={{ page.next_page_number }}">Next</a>{% endif %}
+  </p>
+  {% endif %}
+  {% else %}<p>No terms yet. Ask the school admin to set up the academic session first.</p>{% endif %}
+  {% if can_edit and term %}
+  <h2>Generate invoices</h2>
+  <p class="hint">Creates an invoice for every active student whose class level has a fee structure for the term. Students who already have an invoice for the term are left unchanged. Unpaid balances from earlier terms are brought forward.</p>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="generate" value="1">
+    {% if gen_form.non_field_errors %}<p class="error" role="alert">{{ gen_form.non_field_errors|join:" " }}</p>{% endif %}
+    {% for field in gen_form %}{% include "fees/_field.html" %}{% endfor %}
+    <button type="submit">Generate invoices</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

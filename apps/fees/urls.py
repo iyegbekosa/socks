@@ -1,6 +1,6 @@
 from django.urls import path
 
-from apps.fees.views import setup
+from apps.fees.views import invoices, setup
 
 app_name = "fees"
 
@@ -13,4 +13,6 @@ urlpatterns = [
     path("discounts/", setup.discounts, name="discounts"),
     path("discounts/<int:discount_id>/", setup.discount_edit, name="discount_edit"),
     path("students/<int:student_pk>/discounts/", setup.student_discounts, name="student_discounts"),
+    path("invoices/", invoices.invoices, name="invoices"),
+    path("invoices/<str:invoice_id>/", invoices.invoice_detail, name="invoice"),
 ]
