@@ -741,3 +741,21 @@ def test_actions_use_current_term_and_need_one(client_a, w):
     assert r.status_code == 200 and "Set a current term first" in r.content.decode()
     r = client_a.post(reverse("results:class_review", args=[w.arm.pk]))
     assert r.status_code == 409
+
+
+def test_publish_freshness_uses_database_time(w, django_capture_on_commit_callbacks):
+    """approved_at and computed_at both come from the database clock, so a web host whose
+    clock runs ahead of the worker's cannot block publishing (final review M1)."""
+    reviewed(w)
+    ahead = timezone.now() + timedelta(hours=1)
+    with (
+        mock.patch("apps.results.workflow.timezone.now", return_value=ahead),
+        django_capture_on_commit_callbacks(execute=True),
+    ):
+        approve_class(w.arm, w.term, by=w.principal)
+    k = klass(w)
+    assert k.approved_at < ahead - timedelta(minutes=30)
+    computed = ResultSummary.objects.filter(arm=w.arm, term=w.term).first().computed_at
+    assert computed >= k.approved_at
+    publish_class(w.arm, w.term, by=w.principal)
+    assert klass(w).status == "published"

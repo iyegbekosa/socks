@@ -17,7 +17,7 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Count, F, Sum
-from django.utils import timezone
+from django.db.models.functions import Now
 
 from apps.academics.models import ClassArm, SubjectOffering, Term
 from apps.core.locks import school_lock
@@ -446,7 +446,6 @@ def compute_class(arm: ClassArm, term: Term) -> None:
             )
             for r in data.subjects
         )
-        now = timezone.now()
         ResultSummary.objects.bulk_create(
             ResultSummary(
                 student_id=s.student_id,
@@ -458,7 +457,7 @@ def compute_class(arm: ClassArm, term: Term) -> None:
                 position=s.position,
                 out_of=s.out_of,
                 cumulative_average=s.cumulative_average,
-                computed_at=now,
+                computed_at=Now(),  # database time, compared with approved_at on publish
             )
             for s in data.summaries
         )

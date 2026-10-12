@@ -17,6 +17,7 @@ from typing import Any
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Min
+from django.db.models.functions import Now
 from django.utils import timezone
 
 from apps.academics.models import ClassArm, FormTeacher, SubjectOffering, Term
@@ -263,10 +264,13 @@ def approve_class(arm: ClassArm, term: Term, *, by: Any, request: Any = None) ->
         if klass.status != ClassResult.Status.REVIEWED:
             raise ResultsStateError("Only a reviewed class can be approved.")
         klass.status = ClassResult.Status.APPROVED
-        klass.approved_at = timezone.now()
+        # Database time, like ResultSummary.computed_at: publish compares the two, and the
+        # web and worker hosts' clocks may differ.
+        klass.approved_at = Now()
         klass.approved_by = by
         klass.compute_error = ""
         klass.save(update_fields=["status", "approved_at", "approved_by", "compute_error"])
+        klass.refresh_from_db(fields=["approved_at"])
         record(
             "results.class_approved", request=request, actor=by, obj=klass, after=_ids(arm, term)
         )
