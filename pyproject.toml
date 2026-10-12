@@ -23,6 +23,7 @@ dependencies = [
     "Pillow>=10.4",
     "openpyxl>=3.1",
     "defusedxml>=0.7",  # openpyxl uses it automatically to parse XLSX safely
+    "weasyprint>=70",  # report card PDFs; needs Pango (see README)
 ]
 
 [project.optional-dependencies]
@@ -53,6 +54,7 @@ testpaths = ["tests"]
 markers = [
     "cloudinary: hits the live Cloudinary API (needs CLOUDINARY_URL)",
     "slow: slow tests (still run in CI; deselect locally with -m \"not slow\")",
+    "pdf: renders PDFs with WeasyPrint (needs Pango; run via scripts/with-pango locally)",
 ]
 
 [tool.mypy]
@@ -60,7 +62,7 @@ python_version = "3.12"
 plugins = ["mypy_django_plugin.main"]
 
 [[tool.mypy.overrides]]
-module = ["cloudinary.*", "django_tenants.*", "environ.*", "pythonjsonlogger.*", "celery.*", "kombu.*", "rest_framework.*", "factory.*", "django_otp.*", "segno.*", "openpyxl.*"]
+module = ["cloudinary.*", "django_tenants.*", "environ.*", "pythonjsonlogger.*", "celery.*", "kombu.*", "rest_framework.*", "factory.*", "django_otp.*", "segno.*", "openpyxl.*", "weasyprint.*"]
 ignore_missing_imports = true
 
 [tool.django-stubs]

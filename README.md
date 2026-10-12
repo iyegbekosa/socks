@@ -57,6 +57,19 @@ The commands CI runs (`.github/workflows/ci.yml`):
 .venv/bin/pytest -W error -m "not cloudinary"
 ```
 
+### Report cards (PDF)
+
+Report cards are rendered with WeasyPrint, which needs the Pango system library. Tests
+marked `pdf` **fail** (they never skip) when Pango is missing.
+
+- **Local (macOS):** run `scripts/dev_pango.sh` once. It installs micromamba and Pango under
+  `.devlibs/` (git-ignored; safe to re-run). Then run every Python command that renders a
+  PDF through `scripts/with-pango`, e.g. `scripts/with-pango .venv/bin/pytest -W error -m "not cloudinary"`.
+  On Linux, `apt install libpango-1.0-0 libpangoft2-1.0-0` and run commands directly.
+- **Production / CI:** the `Dockerfile` and the CI workflow install `libpango-1.0-0`,
+  `libpangoft2-1.0-0`, `libharfbuzz0b` and `fonts-dejavu-core`. A non-Docker host (the
+  Celery worker that serves the `reports` queue) needs the same packages.
+
 `pytest -m cloudinary` runs the live Cloudinary round-trip. It needs `CLOUDINARY_URL`.
 
 ## Docker quick-start

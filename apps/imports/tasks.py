@@ -68,8 +68,11 @@ def run_import(job_id: int) -> None:
     else:
         job.status = ImportJob.Status.COMPLETED
     job.finished_at = timezone.now()
-    job.save(update_fields=["status", "message", "finished_at"])
-    if job.status == ImportJob.Status.COMPLETED:
+    # Conditional: if fail_stale_imports already failed this job, the worker leaves it failed.
+    saved = ImportJob.objects.filter(pk=job.pk, status=ImportJob.Status.RUNNING).update(
+        status=job.status, message=job.message, finished_at=job.finished_at
+    )
+    if saved and job.status == ImportJob.Status.COMPLETED:
         _audit("import.completed", job)
     name = job.file_name
     transaction.on_commit(lambda: delete_upload(name))

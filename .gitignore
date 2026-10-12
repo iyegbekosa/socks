@@ -13,3 +13,4 @@ htmlcov/
 .claude/
 .DS_Store
 *.egg-info/
+.devlibs/

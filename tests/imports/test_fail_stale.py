@@ -123,3 +123,23 @@ def test_delete_failure_is_logged_without_file_name(world, cloud, caplog):
         assert job.status == "failed"
     assert f"import job {job.pk}: RuntimeError" in caplog.text
     assert "Adaeze" not in caplog.text
+
+
+def test_worker_finishing_after_stale_sweep_leaves_the_job_failed(world, cloud):
+    with schema_context("school_a"):
+        job = _job(world, "queued", age_minutes=1)
+
+        def sweep_during_import(running_job):
+            # The sweeper fails the job while the worker is still importing.
+            ImportJob.objects.filter(pk=running_job.pk).update(
+                status="failed", message=GENERIC_FAILURE
+            )
+
+        with mock.patch("apps.imports.tasks.import_students", side_effect=sweep_during_import):
+            run_import.delay(job.pk)
+        job.refresh_from_db()
+        assert job.status == "failed"
+        assert job.message == GENERIC_FAILURE
+        assert not AuditEvent.objects.filter(
+            action="import.completed", object_id=str(job.pk)
+        ).exists()

@@ -84,7 +84,7 @@ Everything in the P0 and P1 plans' Global Constraints still holds. Added for P2:
 - `academics.session_created`, `academics.term_set_current`, `academics.structure_changed`, `academics.offering_assigned`, `academics.form_teacher_assigned`, `academics.admission_pattern_changed`
 - `student.admitted`, `student.updated`, `student.withdrawn`, `student.photo_changed`
 - `student.password_issued`, `auth.password_changed`, `auth.password_reset_link_sent`
-- `import.started`, `import.completed`
+- `import.started`, `import.completed`, `import.failed_stale`
 
 **Dates**
 - Form and CSV dates are `DD/MM/YYYY`; ISO `YYYY-MM-DD` and native Excel dates are also accepted. Display is always `DD/MM/YYYY`.
