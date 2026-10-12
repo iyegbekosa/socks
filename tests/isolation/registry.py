@@ -38,19 +38,23 @@ class IsolationCase:
     # "refused": status must be 401/403/404. "absent" (list endpoints): a 2xx response (so a
     # broken login cannot pass vacuously) whose body lacks marker(obj). "no_cross_effect"
     # (write endpoints that act on the caller's own school): any status below 500, school B's
-    # object unchanged and school B's count_b() unchanged.
+    # object unchanged and school B's count_model() unchanged, with a 2xx status and school
+    # A's count_model() up by exactly one (so the request really wrote, in the right school).
     expect: Literal["refused", "absent", "no_cross_effect"] = "refused"
     marker: Callable[[Any], str] | None = None
     # Multipart form data (e.g. an uploaded file), built per request; replaces the JSON body.
     multipart: Callable[[], dict] | None = None
-    # no_cross_effect: counts rows in the active (school B) schema that the request could add.
-    count_b: Callable[[], int] | None = None
+    # no_cross_effect: counts rows in the active schema that the request could add; the
+    # harness calls it in both school A's and school B's schema.
+    count_model: Callable[[], int] | None = None
+    # Runs in school A's schema before the request (e.g. academic setup so a write succeeds).
+    setup_a: Callable[[], None] | None = None
 
     def __post_init__(self):
         if self.expect == "absent" and self.marker is None:
             raise ValueError("expect='absent' requires a marker")
-        if self.expect == "no_cross_effect" and self.count_b is None:
-            raise ValueError("expect='no_cross_effect' requires count_b")
+        if self.expect == "no_cross_effect" and self.count_model is None:
+            raise ValueError("expect='no_cross_effect' requires count_model")
 
 
 def _student_in_active_schema():
@@ -78,6 +82,29 @@ def _import_job_count() -> int:
     from apps.imports.models import ImportJob
 
     return ImportJob.objects.count()
+
+
+def _current_term_in_a() -> None:
+    from datetime import date, timedelta
+
+    from apps.academics.models import AcademicSession, ClassArm, ClassLevel, Term
+
+    today = date.today()
+    session = AcademicSession.objects.create(
+        name="2026/2027",
+        start_date=today - timedelta(days=30),
+        end_date=today + timedelta(days=300),
+    )
+    Term.objects.create(
+        session=session,
+        number=1,
+        start_date=session.start_date,
+        end_date=today + timedelta(days=60),
+        is_current=True,
+    )
+    ClassArm.objects.create(
+        level=ClassLevel.objects.create(name="JSS 1", section="jss", order=1), suffix="A"
+    )
 
 
 def _tiny_csv() -> dict:
@@ -115,7 +142,8 @@ ISOLATION_CASES: list[IsolationCase] = [
         make_obj=_import_job,
         multipart=_tiny_csv,
         expect="no_cross_effect",
-        count_b=_import_job_count,
+        count_model=_import_job_count,
+        setup_a=_current_term_in_a,
     ),
     IsolationCase(
         "api:import_detail",
@@ -210,11 +238,16 @@ def assert_cross_school_refused(case, school_a, school_b, client_a) -> None:
     with schema_context(school_b.schema_name):
         obj = case.make_obj()
         before = _snapshot(obj)
-        count_before = case.count_b() if case.count_b else None
+        count_b_before = case.count_model() if case.count_model else None
         marker = case.marker(obj) if case.marker else None
-    if case.actor is not None:
-        with schema_context(school_a.schema_name):
-            actor = case.actor()
+    count_a_before = None
+    with schema_context(school_a.schema_name):
+        actor = case.actor() if case.actor is not None else None
+        if case.setup_a:
+            case.setup_a()
+        if case.count_model:
+            count_a_before = case.count_model()
+    if actor is not None:
         login_verified(client_a, actor)
 
     response = getattr(client_a, case.method.lower())(case.url(obj), **_request_kwargs(case))
@@ -224,7 +257,14 @@ def assert_cross_school_refused(case, school_a, school_b, client_a) -> None:
             f"{case.name}: expected 401/403/404, got {response.status_code}"
         )
     elif case.expect == "no_cross_effect":
-        assert response.status_code < 500, f"{case.name}: server error {response.status_code}"
+        assert 200 <= response.status_code < 300, (
+            f"{case.name}: expected a 2xx response, got {response.status_code}"
+        )
+        assert case.count_model is not None and count_a_before is not None
+        with schema_context(school_a.schema_name):
+            assert case.count_model() == count_a_before + 1, (
+                f"{case.name}: the request did not write exactly one row in school A"
+            )
     else:
         assert case.marker is not None
         assert 200 <= response.status_code < 300, (
@@ -236,5 +276,5 @@ def assert_cross_school_refused(case, school_a, school_b, client_a) -> None:
         )
     with schema_context(school_b.schema_name):
         assert _snapshot(obj) == before, f"{case.name}: school B's object changed"
-        if case.count_b is not None:
-            assert case.count_b() == count_before, f"{case.name}: school B's rows changed"
+        if case.count_model is not None:
+            assert case.count_model() == count_b_before, f"{case.name}: school B's rows changed"

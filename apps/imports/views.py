@@ -12,13 +12,12 @@ from django.views.decorators.http import require_POST
 from apps.accounts.roles import SCHOOL_ADMIN, require_roles
 from apps.imports.forms import ImportForm
 from apps.imports.models import ImportJob
-from apps.imports.services import ImportNotReady, create_import_job
+from apps.imports.services import ERRORS_SHOWN, ImportNotReady, create_import_job
 from apps.students.views import active_password_candidates, issue_and_render_sheet
 from apps.tenancy.limits import PlanLimitExceeded
 
 logger = logging.getLogger(__name__)
 
-ERRORS_SHOWN = 200
 RECENT_JOBS = 10
 
 

@@ -184,3 +184,33 @@ def test_actor_is_really_logged_in(leaky_urls, school_a, school_b, client_a):
     """The leaky views need a session: an anonymous case against them is refused (not a leak)."""
     case = _case("leaky:detail", "/api/v1/leaky/{pk}/", actor=None)
     assert_cross_school_refused(case, school_a, school_b, client_a)
+
+
+def _reg(name):
+    return next(c for c in ISOLATION_CASES if c.name == name)
+
+
+@pytest.mark.django_db
+def test_import_case_fails_when_the_job_is_created_in_the_wrong_school(
+    school_a, school_b, client_a, monkeypatch
+):
+    """Harness self-test: a leaky import view must not pass the no_cross_effect case."""
+    from django_tenants.utils import schema_context
+
+    from apps.imports.models import ImportJob
+    from tests.accounts.factories import StaffFactory
+
+    def leaky(*, uploaded_file, kind, user, request):
+        with schema_context("school_b"):
+            return ImportJob.objects.create(
+                kind=kind, file_name="x", created_by=StaffFactory.create()
+            )
+
+    monkeypatch.setattr("apps.api.views.create_import_job", leaky)
+    with pytest.raises(AssertionError):
+        assert_cross_school_refused(_reg("api:students_import"), school_a, school_b, client_a)
+
+
+@pytest.mark.django_db
+def test_import_case_passes_for_the_real_view(school_a, school_b, client_a):
+    assert_cross_school_refused(_reg("api:students_import"), school_a, school_b, client_a)

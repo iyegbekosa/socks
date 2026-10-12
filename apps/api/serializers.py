@@ -3,6 +3,7 @@ from typing import Any
 from rest_framework import serializers
 
 from apps.imports.models import ImportJob
+from apps.imports.services import ERRORS_SHOWN
 from apps.students.models import Student
 
 
@@ -26,10 +27,24 @@ class StudentListSerializer(serializers.Serializer):  # type: ignore[type-arg]
 
 
 class ImportJobSerializer(serializers.ModelSerializer):  # type: ignore[type-arg]
+    errors = serializers.SerializerMethodField()
+
     class Meta:
         model = ImportJob
-        fields = ["id", "kind", "status", "total_rows", "ok_rows", "error_rows", "errors"]
+        fields = [
+            "id",
+            "kind",
+            "status",
+            "total_rows",
+            "ok_rows",
+            "error_rows",
+            "errors",
+            "message",
+        ]
         read_only_fields = fields
+
+    def get_errors(self, job: ImportJob) -> list[Any]:
+        return job.errors[:ERRORS_SHOWN]
 
 
 class ImportUploadSerializer(serializers.Serializer):  # type: ignore[type-arg]

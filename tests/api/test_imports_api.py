@@ -48,6 +48,7 @@ def test_admin_import_accepted_and_job_runs(
         "ok_rows": 1,
         "error_rows": 0,
         "errors": [],
+        "message": "",
     }
 
 
@@ -115,3 +116,21 @@ def test_post_without_csrf_token_is_403(school_a, world, cloud):
 def test_unknown_job_is_404(client_a, world):
     login_admin(client_a)
     assert client_a.get("/api/v1/imports/999999").status_code == 404
+
+
+def test_detail_caps_errors_and_includes_message(client_a, world):
+    from apps.imports.services import ERRORS_SHOWN
+
+    login_admin(client_a)
+    with schema_context("school_a"):
+        job = ImportJob.objects.create(
+            kind="students",
+            file_name="x",
+            created_by=world.admin,
+            status="failed",
+            message="Could not read the file.",
+            errors=[{"row": i, "column": "c", "message": "m"} for i in range(ERRORS_SHOWN + 50)],
+        )
+    body = client_a.get(f"/api/v1/imports/{job.pk}").json()
+    assert len(body["errors"]) == ERRORS_SHOWN
+    assert body["message"] == "Could not read the file."

@@ -119,3 +119,24 @@ def test_query_count_is_bounded(client_a, world):
         r = client_a.get(URL)
     assert r.json()["count"] == 13
     assert len(many) == len(few)
+
+
+def test_nul_in_q_is_400(client_a, world, pupils):
+    with schema_context("school_a"):
+        admin_in(client_a)
+    r = client_a.get(URL, {"q": "a\x00b"})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.parametrize("size", ["0", "-5", "abc"])
+def test_bad_page_size_falls_back_to_default(client_a, world, pupils, size):
+    with schema_context("school_a"):
+        admin_in(client_a)
+    r = client_a.get(URL, {"page_size": size})
+    assert r.status_code == 200 and len(r.json()["results"]) == 2
+    from rest_framework.request import Request
+
+    from apps.api.views import StudentPagination
+
+    assert StudentPagination().get_page_size(Request(r.wsgi_request)) == 50

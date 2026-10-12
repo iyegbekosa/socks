@@ -16,6 +16,8 @@ def home(request):
 
 def _student_home(request):
     """A student's own profile card: no guardian contacts, no date of birth."""
+    # Imported here, not at module level: apps.students and apps.academics import from
+    # apps.accounts, so a top-level import would be circular.
     from apps.academics.services import current_term
     from apps.students.models import Enrolment, Student
 

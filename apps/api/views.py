@@ -29,7 +29,7 @@ from apps.api.serializers import (
     StudentListSerializer,
 )
 from apps.imports.models import ImportJob
-from apps.imports.services import ImportNotReady, create_import_job, validate_upload
+from apps.imports.services import ImportNotReady, create_import_job
 from apps.students.models import Enrolment, Student
 from apps.tenancy.limits import PlanLimitExceeded
 
@@ -98,7 +98,10 @@ class StudentListView(ListAPIView):  # type: ignore[type-arg]
                 enrolments__session=session,
                 enrolments__status=Enrolment.Status.ACTIVE,
             ).distinct()
-        for token in (params.get("q") or "").split():
+        q = params.get("q") or ""
+        if "\x00" in q:
+            raise exceptions.ValidationError({"q": "Contains an invalid character."})
+        for token in q.split():
             qs = qs.filter(
                 Q(first_name__icontains=token)
                 | Q(middle_name__icontains=token)
@@ -121,7 +124,6 @@ class StudentImportView(APIView):
         serializer.is_valid(raise_exception=True)
         upload = serializer.validated_data["file"]
         try:
-            validate_upload(upload)
             job = create_import_job(
                 uploaded_file=upload,
                 kind=ImportJob.Kind.STUDENTS,

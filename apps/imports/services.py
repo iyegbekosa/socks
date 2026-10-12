@@ -13,6 +13,7 @@ from apps.imports.models import ImportJob
 from apps.imports.parsing import ALLOWED_EXTENSIONS, MAX_BYTES
 from apps.imports.tasks import delete_upload, run_import
 
+ERRORS_SHOWN = 200  # errors listed on the HTML page and in the API
 NO_TERM_MESSAGE = "Set a current term before importing students."
 
 
@@ -36,8 +37,10 @@ def validate_upload(upload: Any) -> None:
 def create_import_job(*, uploaded_file: Any, kind: str, user: Any, request: Any) -> ImportJob:
     """Store the (already validated) file privately, create the job and queue it.
 
+    Validates the upload itself (``ValidationError``), so no caller can skip it.
     Raises ``ImportNotReady`` (no current term) or ``PlanLimitExceeded`` (storage quota).
     """
+    validate_upload(uploaded_file)
     if kind == ImportJob.Kind.STUDENTS and current_session() is None:
         raise ImportNotReady(NO_TERM_MESSAGE)
     name = default_storage.save(unique_upload_name("imports", uploaded_file.name), uploaded_file)
