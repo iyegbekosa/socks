@@ -51,6 +51,11 @@ def _sheet(offering) -> tuple[Term | None, SheetData | None, str | None]:
     return term, data, None
 
 
+def _colspan(data: SheetData | None) -> int:
+    # name + components + total + status
+    return 3 + (len(data.components) if data else 0)
+
+
 @never_cache
 @require_roles(TEACHER)
 def my_sheets(request):
@@ -85,7 +90,13 @@ def grid(request, offering_pk):
     return render(
         request,
         "results/grid.html",
-        {"offering": offering, "term": term, "data": data, "problem": problem},
+        {
+            "offering": offering,
+            "term": term,
+            "data": data,
+            "problem": problem,
+            "colspan": _colspan(data),
+        },
     )
 
 
@@ -151,6 +162,7 @@ def grid_upload(request, offering_pk):
             "term": term,
             "data": data,
             "problem": problem,
+            "colspan": _colspan(data),
             "upload_errors": shown,
             "more_errors": len(errors) - len(shown),
         },

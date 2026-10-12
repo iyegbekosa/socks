@@ -83,12 +83,14 @@ def parse_upload(data: SheetData, raw: bytes) -> ParsedUpload:
     width = len(expected)
     for n, cols in enumerate(rows[1:], start=2):
         if not any(c.strip() for c in cols):
-            result.errors.append(f"Row {n}: the row is blank.")
-            continue
+            continue  # fully empty rows (e.g. trailing ",,,,") are skipped
         if len(cols) != width:
             result.errors.append(f"Row {n}: expected {width} columns, found {len(cols)}.")
             continue
-        adm = normalise_admission_number(cols[0])
+        first = cols[0].strip()
+        if first.startswith("'"):  # undo the download's formula guard
+            first = first[1:]
+        adm = normalise_admission_number(first)
         row = by_admission.get(adm)
         if row is None:
             result.errors.append(f"Row {n}: this admission number is not in this class's list.")

@@ -77,3 +77,47 @@ def test_no_current_term(client_a, w):
 def test_home_link_for_teacher(client_a, w):
     login(client_a, w)
     assert "My score sheets" in client_a.get("/").content.decode()
+
+
+def test_inputs_readonly_and_noscript_note(client_a, w):
+    login(client_a, w)
+    html = client_a.get(reverse("results:grid", args=[w.offering.pk])).content.decode()
+    assert html.count(" readonly") >= 3 * len(w.comps)
+    assert "Turn on JavaScript to type scores here, or use the CSV upload." in html
+    assert "<noscript>" in html
+
+
+def test_school_admin_not_teacher_is_403(client_a, w):
+    from tests.accounts.helpers import login_verified
+
+    admin = StaffFactory()
+    set_roles(admin, ["school_admin"], by=admin)
+    login_verified(client_a, admin)
+    for name in ("grid", "grid_csv", "grid_upload"):
+        r = client_a.get(reverse(f"results:{name}", args=[w.offering.pk]))
+        assert r.status_code in (403, 405)
+    assert client_a.get(reverse("results:grid", args=[w.offering.pk])).status_code == 403
+    assert client_a.get(reverse("results:grid_csv", args=[w.offering.pk])).status_code == 403
+    assert client_a.post(reverse("results:grid_upload", args=[w.offering.pk])).status_code == 403
+
+
+def test_api_put_without_csrf_is_403(school_a, w):
+    from django_tenants.test.client import TenantClient
+
+    c = TenantClient(school_a, enforce_csrf_checks=True)
+    c.force_login(w.teacher)
+    r = c.put(
+        f"{reverse('api:scores')}?offering={w.offering.pk}",
+        data='{"cells": []}',
+        content_type="application/json",
+    )
+    assert r.status_code == 403
+
+
+def test_colspan_follows_component_count(client_a, w):
+    from apps.students.models import Enrolment
+
+    Enrolment.objects.filter(arm=w.arm).delete()
+    login(client_a, w)
+    html = client_a.get(reverse("results:grid", args=[w.offering.pk])).content.decode()
+    assert f'colspan="{3 + len(w.comps)}"' in html

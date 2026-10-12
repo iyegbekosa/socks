@@ -20,6 +20,7 @@
     {% if more_errors %}<p>and {{ more_errors }} more.</p>{% endif %}
   </div>
   {% endif %}
+  <noscript><p class="muted">Turn on JavaScript to type scores here, or use the CSV upload.</p></noscript>
   <div class="table-wrap">
     <table>
       <thead>
@@ -37,7 +38,7 @@
           {% for cell in row.cells %}
           <td class="num">
             {% if data.editable %}
-            <input class="cell" type="text" inputmode="decimal" autocomplete="off"
+            <input class="cell" type="text" inputmode="decimal" autocomplete="off" readonly
               aria-label="{{ row.name }}, {% for c in data.components %}{% if c.pk == cell.component_id %}{{ c.name }}{% endif %}{% endfor %}"
               data-student="{{ row.student_id }}" data-component="{{ cell.component_id }}" data-version="{{ cell.version }}"
               data-saved="{{ cell.value|default_if_none:'' }}" value="{{ cell.value|default_if_none:'' }}">
@@ -47,7 +48,7 @@
           <td class="num" data-total>{{ row.total|default_if_none:"" }}</td>
           {% if data.editable %}<td><span class="unsaved" data-unsaved hidden>not yet saved</span></td>{% endif %}
         </tr>
-      {% empty %}<tr><td colspan="9" class="muted">No students take this subject.</td></tr>{% endfor %}
+      {% empty %}<tr><td colspan="{{ colspan }}" class="muted">No students take this subject.</td></tr>{% endfor %}
       </tbody>
     </table>
   </div>

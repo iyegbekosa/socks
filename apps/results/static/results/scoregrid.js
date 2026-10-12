@@ -39,6 +39,7 @@
     banner.hidden = false;
   }
   function lock(msg) {
+    locked = true;
     showBanner(msg);
     inputs.forEach(function (i) { i.disabled = true; });
   }
@@ -57,9 +58,21 @@
   }
   function errorOf(body) { return (body && body.error) || {}; }
 
+  /* Saving, one request per row at a time. A save asked for while one is in flight only sets
+     st.pending. When the response arrives, inflight is cleared and, if pending, the row is saved
+     again using the now-current versions (so cell A is never resent with a stale version).
+     data-saved is set from the values that were SENT, not the live input value, so a key typed
+     during the flight stays dirty and is picked up by the follow-up save. */
+  var locked = false;
   function save(tr) {
+    var st = tr._st || (tr._st = { inflight: false, pending: false });
+    if (locked) return;
+    if (st.inflight) { st.pending = true; return; }
     var changed = rowInputs(tr).filter(dirty);
     if (!changed.length) return;
+    var sent = {};
+    changed.forEach(function (i) { sent[i.dataset.student + ":" + i.dataset.component] = i.value.trim(); });
+    st.inflight = true;
     var cells = changed.map(function (i) {
       return { student: +i.dataset.student, component: +i.dataset.component,
         value: i.value.trim() === "" ? null : i.value.trim(), version: +i.dataset.version };
@@ -78,8 +91,9 @@
           var el = find(v.student, v.component);
           if (!el) return;
           el.dataset.version = v.version;
-          el.dataset.saved = el.value.trim();
+          el.dataset.saved = sent[v.student + ":" + v.component];
           note(el, "");
+          el.classList.remove("conflict");
         });
         mark(tr);
       } else if (res.status === 409 && err.code === "VERSION_CONFLICT") {
@@ -104,10 +118,14 @@
       mark(tr);
     }).catch(function () {
       showBanner("Could not save. Check your connection and try again.");
+    }).then(function () {
+      st.inflight = false;
+      if (st.pending) { st.pending = false; save(tr); }
     });
   }
 
   inputs.forEach(function (el) {
+    el.removeAttribute("readonly");
     el.addEventListener("input", function () {
       var tr = rowOf(el);
       note(el, "");

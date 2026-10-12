@@ -116,16 +116,11 @@ def test_unknown_admission_number(client_a, w):
     bad(client_a, w, m, "Row 2")
 
 
-def test_duplicate_and_blank_rows(client_a, w):
+def test_duplicate_rows(client_a, w):
     def dup(rows):
         rows[2][0] = rows[1][0]
 
     bad(client_a, w, dup, "more than once")
-
-    def blank(rows):
-        rows.insert(2, [])
-
-    bad(client_a, w, blank, "blank")
 
 
 def test_header_errors(client_a, w):
@@ -175,3 +170,17 @@ def test_upload_after_publish_refused_and_audited(client_a, w):
     assert r.status_code == 400 and "locked" in r.content.decode()
     assert not Score.objects.filter(offering=w.offering).exists()
     assert AuditEvent.objects.filter(action="results.edit_refused").exists()
+
+
+def test_empty_rows_skipped_and_formula_guard_stripped(client_a, w):
+    rows = table(download(client_a, w))
+    rows[1][2] = "4"
+    rows[1][0] = "'" + rows[1][0]
+    rows.insert(2, [])
+    n = len(rows[0])
+    rows.append([""] * n)
+    rows.append([""] * n)
+    out = io.StringIO()
+    csv.writer(out).writerows(rows)
+    assert upload(client_a, w, out.getvalue()).status_code == 302
+    assert Score.objects.filter(offering=w.offering, value__isnull=False).count() == 1
