@@ -10,7 +10,7 @@ from tests.isolation.registry import (
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("case", ISOLATION_CASES, ids=lambda c: f"{c.name} {c.method.upper()}")
+@pytest.mark.parametrize("case", ISOLATION_CASES, ids=lambda c: c.test_id)
 def test_cross_school_access_is_refused(case, school_a, school_b, client_a):
     assert_cross_school_refused(case, school_a, school_b, client_a)
 
@@ -32,6 +32,14 @@ def test_tenant_api_has_routes():
     routes = [r for r, _n, _m in _walk(get_resolver("config.urls_tenant").url_patterns)]
     assert any(r.startswith(API_PREFIX) for r in routes)
     assert ("api:me", "GET") in {(c.name, c.method) for c in ISOLATION_CASES}
+
+
+def test_case_ids_are_unique_and_me_has_both_cases():
+    ids = [c.test_id for c in ISOLATION_CASES]
+    assert len(ids) == len(set(ids))
+    me = {c.label: c for c in ISOLATION_CASES if c.name == "api:me"}
+    assert me["anonymous"].actor is None
+    assert me["authenticated"].actor is not None and me["authenticated"].expect == "absent"
 
 
 def test_guard_reports_unregistered_and_unnamed_routes():

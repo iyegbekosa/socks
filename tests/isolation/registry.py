@@ -35,8 +35,9 @@ class IsolationCase:
     body: dict | None = None
     # Creates the logged-in school A user (called in school A's schema); None = anonymous.
     actor: Callable[[], Any] | None = default_actor
-    # "refused": status must be 401/403/404. "absent" (list endpoints): a 2xx response (so a
-    # broken login cannot pass vacuously) whose body lacks marker(obj). "no_cross_effect"
+    # "refused": status must be 401/403/404. "absent" (list endpoints, and endpoints that
+    # describe the caller, such as api:me): a 2xx response (so a broken login cannot pass
+    # vacuously) whose body lacks marker(obj). "no_cross_effect"
     # (write endpoints that act on the caller's own school): any status below 500, school B's
     # object unchanged and school B's count_model() unchanged, with a 2xx status and school
     # A's count_model() up by exactly one (so the request really wrote, in the right school).
@@ -49,6 +50,13 @@ class IsolationCase:
     count_model: Callable[[], int] | None = None
     # Runs in school A's schema before the request (e.g. academic setup so a write succeeds).
     setup_a: Callable[[], None] | None = None
+    # Distinguishes several cases for one route and method in test ids (e.g. "anonymous").
+    label: str = ""
+
+    @property
+    def test_id(self) -> str:
+        base = f"{self.name} {self.method.upper()}"
+        return f"{base} [{self.label}]" if self.label else base
 
     def __post_init__(self):
         if self.expect == "absent" and self.marker is None:
@@ -113,16 +121,28 @@ def _tiny_csv() -> dict:
     return {"file": SimpleUploadedFile("s.csv", b"first_name,last_name\n", "text/csv")}
 
 
-# api:me covers anonymous refusal (school B's object is unreachable without a session);
-# per-schema session storage is covered by
+# Several cases may share a route and method (the guard only needs one); give them labels.
+# Per-schema session storage is covered by
 # tests/accounts/test_me_api.py::test_school_b_session_cookie_rejected_on_school_a.
 ISOLATION_CASES: list[IsolationCase] = [
+    # Anonymous: school B's object is unreachable without a session.
     IsolationCase(
         "api:me",
         "GET",
         url=lambda u: "/api/v1/me",
         make_obj=_student_in_active_schema,
         actor=None,
+        label="anonymous",
+    ),
+    # Logged in as school A's admin: /me describes the caller only, never B's student.
+    IsolationCase(
+        "api:me",
+        "GET",
+        url=lambda s: "/api/v1/me",
+        make_obj=_student_with_profile,
+        expect="absent",
+        marker=lambda s: s.admission_number,
+        label="authenticated",
     ),
     # A's admin lists students: B's student must be absent (and the response must be 2xx).
     IsolationCase(
@@ -133,8 +153,8 @@ ISOLATION_CASES: list[IsolationCase] = [
         expect="absent",
         marker=lambda s: s.admission_number,
     ),
-    # A's POST acts on school A only. Whatever status A gets (400 if A has no current term,
-    # 202 if it has one), B's job and B's job count must not change.
+    # A's POST acts on school A only: setup_a gives A a current term, so A must get a 2xx
+    # and exactly one new job, while B's job and B's job count stay unchanged.
     IsolationCase(
         "api:students_import",
         "POST",
