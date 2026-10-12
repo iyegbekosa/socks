@@ -48,8 +48,8 @@ def run_import(job_id: int) -> None:
     if not claimed:
         return
     job = ImportJob.objects.select_related("created_by").get(pk=job_id)
-    _audit("import.started", job)
     try:
+        _audit("import.started", job)
         if job.kind == ImportJob.Kind.STUDENTS:
             import_students(job)
         else:

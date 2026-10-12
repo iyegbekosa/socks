@@ -226,13 +226,15 @@ class _Progress:
         self.ok = 0
         self.bad = 0
         self.arms: dict[int, dict[str, Any]] = {}
+        self.student_ids: list[int] = []
 
     def fail_row(self, number: int, errors: list[tuple[str, str]]) -> None:
         self.bad += 1
         self.errors.extend({"row": number, "column": c, "message": m} for c, m in errors)
 
-    def admitted(self, arm: ClassArm) -> None:
+    def admitted(self, student: Student, arm: ClassArm) -> None:
         self.ok += 1
+        self.student_ids.append(student.pk)
         entry = self.arms.setdefault(arm.pk, {"id": arm.pk, "name": arm.display_name, "count": 0})
         entry["count"] += 1
 
@@ -240,7 +242,8 @@ class _Progress:
         job = self.job
         job.ok_rows, job.error_rows, job.errors = self.ok, self.bad, self.errors
         job.arms = sorted(self.arms.values(), key=lambda a: a["name"])
-        job.save(update_fields=["ok_rows", "error_rows", "errors", "arms"])
+        job.admitted_student_ids = list(self.student_ids)
+        job.save(update_fields=["ok_rows", "error_rows", "errors", "arms", "admitted_student_ids"])
 
 
 def import_students(job: ImportJob) -> None:
@@ -254,7 +257,9 @@ def import_students(job: ImportJob) -> None:
         raise ImportFileError("Set a current term before importing students.")
     with default_storage.open(job.file_name) as fileobj:
         # Fully read (and row-limit checked) before anything is admitted.
-        rows = list(read_rows(fileobj, job.file_name, required=REQUIRED_COLUMNS))
+        rows = list(
+            read_rows(fileobj, job.file_name, required=REQUIRED_COLUMNS, known=TEMPLATE_HEADERS)
+        )
     job.total_rows = len(rows)
     job.save(update_fields=["total_rows"])
 
@@ -263,38 +268,41 @@ def import_students(job: ImportJob) -> None:
     progress = _Progress(job)
     seen_numbers: set[str] = set()
     by = job.created_by
-    for index, (number, row) in enumerate(rows, start=1):
-        result = validate_row(row, arms, seen_numbers)
-        if result.admit_kwargs is None:
-            progress.fail_row(number, result.errors)
-        else:
-            try:
-                with transaction.atomic():
-                    admit_student(
-                        **result.admit_kwargs,
-                        session=session,
-                        consent_method=Student.ConsentMethod.PAPER_FORM,
-                        issue_password=False,
-                        by=by,
-                    )
-            except PlanLimitExceeded:
-                progress.fail_row(number, [("", PLAN_LIMIT_MESSAGE.format(maximum))])
-            except ValidationError as exc:
-                progress.fail_row(number, _validation_errors(exc))
-            except IntegrityError as exc:
-                if not is_admission_number_clash(exc):
+    try:
+        for index, (number, row) in enumerate(rows, start=1):
+            result = validate_row(row, arms, seen_numbers)
+            if result.admit_kwargs is None:
+                progress.fail_row(number, result.errors)
+            else:
+                try:
+                    with transaction.atomic():
+                        student, _ = admit_student(
+                            **result.admit_kwargs,
+                            session=session,
+                            consent_method=Student.ConsentMethod.PAPER_FORM,
+                            issue_password=False,
+                            by=by,
+                        )
+                except PlanLimitExceeded:
+                    progress.fail_row(number, [("", PLAN_LIMIT_MESSAGE.format(maximum))])
+                except ValidationError as exc:
+                    progress.fail_row(number, _validation_errors(exc))
+                except IntegrityError as exc:
+                    if not is_admission_number_clash(exc):
+                        _log_unexpected(job, number, exc)
+                        progress.fail_row(number, [("", UNEXPECTED_MESSAGE)])
+                    else:
+                        progress.fail_row(number, [("admission_number", CLASH_MESSAGE)])
+                except Exception as exc:  # noqa: BLE001 - one bad row must not stop the job
                     _log_unexpected(job, number, exc)
                     progress.fail_row(number, [("", UNEXPECTED_MESSAGE)])
                 else:
-                    progress.fail_row(number, [("admission_number", CLASH_MESSAGE)])
-            except Exception as exc:  # noqa: BLE001 - one bad row must not stop the job
-                _log_unexpected(job, number, exc)
-                progress.fail_row(number, [("", UNEXPECTED_MESSAGE)])
-            else:
-                progress.admitted(result.admit_kwargs["arm"])
-        if index % PROGRESS_EVERY == 0:
-            progress.save()
-    progress.save()
+                    progress.admitted(student, result.admit_kwargs["arm"])
+            if index % PROGRESS_EVERY == 0:
+                progress.save()
+    finally:
+        # Also on an escaping exception: the counts must match what was saved.
+        progress.save()
 
 
 def _log_unexpected(job: ImportJob, number: int, exc: BaseException) -> None:

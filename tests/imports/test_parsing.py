@@ -150,3 +150,43 @@ def test_cell_phone_blank_and_bad():
     assert cell_phone("") == ""
     with pytest.raises(ValueError):
         cell_phone("12345")
+
+
+@pytest.mark.parametrize("value", ["803 123 4567", "803-123-4567", "(0803) 123-4567"])
+def test_cell_phone_strips_punctuation_before_bare_mobile_rule(value):
+    assert cell_phone(value) == "+2348031234567"
+
+
+@pytest.mark.parametrize("value", ["2014-09-05 00:00:00", "2014-09-05 00:00", "05/09/2014 00:00"])
+def test_cell_date_accepts_midnight_suffix(value):
+    assert cell_date(value) == date(2014, 9, 5)
+
+
+def test_unreadable_csv_is_a_friendly_file_error():
+    data = b"first_name\r\n" + b"x" * 200_000 + b"\r\n"  # beyond csv's field size limit
+    with pytest.raises(ImportFileError) as exc:
+        list(read_rows(io.BytesIO(data), "s.csv"))
+    assert exc.value.message == (
+        "The CSV file could not be read. Save it as CSV UTF-8 and try again."
+    )
+
+
+def test_duplicate_non_template_header_is_not_quoted():
+    data = csv_bytes(["first_name,08031234567,08031234567", "Ada,1,2"])
+    with pytest.raises(ImportFileError) as exc:
+        list(read_rows(io.BytesIO(data), "s.csv", required=("first_name",), known=("class",)))
+    assert exc.value.message == "Some column names appear more than once."
+
+
+def test_duplicate_template_header_is_named():
+    data = csv_bytes(["first_name,Class,class", "Ada,1,2"])
+    with pytest.raises(ImportFileError) as exc:
+        list(read_rows(io.BytesIO(data), "s.csv", required=("first_name",), known=("class",)))
+    assert exc.value.message == "Columns appear more than once: class."
+
+
+def test_required_columns_are_checked_before_duplicates():
+    data = csv_bytes(["08031234567,08031234567", "a,b"])
+    with pytest.raises(ImportFileError) as exc:
+        list(read_rows(io.BytesIO(data), "s.csv", required=("first_name",)))
+    assert exc.value.message == "Missing columns: first_name."

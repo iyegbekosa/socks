@@ -29,6 +29,8 @@ class ImportJob(models.Model):
     errors = models.JSONField(default=list, blank=True)
     # Arms that received students: [{"id", "name", "count"}], for links to the class lists.
     arms = models.JSONField(default=list, blank=True)
+    # Students admitted by this job: their one-time passwords are printed from here.
+    admitted_student_ids = models.JSONField(default=list, blank=True)
     message = models.CharField(max_length=200, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="import_jobs"

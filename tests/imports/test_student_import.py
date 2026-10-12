@@ -447,3 +447,97 @@ def test_template_files_have_exact_headers():
     finally:
         wb.close()
     assert rows == [tuple(TEMPLATE_HEADERS)]
+
+
+# --- fix round 1 -------------------------------------------------------------------
+
+
+def test_password_button_issues_only_for_imported_students(client_a, world, cloud):
+    with schema_context("school_a"):
+        existing = StudentProfileFactory(enrolment__arm=world.a, enrolment__session=world.session)
+        flag_before = existing.user.must_change_password
+    job = run_job(world, csv_file([good_row(first_name="Ada"), good_row(first_name="Bola")]))
+    assert len(job.admitted_student_ids) == 2
+    c = admin_client(client_a, world)
+    body = c.get(reverse("imports:detail", args=[job.pk])).content.decode()
+    assert "Print passwords for the 2 students imported here" in body
+    assert f'action="{reverse("students:passwords")}"' in body
+    assert "Open each class" not in body
+    r = c.post(reverse("students:passwords"), {"student_ids": job.admitted_student_ids})
+    assert r.status_code == 200
+    with schema_context("school_a"):
+        existing.user.refresh_from_db()
+        assert existing.user.check_password("Passw0rd!long")
+        assert existing.user.must_change_password == flag_before
+        imported = Student.objects.filter(pk__in=job.admitted_student_ids).select_related("user")
+        assert {s.first_name for s in imported} == {"Ada", "Bola"}
+        assert all(s.user.has_usable_password() for s in imported)
+
+
+def test_headerless_file_does_not_echo_values_in_job_message(world, cloud):
+    content = b"Ada,Eze,08031234567,08031234567\r\nBola,Eze,08031234567,08031234567\r\n"
+    job = run_job(world, content)
+    assert job.status == ImportJob.Status.FAILED
+    assert "8031234567" not in job.message
+    assert job.message.startswith("Missing columns:")
+
+
+def test_counts_match_saved_rows_after_mid_job_failure(world, cloud):
+    from apps.imports import students as importer
+
+    real = importer.validate_row
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 60:
+            raise RuntimeError("boom")
+        return real(*args, **kwargs)
+
+    rows = [good_row(first_name=f"P{i}") for i in range(80)]
+    with mock.patch.object(importer, "validate_row", side_effect=flaky):
+        job = run_job(world, csv_file(rows))
+    assert job.status == ImportJob.Status.FAILED
+    with schema_context("school_a"):
+        saved = Student.objects.count()
+    assert saved == 59
+    assert job.ok_rows == saved
+    assert job.error_rows == 0
+    assert len(job.admitted_student_ids) == saved
+
+
+def test_upload_deleted_after_row_limit_and_unexpected_failures(
+    world, cloud, django_capture_on_commit_callbacks
+):
+    rows = [good_row(first_name=f"S{i}") for i in range(2001)]
+    with django_capture_on_commit_callbacks(execute=True):
+        job = run_job(world, csv_file(rows))
+    assert job.status == ImportJob.Status.FAILED
+    assert cloud.store == {}
+    with (
+        mock.patch("apps.imports.tasks.import_students", side_effect=RuntimeError("x")),
+        django_capture_on_commit_callbacks(execute=True),
+    ):
+        job = run_job(world, csv_file([good_row()]))
+    assert job.status == ImportJob.Status.FAILED
+    assert cloud.store == {}
+
+
+def test_windows_1252_csv_fails_with_friendly_message(
+    world, cloud, django_capture_on_commit_callbacks
+):
+    content = csv_file([good_row(first_name="Adé")]).decode().encode("cp1252")
+    with django_capture_on_commit_callbacks(execute=True):
+        job = run_job(world, content)
+    assert job.status == ImportJob.Status.FAILED
+    assert job.message == "Save the file as CSV UTF-8 and upload it again."
+    assert cloud.store == {}
+
+
+def test_blank_trailing_rows_do_not_count_toward_limit(world, cloud):
+    # 2,000 rows that fail validation (no admissions, so this stays fast) + blank rows.
+    rows = [good_row(**{"class": "Nowhere"}) for _ in range(2000)]
+    content = csv_file(rows) + b",,,,,,,,,,\r\n" * 30
+    job = run_job(world, content)
+    assert job.status == ImportJob.Status.COMPLETED
+    assert (job.total_rows, job.error_rows) == (2000, 2000)

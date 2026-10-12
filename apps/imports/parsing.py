@@ -21,6 +21,8 @@ MAX_BYTES = 5 * 1024 * 1024
 ALLOWED_EXTENSIONS = (".csv", ".xlsx")
 DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d")
 _BARE_MOBILE = re.compile(r"^[789]\d{9}$")
+_PHONE_PUNCTUATION = re.compile(r"[\s\-().]")
+_MIDNIGHT = re.compile(r"\s+00:00(:00)?$")
 
 
 class ImportFileError(Exception):
@@ -60,7 +62,7 @@ def cell_date(value: Any) -> date:
     if isinstance(value, date):
         return value
     if isinstance(value, str):
-        text = value.strip()
+        text = _MIDNIGHT.sub("", value.strip())
         for fmt in DATE_FORMATS:
             try:
                 return datetime.strptime(text, fmt).date()
@@ -75,7 +77,7 @@ def cell_phone(value: Any) -> str:
     A number typed into Excel loses its leading zero (``8031234567``), so a bare 10-digit
     number starting 7, 8 or 9 gets the ``0`` back before normalising.
     """
-    text = cell_text(value)
+    text = _PHONE_PUNCTUATION.sub("", cell_text(value))
     if not text:
         return ""
     if _BARE_MOBILE.match(text):
@@ -92,7 +94,12 @@ def _csv_rows(fileobj: IO[bytes]) -> Iterator[list[Any]]:
         text = fileobj.read().decode("utf-8-sig")
     except UnicodeDecodeError:
         raise ImportFileError("Save the file as CSV UTF-8 and upload it again.") from None
-    yield from csv.reader(io.StringIO(text, newline=""))
+    try:
+        yield from csv.reader(io.StringIO(text, newline=""))
+    except csv.Error:
+        raise ImportFileError(
+            "The CSV file could not be read. Save it as CSV UTF-8 and try again."
+        ) from None
 
 
 def _xlsx_rows(fileobj: IO[bytes]) -> Iterator[list[Any]]:
@@ -110,15 +117,21 @@ def _xlsx_rows(fileobj: IO[bytes]) -> Iterator[list[Any]]:
 
 
 def read_rows(
-    fileobj: IO[bytes], filename: str, *, required: Iterable[str] = ()
+    fileobj: IO[bytes],
+    filename: str,
+    *,
+    required: Iterable[str] = (),
+    known: Iterable[str] = (),
 ) -> Iterator[tuple[int, dict[str, Any]]]:
     """Yield ``(row_number, {canonical_column: raw_cell})`` for each non-blank data row.
 
     Row numbers are 1-based and count the header, so they match what the user sees in
     Excel. CSV values are strings; XLSX values are whatever the cell holds (str, int,
     float, datetime, None): use the ``cell_*`` normalisers. Columns that are not in the
-    header are ignored. Raises ``ImportFileError`` (bad file, missing ``required``
-    columns) or ``TooManyRows`` once more than ``MAX_ROWS`` data rows have been seen.
+    header are ignored. Messages only ever name ``required``/``known`` columns: a file
+    without a header row would otherwise echo a child's data from its first row.
+    Raises ``ImportFileError`` (bad file, missing ``required`` columns, repeated columns)
+    or ``TooManyRows`` once more than ``MAX_ROWS`` data rows have been seen.
     """
     ext = os.path.splitext(filename)[1].lower()
     if ext == ".csv":
@@ -127,6 +140,8 @@ def read_rows(
         source = _xlsx_rows(fileobj)
     else:
         raise ImportFileError("Upload a .csv or .xlsx file.")
+    required_cols = list(required)
+    safe_names = set(required_cols) | set(known)
     try:
         header: list[str] | None = None
         count = 0
@@ -135,13 +150,16 @@ def read_rows(
                 if _is_blank(values):
                     raise ImportFileError("The first row must hold the column names.")
                 header = [canonical_header(v) for v in values]
-                named = [h for h in header if h]
-                dupes = sorted({h for h in named if named.count(h) > 1})
-                if dupes:
-                    raise ImportFileError(f"Columns appear more than once: {', '.join(dupes)}.")
-                missing = [c for c in required if c not in header]
+                missing = [c for c in required_cols if c not in header]
                 if missing:
                     raise ImportFileError(f"Missing columns: {', '.join(missing)}.")
+                named = [h for h in header if h]
+                dupes = {h for h in named if named.count(h) > 1}
+                if dupes:
+                    if dupes <= safe_names:
+                        listed = ", ".join(sorted(dupes))
+                        raise ImportFileError(f"Columns appear more than once: {listed}.")
+                    raise ImportFileError("Some column names appear more than once.")
                 continue
             if _is_blank(values):
                 continue

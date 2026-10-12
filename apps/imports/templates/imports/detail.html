@@ -13,9 +13,16 @@
     <dt>Saved</dt><dd>{{ job.ok_rows }}</dd>
     <dt>Problems</dt><dd>{{ job.error_rows }}</dd>
   </dl>
+  {% if job.admitted_student_ids %}
+  <h2>Passwords</h2>
+  <p class="muted">Imported students have no password yet. This prints one-time passwords for the students imported here only.</p>
+  <form method="post" action="{% url 'students:passwords' %}">{% csrf_token %}
+    {% for sid in job.admitted_student_ids %}<input type="hidden" name="student_ids" value="{{ sid }}">{% endfor %}
+    <button type="submit">Print passwords for the {{ job.admitted_student_ids|length }} student{{ job.admitted_student_ids|length|pluralize }} imported here</button>
+  </form>
+  {% endif %}
   {% if job.arms %}
   <h2>Classes that received students</h2>
-  <p class="muted">Imported students have no password yet. Open each class and choose “Print passwords for this class”.</p>
   <ul>
     {% for arm in job.arms %}<li><a href="{% url 'students:list' %}?arm={{ arm.id }}">{{ arm.name }}</a> ({{ arm.count }})</li>{% endfor %}
   </ul>
