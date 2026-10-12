@@ -223,12 +223,9 @@ def test_unverified_school_admin_upload_cannot_import_bursar(client_a, world, cl
         {"kind": "staff", "file": SimpleUploadedFile("s.csv", data)},
         HTTP_HOST="school-a.localhost",
     )
+    # MfaEnforcementMiddleware logs the unverified admin out before the view runs.
+    assert r.status_code == 302
+    assert r["Location"].startswith(reverse("accounts:login"))
     with schema_context("school_a"):
-        job = ImportJob.objects.filter(kind="staff").first()
+        assert not ImportJob.objects.filter(kind="staff").exists()
         assert not User.objects.filter(email="bur@school.ng").exists()
-    if job is None:
-        # MfaEnforcementMiddleware keeps an unverified admin off the page entirely.
-        assert r.status_code in (302, 403)
-    else:
-        assert job.started_verified is False
-        assert job.error_rows == 1
