@@ -282,3 +282,16 @@ def test_electives_change_while_the_class_is_draft(world):
         ClassResult.objects.create(arm=world["elective"].arm, term=term)
         set_electives(world["elective"], [s[2].pk], by=world["admin"])
         assert {c.student_id for c in ElectiveChoice.objects.all()} == {s[2].pk}
+
+
+def test_back_link_opens_for_each_role(client_a, world):
+    """A form teacher's Back goes to their sheets (arm_detail is admin/principal only)."""
+    url = reverse("results:electives", args=[world["elective"].pk])
+    arm_page = reverse("academics:arm_detail", args=[world["elective"].arm_id])
+    with schema_context("school_a"):
+        client_a.force_login(world["ft"])
+    html = client_a.get(url).content.decode()
+    assert f'href="{reverse("results:my_sheets")}">Back' in html and arm_page not in html
+
+    login_verified(client_a, world["admin"])
+    assert f'href="{arm_page}">Back' in client_a.get(url).content.decode()

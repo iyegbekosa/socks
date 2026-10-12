@@ -9,6 +9,7 @@ from apps.accounts.roles import SCHOOL_ADMIN, TEACHER, require_roles
 from apps.core.parsing import parse_id
 from apps.results.models import ElectiveChoice
 from apps.results.services import set_electives
+from apps.results.views.nav import class_back_url
 from apps.results.workflow import ResultsStateError
 from apps.students.models import Enrolment, Student
 
@@ -29,7 +30,11 @@ def electives_page(request, offering_pk):
     )
     if not _can_manage(request.user, offering):
         raise PermissionDenied
-    ctx = {"offering": offering, "arm": offering.arm}
+    ctx = {
+        "offering": offering,
+        "arm": offering.arm,
+        "back_url": class_back_url(request.user, offering.arm),
+    }
     if offering.is_compulsory:
         return render(request, "results/electives.html", ctx)
 

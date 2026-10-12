@@ -57,6 +57,6 @@
     {% if edit_ft or edit_pr %}<button type="submit">Save</button>{% endif %}
   </form>
   {% endif %}
-  <p><a href="{% url 'academics:arm_detail' arm.pk %}">Back to class</a></p>
+  <p><a href="{{ back_url }}">Back</a></p>
 </div>
 {% endblock %}

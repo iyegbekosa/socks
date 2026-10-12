@@ -17,6 +17,6 @@
     <button type="submit">Save</button>
   </form>
   {% endif %}
-  <p><a href="{% url 'academics:arm_detail' arm.pk %}">Back</a></p>
+  <p><a href="{{ back_url }}">Back</a></p>
 </div>
 {% endblock %}

@@ -247,3 +247,17 @@ def test_no_term_unrelated_teacher_403(client_a, w):
     assert client_a.get(url(w)).status_code == 403
     client_a.force_login(w.ft)
     assert client_a.get(url(w)).status_code == 200
+
+
+def test_back_link_opens_for_each_role(client_a, w):
+    """A form teacher's Back goes to their sheets (arm_detail is admin/principal only)."""
+    client_a.force_login(w.ft)
+    html = client_a.get(url(w)).content.decode()
+    arm_page = reverse("academics:arm_detail", args=[w.arm.pk])
+    assert f'href="{reverse("results:my_sheets")}">Back' in html and arm_page not in html
+    assert client_a.get(reverse("results:my_sheets")).status_code == 200
+
+    login_verified(client_a, principal())
+    html = client_a.get(url(w)).content.decode()
+    assert f'href="{arm_page}">Back' in html
+    assert client_a.get(arm_page).status_code == 200

@@ -16,6 +16,7 @@ from apps.core.locks import school_lock
 from apps.core.parsing import parse_id
 from apps.results.models import ClassResult, Rating, ReportComment, Trait
 from apps.results.scope import can_open_comments
+from apps.results.views.nav import class_back_url
 from apps.students.models import Enrolment, Student
 
 MAX_COMMENT = 500
@@ -202,6 +203,7 @@ def _page(request, arm, term, is_ft, is_pr, status, *, post=None, parsed=None, c
         "results/class_comments.html",
         {
             "arm": arm,
+            "back_url": class_back_url(request.user, arm),
             "term": term,
             "rows": rows,
             "traits": traits,
@@ -347,7 +349,11 @@ def class_comments(request, arm_pk):
     if not can_open_comments(request.user, arm, term):
         raise PermissionDenied
     if term is None:
-        return render(request, "results/class_comments.html", {"arm": arm, "term": None})
+        return render(
+            request,
+            "results/class_comments.html",
+            {"arm": arm, "back_url": class_back_url(request.user, arm), "term": None},
+        )
     is_ft, is_pr = _roles(request, arm, term)
     if request.method == "POST":
         return _save(request, arm, term, is_ft, is_pr)
