@@ -33,6 +33,7 @@ from apps.results.scope import required_offerings
 from apps.results.seeding import BASIC_SCALE
 from apps.results.tasks import compute_class_task
 from apps.results.workflow import (
+    ResultsStateError,
     approve_class,
     publish_class,
     recall_sheet,
@@ -311,11 +312,11 @@ def test_submit_with_zero_takers_is_allowed(w):
 def test_submit_needs_draft_class_and_draft_sheet(w):
     fill(w.offering, w.term, w.students, w.comps, w.teacher)
     submit_sheet(w.offering, w.term, by=w.teacher)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ResultsStateError, match="already submitted"):
         submit_sheet(w.offering, w.term, by=w.teacher)
     recall_sheet(w.offering, w.term, by=w.teacher)
     ClassResult.objects.filter(arm=w.arm, term=w.term).update(status="reviewed")
-    with pytest.raises(ValidationError):
+    with pytest.raises(ResultsStateError, match="moved on"):
         submit_sheet(w.offering, w.term, by=w.teacher)
 
 
@@ -337,7 +338,7 @@ def test_first_submitted_at_set_only_once(w):
 
 def test_recall_after_review_refused(client_a, w):
     reviewed(w)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ResultsStateError, match="moved on"):
         recall_sheet(w.offering, w.term, by=w.teacher)
     client_a.force_login(w.teacher)
     r = client_a.post(reverse("results:sheet_recall", args=[w.offering.pk]), follow=True)
@@ -347,7 +348,7 @@ def test_recall_after_review_refused(client_a, w):
 
 
 def test_recall_needs_submitted_sheet(w):
-    with pytest.raises(ValidationError):
+    with pytest.raises(ResultsStateError, match="not submitted"):
         recall_sheet(w.offering, w.term, by=w.teacher)
 
 
@@ -415,7 +416,7 @@ def test_review_needs_class_teacher_comment_for_every_active_student(w):
 
 def test_review_twice_is_a_state_error(client_a, w):
     reviewed(w)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ResultsStateError, match="already been reviewed"):
         review_class(w.arm, w.term, by=w.ft)
     client_a.force_login(w.ft)
     assert client_a.post(reverse("results:class_review", args=[w.arm.pk])).status_code == 409
@@ -480,9 +481,12 @@ def test_approve_by_school_admin_not_principal_is_403(client_a, w):
     assert klass(w).status == "reviewed"
 
 
-def test_approve_needs_reviewed(w):
-    with pytest.raises(ValidationError):
+def test_approve_needs_reviewed(client_a, w):
+    with pytest.raises(ResultsStateError, match="Only a reviewed class"):
         approve_class(w.arm, w.term, by=w.principal)
+    assert not ClassResult.objects.exclude(status="draft").exists()
+    login_verified(client_a, w.principal)
+    assert client_a.post(reverse("results:class_approve", args=[w.arm.pk])).status_code == 409
     assert not ClassResult.objects.exclude(status="draft").exists()
 
 
@@ -529,11 +533,12 @@ def test_compute_task_ignores_class_no_longer_approved(w):
 def test_publish_without_summaries_is_refused(client_a, w):
     reviewed(w)
     approve_class(w.arm, w.term, by=w.principal)  # on_commit never runs: nothing computed
-    with pytest.raises(ValidationError, match="computed"):
+    with pytest.raises(ValidationError, match="computed") as exc:
         publish_class(w.arm, w.term, by=w.principal)
+    assert exc.type is ValidationError  # a missing precondition, not a state error
     login_verified(client_a, w.principal)
     r = client_a.post(reverse("results:class_publish", args=[w.arm.pk]))
-    assert r.status_code in (400, 409) and "computed" in r.content.decode()
+    assert r.status_code == 400 and "computed" in r.content.decode()
     assert klass(w).status == "approved"
 
 
@@ -542,17 +547,19 @@ def test_publish_needs_fresh_summaries(w, django_capture_on_commit_callbacks):
     with django_capture_on_commit_callbacks(execute=True):
         approve_class(w.arm, w.term, by=w.principal)
     ResultSummary.objects.update(computed_at=timezone.now() - timedelta(days=1))
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="not been computed") as exc:
         publish_class(w.arm, w.term, by=w.principal)
+    assert exc.type is ValidationError
     ResultSummary.objects.update(computed_at=timezone.now())
     ClassResult.objects.filter(pk=klass(w).pk).update(compute_error="x")
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="failed") as exc:
         publish_class(w.arm, w.term, by=w.principal)
+    assert exc.type is ValidationError
 
 
 def test_publish_permissions_and_state(w):
     reviewed(w)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ResultsStateError, match="Only an approved class"):
         publish_class(w.arm, w.term, by=w.principal)  # still reviewed
     with pytest.raises(PermissionDenied):
         publish_class(w.arm, w.term, by=w.ft)
@@ -669,8 +676,9 @@ def test_unlock_sheet_must_belong_to_arm_and_term(w, django_capture_on_commit_ca
     )
     other_arm = ScoreSheet.objects.create(offering=off2, term=w.term)
     for bad in (other_term, other_arm):
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="this class and term") as exc:
             unlock_class(w.arm, w.term, sheets=[bad], reason="fix", by=w.admin)
+        assert exc.type is ValidationError
     assert klass(w).status == "published"
 
 
@@ -701,9 +709,12 @@ def test_unlock_lock_order(w, django_capture_on_commit_callbacks):
     ]
 
 
-def test_unlock_draft_class_without_sheets_is_a_state_error(w):
-    with pytest.raises(ValidationError):
+def test_unlock_draft_class_without_sheets_is_a_state_error(client_a, w):
+    with pytest.raises(ResultsStateError, match="already open"):
         unlock_class(w.arm, w.term, sheets=[], reason="fix", by=w.admin)
+    login_verified(client_a, w.admin)
+    r = client_a.post(reverse("results:class_unlock", args=[w.arm.pk]), {"reason": "fix"})
+    assert r.status_code == 409 and "already open" in r.content.decode()
 
 
 def test_hooks_delegate_to_report_cards():
