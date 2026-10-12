@@ -15,12 +15,19 @@
     </dl>
   {% if job.kind == "staff" %}<p>Invites sent: {{ job.invited_count }}</p>
   <p class="muted">Staff set their own password from the link in their invite.</p>{% endif %}
-  {% if job.admitted_student_ids %}
+  {% if password_batches %}
   <h2>Passwords</h2>
-  <p class="muted">Imported students have no password yet. This prints one-time passwords for the students imported here only.</p>
-  <form method="post" action="{% url 'imports:passwords' job.pk %}">{% csrf_token %}
-    <button type="submit">Print passwords for the {{ job.admitted_student_ids|length }} student{{ job.admitted_student_ids|length|pluralize }} imported here</button>
-  </form>
+  <p class="muted">Imported students have no password yet. Print one-time passwords class by class for the students imported here only. You will be asked to confirm first.</p>
+  <ul>
+    {% for b in password_batches %}
+    <li>
+      <form method="get" action="{% url 'imports:passwords_confirm' job.pk b.arm_id b.batch %}" class="inline">
+        <button type="submit">Print passwords: {{ b.label }} ({{ b.count }} student{{ b.count|pluralize }})</button>
+      </form>
+      {% if b.printed_on %}<span class="muted">Printed on {{ b.printed_on }}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
   {% endif %}
   {% if job.arms %}
   <h2>Classes that received students</h2>

@@ -31,6 +31,8 @@ class ImportJob(models.Model):
     arms = models.JSONField(default=list, blank=True)
     # Students admitted by this job: their one-time passwords are printed from here.
     admitted_student_ids = models.JSONField(default=list, blank=True)
+    # Password sheets printed from this job: [{"arm_id", "batch", "at"}] (no passwords).
+    printed_batches = models.JSONField(default=list, blank=True)
     # Staff invites sent by this job.
     invited_count = models.PositiveIntegerField(default=0)
     # Whether the uploading session passed a TOTP check: MFA-role invites need it.

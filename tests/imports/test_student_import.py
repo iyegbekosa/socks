@@ -1,3 +1,4 @@
+import re
 import time
 from datetime import date, datetime
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.urls import reverse
+from django.utils import timezone
 from django_tenants.utils import schema_context
 
 from apps.accounts.roles import set_roles
@@ -403,6 +405,8 @@ def test_new_page_has_template_links(client_a, world):
     body = c.get(reverse("imports:new")).content.decode()
     assert "imports/students_template.csv" in body
     assert "imports/students_template.xlsx" in body
+    assert "Print passwords buttons on the import's page" in body.replace("&#x27;", "'")
+    assert "from the students list afterwards" not in body
 
 
 def test_students_list_links_to_import(client_a, world):
@@ -460,8 +464,8 @@ def test_password_button_issues_only_for_imported_students(client_a, world, clou
     assert len(job.admitted_student_ids) == 2
     c = admin_client(client_a, world)
     body = c.get(reverse("imports:detail", args=[job.pk])).content.decode()
-    assert "Print passwords for the 2 students imported here" in body
-    url = reverse("imports:passwords", args=[job.pk])
+    assert "Print passwords: JSS 1A (2 students)" in body
+    url = reverse("imports:passwords_confirm", args=[job.pk, world.a.pk, 1])
     assert f'action="{url}"' in body
     assert 'name="student_ids"' not in body
     assert "Open each class" not in body
@@ -601,19 +605,97 @@ def _job_with_ids(world, ids, kind="students") -> ImportJob:
     )
 
 
-def test_job_passwords_handles_more_than_1000_students(client_a, world, settings):
+def _confirm_url(job, arm, batch=1) -> str:
+    return reverse("imports:passwords_confirm", args=[job.pk, arm.pk, batch])
+
+
+def test_job_page_shows_one_print_button_per_arm(client_a, world, cloud):
+    job = run_job(
+        world,
+        csv_file(
+            [
+                good_row(first_name="Ada"),
+                good_row(first_name="Bola"),
+                good_row(first_name="Chi", **{"class": "JSS 2 Gold"}),
+            ]
+        ),
+    )
+    c = admin_client(client_a, world)
+    body = c.get(reverse("imports:detail", args=[job.pk])).content.decode()
+    assert body.count("Print passwords: ") == 2
+    assert "Print passwords: JSS 1A (2 students)" in body
+    assert "Print passwords: JSS 2 Gold (1 student)" in body
+    assert f'action="{_confirm_url(job, world.a)}"' in body
+    assert f'action="{_confirm_url(job, world.b)}"' in body
+    assert "Printed on" not in body
+
+
+def test_large_arm_splits_into_batches_of_200(client_a, world, settings):
     settings.PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
     with schema_context("school_a"):
-        ids = _bulk_students(world, 1200)
+        ids = _bulk_students(world, 450)
         job = _job_with_ids(world, ids)
     c = admin_client(client_a, world)
-    r = c.post(reverse("imports:passwords", args=[job.pk]))
+    body = c.get(reverse("imports:detail", args=[job.pk])).content.decode()
+    assert body.count("Print passwords: ") == 3
+    for label in ("JSS 1A (1\u2013200)", "JSS 1A (201\u2013400)", "JSS 1A (401\u2013450)"):
+        assert f"Print passwords: {label}" in body
+    seen: set[str] = set()
+    for batch, expected in ((1, 200), (2, 200), (3, 50)):
+        r = c.post(_confirm_url(job, world.a, batch))
+        assert r.status_code == 200
+        text = r.content.decode()
+        assert text.count('<section class="slip">') == expected <= 200
+        numbers = set(re.findall(r"BULK/\d{5}", text))
+        assert len(numbers) == expected and not numbers & seen
+        seen |= numbers
+    assert len(seen) == 450
+    assert c.get(_confirm_url(job, world.a, 4)).status_code == 404
+    with schema_context("school_a"):
+        assert AuditEvent.objects.filter(action="student.password_issued").count() == 450
+
+
+def test_confirm_page_issues_nothing_on_get(client_a, world, cloud):
+    job = run_job(world, csv_file([good_row(first_name="Ada"), good_row(first_name="Bola")]))
+    with schema_context("school_a"):
+        before = dict(
+            Student.objects.filter(pk__in=job.admitted_student_ids).values_list(
+                "pk", "user__password"
+            )
+        )
+    c = admin_client(client_a, world)
+    r = c.get(_confirm_url(job, world.a))
     assert r.status_code == 200
     body = r.content.decode()
-    assert body.count('<section class="slip">') == 1200
-    assert "BULK/00000" in body and "BULK/01199" in body
+    assert (
+        "This sets new one-time passwords for 2 students. "
+        "Passwords printed earlier for them stop working." in body
+    )
+    assert 'class="otp"' not in body
     with schema_context("school_a"):
-        assert AuditEvent.objects.filter(action="student.password_issued").count() == 1200
+        after = dict(
+            Student.objects.filter(pk__in=job.admitted_student_ids).values_list(
+                "pk", "user__password"
+            )
+        )
+        assert after == before
+        assert not AuditEvent.objects.filter(action="student.password_issued").exists()
+        job.refresh_from_db()
+        assert job.printed_batches == []
+
+
+def test_printing_records_printed_batches(client_a, world, cloud):
+    job = run_job(world, csv_file([good_row(first_name="Ada")]))
+    c = admin_client(client_a, world)
+    assert c.post(_confirm_url(job, world.a)).status_code == 200
+    with schema_context("school_a"):
+        job.refresh_from_db()
+    assert len(job.printed_batches) == 1
+    entry = job.printed_batches[0]
+    assert (entry["arm_id"], entry["batch"]) == (world.a.pk, 1)
+    at = timezone.localtime(datetime.fromisoformat(entry["at"])).strftime("%d/%m/%Y %H:%M")
+    body = c.get(reverse("imports:detail", args=[job.pk])).content.decode()
+    assert f"Printed on {at}" in body
 
 
 def test_job_passwords_other_school_job_is_404(client_a, client_b, world, school_b):
@@ -621,7 +703,10 @@ def test_job_passwords_other_school_job_is_404(client_a, client_b, world, school
         other_admin = StaffFactory()
         set_roles(other_admin, ["school_admin"], by=other_admin)
         other = ImportJob.objects.create(
-            kind="students", file_name="imports/y.csv", created_by=other_admin
+            kind="students",
+            file_name="imports/y.csv",
+            created_by=other_admin,
+            admitted_student_ids=[],
         )
         other_pk = other.pk
     try:
@@ -629,7 +714,9 @@ def test_job_passwords_other_school_job_is_404(client_a, client_b, world, school
             # Make sure this school has no job with the same pk.
             ImportJob.objects.filter(pk=other_pk).delete()
         c = admin_client(client_a, world)
-        assert c.post(reverse("imports:passwords", args=[other_pk])).status_code == 404
+        url = reverse("imports:passwords_confirm", args=[other_pk, world.a.pk, 1])
+        assert c.get(url).status_code == 404
+        assert c.post(url).status_code == 404
     finally:
         with schema_context("school_b"):
             ImportJob.objects.filter(pk=other_pk).delete()
@@ -639,16 +726,14 @@ def test_job_passwords_staff_kind_is_404(client_a, world):
     with schema_context("school_a"):
         job = _job_with_ids(world, [], kind="staff")
     c = admin_client(client_a, world)
-    assert c.post(reverse("imports:passwords", args=[job.pk])).status_code == 404
+    assert c.post(_confirm_url(job, world.a)).status_code == 404
 
 
-def test_job_passwords_teacher_403_and_get_405(client_a, world):
+def test_job_passwords_teacher_403(client_a, world, cloud):
+    job = run_job(world, csv_file([good_row(first_name="Ada")]))
     with schema_context("school_a"):
-        job = _job_with_ids(world, [])
         teacher = StaffFactory()
         set_roles(teacher, ["teacher"], by=world.admin)
-    c = admin_client(client_a, world)
-    assert c.get(reverse("imports:passwords", args=[job.pk])).status_code == 405
-    with schema_context("school_a"):
         client_a.force_login(teacher)
-    assert client_a.post(reverse("imports:passwords", args=[job.pk])).status_code == 403
+    assert client_a.get(_confirm_url(job, world.a)).status_code == 403
+    assert client_a.post(_confirm_url(job, world.a)).status_code == 403

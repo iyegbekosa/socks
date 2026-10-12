@@ -11,7 +11,7 @@
     <a href="{% static 'imports/students_template.xlsx' %}" download>students template (.xlsx)</a> ·
     <a href="{% static 'imports/staff_template.csv' %}" download>staff template (.csv)</a> ·
     <a href="{% static 'imports/staff_template.xlsx' %}" download>staff template (.xlsx)</a></p>
-  <p class="muted">Required: first_name, last_name, sex (M or F), date_of_birth (DD/MM/YYYY), class (for example JSS 1A), guardian_name, and guardian_phone or guardian_email. Imported students get no password: print one-time passwords per class from the students list afterwards.</p>
+  <p class="muted">Required: first_name, last_name, sex (M or F), date_of_birth (DD/MM/YYYY), class (for example JSS 1A), guardian_name, and guardian_phone or guardian_email. Imported students get no password: once the import finishes, use the Print passwords buttons on the import's page (one per class) to print their one-time passwords.</p>
   <p class="muted">Staff files: full_name, then email or phone, and optional roles (comma-separated, default teacher). Each person is sent an invite to set their own password.</p>
   <form method="post" enctype="multipart/form-data" novalidate>
     {% csrf_token %}
