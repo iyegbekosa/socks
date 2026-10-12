@@ -14,6 +14,9 @@
       </select></div>
     <button type="submit">Search</button>
   </form>
+  {% if can_print_passwords %}
+  <form method="post" action="{% url 'students:passwords' %}" class="no-print">{% csrf_token %}<input type="hidden" name="arm" value="{{ arm_id }}"><button type="submit">Print passwords for this class</button></form>
+  {% endif %}
   <div class="table-wrap">
     <table>
       <thead><tr><th>Name</th><th>Admission number</th><th>Class</th></tr></thead>

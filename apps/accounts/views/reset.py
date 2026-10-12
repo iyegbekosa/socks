@@ -1,3 +1,4 @@
+import logging
 import math
 
 from django.conf import settings
@@ -15,7 +16,9 @@ from apps.accounts.services import (
     consume_reset_code,
     find_user_by_identifier,
     issue_reset_code,
+    reset_email_for,
     reset_phone_for,
+    send_reset_link_email,
 )
 from apps.accounts.views.login import id_limit as login_id_limit
 from apps.audit.services import record
@@ -25,6 +28,10 @@ from apps.core.sms import send_sms, sms_configured
 
 SESSION_KEY = "reset_identifier"
 SENT_MESSAGE = "If an account matches, we've sent a code to its registered phone."
+LINK_SENT_MESSAGE = (
+    "If an account matches, we've sent a password reset link to its registered email."
+)
+logger = logging.getLogger(__name__)
 BAD_CODE = "That code is wrong or has expired."
 
 id_limit = RateLimit("reset:id")
@@ -36,10 +43,6 @@ verify_ip_limit = RateLimit("reset_verify_ip", limit=50, window=900)
 
 @never_cache
 def reset_request_view(request):
-    if not sms_configured():
-        # Same page for everyone (no code stored, nothing sent) so real and unknown
-        # accounts cannot be told apart while SMS is unavailable.
-        return render(request, "accounts/reset_request.html", {"unavailable": True})
     if request.method != "POST":
         return render(request, "accounts/reset_request.html", {"form": ResetRequestForm()})
     form = ResetRequestForm(request.POST)
@@ -73,14 +76,29 @@ def reset_request_view(request):
         )
 
     user = find_user_by_identifier(ident)
-    if user is not None and reset_phone_for(user):
-        code = issue_reset_code(user)
-        if code:
-            send_sms(
-                reset_phone_for(user),  # type: ignore[arg-type]
-                f"{connection.tenant.name}: your password reset code is {code}. "
-                "It expires in 10 minutes.",
-            )
+    if user is not None:
+        email = reset_email_for(user)
+        if email:
+            try:
+                send_reset_link_email(user, email, request.build_absolute_uri("/"))
+            except Exception:  # noqa: BLE001 - must not reveal the account; never log the link
+                logger.warning("Reset link email could not be sent")
+            else:
+                # No address in the audit row: only that a link went out.
+                record("auth.password_reset_link_sent", request=request, obj=user)
+        if sms_configured():
+            phone = reset_phone_for(user)
+            code = issue_reset_code(user) if phone else None
+            if code:
+                send_sms(
+                    phone,  # type: ignore[arg-type]
+                    f"{connection.tenant.name}: your password reset code is {code}. "
+                    "It expires in 10 minutes.",
+                )
+    if not sms_configured():
+        # No code to enter: tell everyone to check email, on the login page.
+        messages.info(request, LINK_SENT_MESSAGE)
+        return redirect(reverse("accounts:login"))
     request.session[SESSION_KEY] = ident
     messages.info(request, SENT_MESSAGE)
     return redirect(reverse("accounts:reset_verify"))

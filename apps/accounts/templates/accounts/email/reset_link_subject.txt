@@ -1,0 +1,1 @@
+{% autoescape off %}{{ school_name }}: reset the password for {{ first_name }}{% endautoescape %}

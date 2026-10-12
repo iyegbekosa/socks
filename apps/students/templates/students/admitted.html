@@ -4,7 +4,7 @@
 <div class="card">
   {% if expired %}
   <h1>{{ student.full_name }} has been admitted</h1>
-  <p class="error" role="alert">The password is no longer available; issue a new one.</p>
+  <p class="error" role="alert">The password is no longer available; <a href="{% url 'students:detail' student.pk %}">issue a new one</a> from the student's page.</p>
   <p><a href="{% url 'students:detail' student.pk %}">View student</a></p>
   {% else %}
   <h1>{{ student.full_name }} has been admitted</h1>

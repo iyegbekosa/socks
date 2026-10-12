@@ -1,0 +1,7 @@
+{% autoescape off %}A password reset was requested for {{ name }}{% if admission_number %} (admission number {{ admission_number }}){% endif %} at {{ school_name }}.
+
+Choose a new password here (the link works once and expires in 1 hour):
+{{ link }}
+
+If you didn't ask for this, you can ignore this email; nothing changes until the link is used.
+{% endautoescape %}

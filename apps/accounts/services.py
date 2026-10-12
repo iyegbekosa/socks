@@ -6,14 +6,14 @@ from collections.abc import Iterable
 from django.conf import settings
 from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.contrib.auth.models import Group
-from django.contrib.auth.tokens import default_token_generator
+from django.contrib.auth.tokens import PasswordResetTokenGenerator, default_token_generator
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
 from django.db import IntegrityError, connection, transaction
 from django.template.loader import render_to_string
 from django.utils.encoding import force_bytes
-from django.utils.http import urlsafe_base64_encode
+from django.utils.http import base36_to_int, urlsafe_base64_encode
 
 from apps.accounts.identifiers import classify_identifier
 from apps.accounts.models import User
@@ -100,6 +100,71 @@ def reset_phone_for(user: User) -> str | None:
     else:
         phone = user.phone
     return phone or None
+
+
+def reset_email_for(user: User) -> str | None:
+    """Reset links go to the main guardian's email (else the second guardian's) for students,
+    and to the staff member's own email for staff."""
+    if user.kind == User.Kind.STUDENT:
+        student = getattr(user, "student", None)
+        email = (student.guardian_email or student.guardian2_email) if student is not None else ""
+    else:
+        email = user.email
+    return email or None
+
+
+RESET_LINK_MAX_AGE = 3600
+
+
+class ResetLinkTokenGenerator(PasswordResetTokenGenerator):
+    """Tokens for emailed reset links.
+
+    * A different ``key_salt`` from the invite generator, so an invite token never validates
+      as a reset token and vice versa (the HMAC differs).
+    * One hour maximum age, enforced here and independent of ``PASSWORD_RESET_TIMEOUT``
+      (72 h, which invites rely on). ``super().check_token`` verifies the signature, the
+      72 h bound and that the password/last_login are unchanged (so a link works once);
+      we then decode the token's own timestamp and apply the shorter bound.
+    """
+
+    key_salt = "build2learn.reset-link"
+
+    def check_token(self, user, token):  # type: ignore[no-untyped-def]
+        if not super().check_token(user, token):
+            return False
+        try:
+            ts = base36_to_int(token.split("-")[0])
+        except ValueError:
+            return False
+        return (self._num_seconds(self._now()) - ts) <= RESET_LINK_MAX_AGE
+
+
+reset_link_token_generator = ResetLinkTokenGenerator()
+
+
+def reset_link(user: User, base_url: str) -> str:
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = reset_link_token_generator.make_token(user)
+    return f"{base_url.rstrip('/')}/accounts/reset/link/{uid}/{token}/"
+
+
+def send_reset_link_email(user: User, email: str, base_url: str) -> None:
+    """Email the reset link. The link is a credential: never logged or audited."""
+    student = getattr(user, "student", None) if user.kind == User.Kind.STUDENT else None
+    first_name = user.first_name or "your account"
+    context = {
+        "school_name": connection.tenant.name,  # type: ignore[attr-defined]
+        "first_name": first_name,
+        "name": student.full_name if student is not None else user.get_full_name() or first_name,
+        "admission_number": user.admission_number if user.kind == User.Kind.STUDENT else None,
+        "link": reset_link(user, base_url),
+    }
+    send_mail(
+        render_to_string("accounts/email/reset_link_subject.txt", context).strip(),
+        render_to_string("accounts/email/reset_link_body.txt", context),
+        None,
+        [email],
+    )
 
 
 def issue_reset_code(user: User) -> str | None:

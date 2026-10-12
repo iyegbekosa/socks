@@ -14,7 +14,6 @@ from apps.accounts.identifiers import classify_identifier
 from apps.audit.services import record
 from apps.core.ratelimit import RateLimit
 from apps.core.request_id import client_ip
-from apps.core.sms import sms_configured
 
 GENERIC_ERROR = "Those details don't match an account. Check them and try again."
 
@@ -42,7 +41,6 @@ def _render(request, form, *, error=None, status=200):
         {
             "form": form,
             "error": error,
-            "sms_available": sms_configured(),
             "next": request.POST.get("next") or request.GET.get("next", ""),
         },
         status=status,

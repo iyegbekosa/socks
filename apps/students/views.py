@@ -11,6 +11,7 @@ from django.db import IntegrityError
 from django.db.models import Prefetch, Q
 from django.http import Http404, HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
@@ -28,6 +29,7 @@ from apps.accounts.roles import (
 )
 from apps.students.forms import AdmitForm, EditForm, attach_errors
 from apps.students.models import Enrolment, Student
+from apps.students.passwords import issue_one_time_passwords
 from apps.students.services import (
     admit_student,
     set_student_photo,
@@ -121,6 +123,9 @@ def student_list(request):
             "arms": arms,
             "querystring": query.urlencode(),
             "can_admit": request.user.has_role(SCHOOL_ADMIN),
+            "can_print_passwords": request.user.has_role(SCHOOL_ADMIN)
+            and arm_id.isdigit()
+            and session is not None,
         },
     )
 
@@ -146,6 +151,8 @@ def detail(request, pk: int):
             "show_private": full,  # date of birth and consent details
             "show_photo": bool(student.photo) and _can_see_photo(user, student),
             "can_edit": user.has_role(SCHOOL_ADMIN),
+            "can_issue_password": user.has_role(SCHOOL_ADMIN)
+            and student.status == Student.Status.ACTIVE,
             "can_withdraw": user.has_role(SCHOOL_ADMIN)
             and student.status != Student.Status.WITHDRAWN,
         },
@@ -281,3 +288,53 @@ def photo(request, pk: int):
     if not student.photo or not _can_see_photo(request.user, student):
         raise Http404
     return _no_store(HttpResponseRedirect(default_storage.url(student.photo.name)))
+
+
+@require_roles(SCHOOL_ADMIN)
+@require_POST
+def passwords(request):
+    """Issue new one-time passwords for chosen students or a whole class and render the sheet.
+
+    The passwords exist only in this response: nothing is stored or flashed.
+    """
+    qs = students_visible_to(request.user).filter(
+        status=Student.Status.ACTIVE, user__is_active=True
+    )
+    arm_id = (request.POST.get("arm") or "").strip()
+    ids = [int(v) for v in request.POST.getlist("student_ids") if v.strip().isdigit()]
+    session = current_session()
+    if arm_id.isdigit() and session is not None:
+        qs = qs.filter(
+            enrolments__arm_id=int(arm_id),
+            enrolments__session=session,
+            enrolments__status=Enrolment.Status.ACTIVE,
+        )
+    elif ids:
+        qs = qs.filter(pk__in=ids)
+    else:
+        messages.error(request, "Choose a class or at least one student.")
+        return redirect("students:list")
+    chosen = list(
+        qs.select_related("user")
+        .prefetch_related(_enrolment_prefetch())
+        .distinct()
+        .order_by("last_name", "first_name", "pk")
+    )
+    if not chosen:
+        messages.error(request, "No active students matched.")
+        return redirect("students:list")
+    issued = issue_one_time_passwords(chosen, by=request.user, request=request)
+    rows = [
+        {"issued": item, "enrolment": _enrolment_for_display(item.student, session)}
+        for item in issued
+    ]
+    response = render(
+        request,
+        "students/passwords.html",
+        {
+            "rows": rows,
+            "portal_url": request.build_absolute_uri(reverse("accounts:login")),
+        },
+    )
+    response["Referrer-Policy"] = "no-referrer"
+    return _no_store(response)

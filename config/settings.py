@@ -85,6 +85,7 @@ MIDDLEWARE = [
     "django_otp.middleware.OTPMiddleware",
     "apps.accounts.middleware.StaffIdleTimeoutMiddleware",
     "apps.accounts.middleware.MfaEnforcementMiddleware",
+    "apps.accounts.middleware.ForcePasswordChangeMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]

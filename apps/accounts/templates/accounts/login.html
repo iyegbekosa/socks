@@ -19,6 +19,6 @@
     {{ form.password }}
     <button type="submit">Log in</button>
   </form>
-  {% if sms_available %}<p><a href="{% url 'accounts:reset' %}">Forgot password?</a></p>{% endif %}
+  <p><a href="{% url 'accounts:reset' %}">Forgot password?</a></p>
 </div>
 {% endblock %}

@@ -3,19 +3,14 @@
 {% block content %}
 <div class="card">
   <h1>Reset your password</h1>
-  {% if unavailable %}
-  <p>Password reset by SMS isn't available yet. Ask your school administrator to reset your password.</p>
-  <p><a href="{% url 'accounts:login' %}">Back to log in</a></p>
-  {% else %}
-  <p>Enter your admission number, email or phone. We will text a code to the registered phone.</p>
+  <p>Enter your admission number, email or phone. We will email a reset link to the contact registered for the account (a parent or guardian's email for students), and text a code if SMS is available.</p>
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
   <form method="post" action="{% url 'accounts:reset' %}">
     {% csrf_token %}
     <label for="id_identifier">{{ form.identifier.label }}</label>
     {{ form.identifier }}
-    <button type="submit">Send code</button>
+    <button type="submit">Send reset link</button>
   </form>
   <p><a href="{% url 'accounts:login' %}">Back to log in</a></p>
-  {% endif %}
 </div>
 {% endblock %}

@@ -4,6 +4,7 @@ from django.conf import settings
 from django.contrib.auth import logout
 from django.contrib.auth.views import redirect_to_login
 from django.http import JsonResponse
+from django.shortcuts import redirect
 from django.urls import reverse
 
 from apps.audit.services import record
@@ -102,4 +103,52 @@ class MfaEnforcementMiddleware:
                     status=401,
                 )
             return redirect_to_login(next_url, str(settings.LOGIN_URL))
+        return self.get_response(request)
+
+
+class ForcePasswordChangeMiddleware:
+    """Send users with ``must_change_password`` to the change page until they have changed it.
+
+    Runs after ``MfaEnforcementMiddleware`` so an unverified MFA session is logged out
+    first; staff flagged for a change are forced too. API calls get 403
+    ``PASSWORD_CHANGE_REQUIRED``.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def _exempt(self, path: str) -> bool:
+        static = str(settings.STATIC_URL or "/static/")
+        return (
+            path.startswith(static)
+            or path.startswith("/accounts/reset/")
+            or path
+            in {
+                reverse("accounts:password_change"),
+                reverse("accounts:logout"),
+                "/healthz",
+            }
+        )
+
+    def __call__(self, request):
+        user = getattr(request, "user", None)
+        if (
+            user is not None
+            and user.is_authenticated
+            and user.must_change_password
+            and not self._exempt(request.path)
+        ):
+            if request.path.startswith("/api/"):
+                return JsonResponse(
+                    {
+                        "error": {
+                            "code": "PASSWORD_CHANGE_REQUIRED",
+                            "message": "You must change your password before continuing.",
+                            "details": [],
+                            "request_id": get_request_id(),
+                        }
+                    },
+                    status=403,
+                )
+            return redirect(reverse("accounts:password_change"))
         return self.get_response(request)

@@ -194,21 +194,21 @@ def test_has_phone_vs_unknown_identical_request_page(client_a, sms_outbox):
     assert a.content == b.content
 
 
-def test_sms_unconfigured_is_uniform_and_stores_nothing(client_a, settings):
+def test_sms_unconfigured_reset_page_still_works_and_is_uniform(client_a, settings, mailoutbox):
     settings.DEBUG = False
     settings.SMS_BACKEND = None
     with schema_context("school_a"):
         s = StudentProfileFactory().user
-    msg = "Password reset by SMS isn't available yet."
     out = []
     for ident in (s.admission_number, "GFS/9999/0004"):
-        r = client_a.post(reverse("accounts:reset"), {"identifier": ident})
-        assert r.status_code == 200 and msg in r.content.decode()
-        out.append(re.sub(r'value="[^"]*"', "", r.content.decode()))
+        client_a.cookies.clear()
+        r = client_a.post(reverse("accounts:reset"), {"identifier": ident}, follow=True)
+        assert "sent a password reset link" in r.content.decode()
+        out.append((r.redirect_chain, re.sub(r'value="[^"]*"', "", r.content.decode())))
     assert out[0] == out[1]
     assert client_a.get(reverse("accounts:reset")).status_code == 200
-    assert cache.get(f"reset:code:{s.pk}") is None
-    assert reverse("accounts:reset") not in client_a.get(reverse("accounts:login")).content.decode()
+    assert cache.get(f"reset:code:{s.pk}") is None  # no SMS code stored
+    assert reverse("accounts:reset") in client_a.get(reverse("accounts:login")).content.decode()
 
 
 def test_sixth_request_blocked(client_a, sms_outbox):

@@ -10,6 +10,17 @@ urlpatterns = [
     path("reset/", views.reset_request_view, name="reset"),
     path("reset/verify/", views.reset_verify_view, name="reset_verify"),
     path(
+        "reset/link/set/",
+        views.reset_link_confirm_view,
+        name="reset_link_set",
+    ),
+    path(
+        "reset/link/<uidb64>/<token>/",
+        views.reset_link_confirm_view,
+        name="reset_link_confirm",
+    ),
+    path("password/", views.password_change_view, name="password_change"),
+    path(
         "invite/<uidb64>/<token>/",
         views.invite_accept_view,
         name="invite_accept",

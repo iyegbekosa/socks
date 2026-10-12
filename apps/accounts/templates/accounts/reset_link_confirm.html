@@ -1,0 +1,19 @@
+{% extends "core/base.html" %}
+{% block title %}Choose a new password{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Choose a new password</h1>
+  <p>Setting a new password for {{ target.first_name|default:"your account" }}.</p>
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    <label for="id_new_password1">New password</label>
+    {{ form.new_password1 }}
+    {% for e in form.new_password1.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    <label for="id_new_password2">Confirm password</label>
+    {{ form.new_password2 }}
+    {% for e in form.new_password2.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+    <button type="submit">Set password</button>
+  </form>
+</div>
+{% endblock %}

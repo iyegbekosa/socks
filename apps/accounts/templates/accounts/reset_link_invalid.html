@@ -1,0 +1,9 @@
+{% extends "core/base.html" %}
+{% block title %}Invalid link{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>This link is invalid or has expired</h1>
+  <p>Reset links work once and expire after 1 hour. Request a new one.</p>
+  <p><a href="{% url 'accounts:reset' %}">Request a new link</a> · <a href="{% url 'accounts:login' %}">Go to log in</a></p>
+</div>
+{% endblock %}
