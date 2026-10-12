@@ -304,3 +304,71 @@ class Rating(models.Model):
 
     def __str__(self) -> str:
         return f"rating {self.pk}"
+
+
+class SubjectResult(models.Model):
+    """One student's computed result in one subject for a term.
+
+    ``subject_name``, ``teacher_name`` and ``components`` (``[{"name", "max", "score"}]``) are
+    snapshots, so a past term renders with its own structure after the setup changes.
+    """
+
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="subject_results")
+    offering = models.ForeignKey(
+        SubjectOffering, on_delete=models.PROTECT, related_name="subject_results"
+    )
+    term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="subject_results")
+    subject_name = models.CharField(max_length=80)
+    teacher_name = models.CharField(max_length=310, blank=True)
+    components = models.JSONField(default=list)
+    total = models.DecimalField(max_digits=4, decimal_places=1)
+    grade = models.CharField(max_length=4)
+    remark = models.CharField(max_length=40, blank=True)
+    position = models.PositiveIntegerField()
+    highest = models.DecimalField(max_digits=4, decimal_places=1)
+    lowest = models.DecimalField(max_digits=4, decimal_places=1)
+    class_average = models.DecimalField(max_digits=5, decimal_places=2)
+    cumulative = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "offering", "term"], name="results_subjectresult_unique"
+            ),
+        ]
+        indexes = [models.Index(fields=["term", "offering"], name="results_subres_term_idx")]
+
+    def __str__(self) -> str:
+        return f"subject result {self.pk}"
+
+    def __repr__(self) -> str:
+        return f"<SubjectResult {self.pk}>"
+
+
+class ResultSummary(models.Model):
+    """One student's overall computed result for a term."""
+
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="result_summaries")
+    term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="result_summaries")
+    arm = models.ForeignKey(ClassArm, on_delete=models.PROTECT, related_name="result_summaries")
+    subjects_count = models.PositiveSmallIntegerField()
+    total = models.DecimalField(max_digits=7, decimal_places=1)
+    average = models.DecimalField(max_digits=5, decimal_places=2)
+    position = models.PositiveIntegerField()
+    out_of = models.PositiveIntegerField()
+    cumulative_average = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    computed_at = models.DateTimeField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "term"], name="results_resultsummary_unique"
+            ),
+        ]
+        indexes = [models.Index(fields=["term", "arm"], name="results_summary_term_arm_idx")]
+
+    def __str__(self) -> str:
+        return f"result summary {self.pk}"
+
+    def __repr__(self) -> str:
+        return f"<ResultSummary {self.pk}>"
