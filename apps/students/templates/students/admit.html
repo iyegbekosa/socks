@@ -1,0 +1,40 @@
+{% extends "core/base.html" %}
+{% block title %}Admit student{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Admit a student</h1>
+  {% if no_session %}
+  <p>Set a current term first. <a href="{% url 'academics:sessions' %}">Go to sessions and terms</a></p>
+  {% else %}
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    <h2>Student</h2>
+    <div class="form-grid">
+      {% for field in form.student_fields %}{% include "students/_field.html" %}{% endfor %}
+      {% with field=form.arm %}{% include "students/_field.html" %}{% endwith %}
+      {% with field=form.admission_number %}{% include "students/_field.html" %}{% endwith %}
+    </div>
+    <h2>Main guardian</h2>
+    <div class="form-grid">
+      {% for field in form.guardian1_fields %}{% include "students/_field.html" %}{% endfor %}
+    </div>
+    <h2>Second guardian (optional)</h2>
+    <div class="form-grid">
+      {% for field in form.guardian2_fields %}{% include "students/_field.html" %}{% endfor %}
+    </div>
+    <h2>Consent</h2>
+    <div class="form-grid">
+      <div class="span">
+        <label class="check" for="{{ form.consent.id_for_label }}">{{ form.consent }} <span>{{ form.consent.label }}</span></label>
+        {% for e in form.consent.errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+      </div>
+      {% with field=form.consent_method %}{% include "students/_field.html" %}{% endwith %}
+    </div>
+    <button type="submit">Admit student</button>
+  </form>
+  {% endif %}
+  <p><a href="{% url 'students:list' %}">Back to students</a></p>
+</div>
+{% endblock %}

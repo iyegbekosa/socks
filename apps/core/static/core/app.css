@@ -16,3 +16,25 @@ form.inline { display:inline; }
 .muted { color:var(--muted); }
 @media (min-width:640px) { .container { margin-top:3rem; } }
 .qr svg { max-width:100%; height:auto; } code { word-break:break-all; }
+/* Student pages and shared layout helpers */
+input[type=tel], input[type=number], input[type=date], input[type=file], select, textarea { width:100%; padding:.65rem .75rem; font:inherit; border:1px solid var(--line); border-radius:6px; background:#fff; }
+select:focus, textarea:focus { outline:2px solid var(--accent); outline-offset:1px; }
+.container.wide { max-width:60rem; }
+.table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; margin:.75rem 0; }
+.table-wrap table { border-collapse:collapse; width:100%; min-width:28rem; }
+.table-wrap th, .table-wrap td { text-align:left; padding:.5rem .6rem; border-bottom:1px solid var(--line); white-space:nowrap; }
+.form-grid { display:grid; grid-template-columns:1fr; gap:0 1rem; }
+.form-grid .span { grid-column:1 / -1; }
+@media (min-width:640px) { .form-grid { grid-template-columns:1fr 1fr; } }
+label.check { display:flex; gap:.5rem; align-items:flex-start; font-weight:600; }
+label.check input { width:auto; margin-top:.3rem; }
+.search-row { display:grid; grid-template-columns:1fr; gap:.5rem; align-items:end; }
+@media (min-width:640px) { .search-row { grid-template-columns:2fr 1fr auto; } }
+.photo { max-width:9rem; height:auto; border-radius:8px; border:1px solid var(--line); }
+dl.facts { display:grid; grid-template-columns:1fr; gap:.1rem 1rem; margin:0 0 1rem; }
+dl.facts dt { font-weight:600; color:var(--muted); }
+dl.facts dd { margin:0 0 .5rem; overflow-wrap:anywhere; }
+@media (min-width:640px) { dl.facts { grid-template-columns:12rem 1fr; } dl.facts dd { margin:0; } }
+.otp { font-size:1.6rem; letter-spacing:.08em; padding:.5rem .75rem; border:1px dashed var(--fg); display:inline-block; }
+button.danger { background:var(--danger); }
+@media print { .site-header, .no-print { display:none !important; } body { background:#fff; } .card { border:0; } }

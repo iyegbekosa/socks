@@ -1,0 +1,42 @@
+{% extends "core/base.html" %}
+{% block title %}Students{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Students</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if can_admit %}<p><a class="button" href="{% url 'students:admit' %}">Admit a student</a></p>{% endif %}
+  <form method="get" class="search-row">
+    <div><label for="q">Search name or admission number</label><input type="text" id="q" name="q" value="{{ q }}"></div>
+    <div><label for="arm">Class</label>
+      <select id="arm" name="arm"><option value="">All classes</option>
+      {% for a in arms %}<option value="{{ a.pk }}"{% if arm_id == a.pk|stringformat:"d" %} selected{% endif %}>{{ a.display_name }}</option>{% endfor %}
+      </select></div>
+    <button type="submit">Search</button>
+  </form>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>Admission number</th><th>Class</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td><a href="{% url 'students:detail' row.student.pk %}">{{ row.student.full_name }}</a>{% if row.student.status != "active" %} <span class="muted">({{ row.student.get_status_display }})</span>{% endif %}</td>
+          <td>{{ row.student.user.admission_number }}</td>
+          <td>{{ row.enrolment.arm.display_name|default:"—" }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="3" class="muted">No students found.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if page.paginator.num_pages > 1 %}
+  <p>
+    {% if page.has_previous %}<a href="?{% if querystring %}{{ querystring }}&amp;{% endif %}page={{ page.previous_page_number }}">Previous</a>{% endif %}
+    Page {{ page.number }} of {{ page.paginator.num_pages }}
+    {% if page.has_next %}<a href="?{% if querystring %}{{ querystring }}&amp;{% endif %}page={{ page.next_page_number }}">Next</a>{% endif %}
+  </p>
+  {% endif %}
+  <p><a href="{% url 'home' %}">Home</a></p>
+</div>
+{% endblock %}

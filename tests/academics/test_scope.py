@@ -80,3 +80,52 @@ def test_losing_teacher_role_empties_scope(world):
         _set(t, ["school_admin"], by=t)
         assert FormTeacher.objects.filter(teacher=t).exists()
         assert not arms_taught_by(t, world["s2"]).exists()
+
+
+def test_students_visible_to(world):
+    from apps.academics.models import Term
+    from apps.academics.scope import students_visible_to
+    from apps.students.models import Enrolment, Student
+    from apps.students.services import withdraw_student
+    from tests.students.factories import StudentProfileFactory
+
+    a, b, c = world["arms"][:3]
+    with schema_context("school_a"):
+        Term.objects.create(
+            session=world["s2"],
+            number=1,
+            start_date=world["s2"].start_date,
+            end_date=world["s2"].end_date,
+            is_current=True,
+        )
+        t = world["t"]
+        FormTeacher.objects.create(arm=a, session=world["s2"], teacher=t)
+        SubjectOffering.objects.create(subject=world["subj"], arm=a, session=world["s2"], teacher=t)
+        mine = StudentProfileFactory(enrolment__arm=a, enrolment__session=world["s2"])
+        gone = StudentProfileFactory(enrolment__arm=a, enrolment__session=world["s2"])
+        other = StudentProfileFactory(enrolment__arm=b, enrolment__session=world["s2"])
+        old = StudentProfileFactory(enrolment__arm=a, enrolment__session=world["s1"])
+        withdraw_student(gone, by=None)
+        # school_admin + teacher: admin wins, sees everyone
+        assert set(students_visible_to(t)) == set(Student.objects.all())
+        teacher_only = StaffFactory()
+        set_roles(teacher_only, ["teacher"], by=t)
+        subj2 = Subject.objects.create(name="English", code="eng", sections=["jss"])
+        SubjectOffering.objects.create(
+            subject=subj2, arm=a, session=world["s2"], teacher=teacher_only
+        )
+        SubjectOffering.objects.create(
+            subject=world["subj"], arm=c, session=world["s2"], teacher=teacher_only
+        )
+        FormTeacher.objects.create(arm=c, session=world["s2"], teacher=teacher_only)
+        qs = students_visible_to(teacher_only)
+        assert list(qs) == [mine]  # distinct; no other arm, old session or withdrawn
+        assert not students_visible_to(StudentFactory()).exists()
+        assert not students_visible_to(None).exists()
+        for role in ("bursar", "principal", "proprietor"):
+            u = StaffFactory()
+            set_roles(u, [role], by=t)
+            assert students_visible_to(u).count() == Student.objects.count()
+        assert other in students_visible_to(t) and old in students_visible_to(t)
+        Enrolment.objects.all().delete()
+        Student.objects.all().delete()

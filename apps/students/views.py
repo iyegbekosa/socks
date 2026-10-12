@@ -1,0 +1,250 @@
+"""Student admin pages. Children's data: nothing here logs DOB, contacts, photos or passwords."""
+
+from typing import Any
+
+from django.contrib import messages
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.files.storage import default_storage
+from django.core.paginator import Paginator
+from django.db import IntegrityError
+from django.db.models import Prefetch, Q
+from django.http import Http404, HttpResponse, HttpResponseRedirect
+from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_POST
+
+from apps.academics.models import ClassArm
+from apps.academics.scope import students_visible_to, teacher_students
+from apps.academics.services import current_session
+from apps.accounts.roles import (
+    PRINCIPAL,
+    PROPRIETOR,
+    SCHOOL_ADMIN,
+    STAFF_ROLES,
+    TEACHER,
+    require_roles,
+)
+from apps.students.forms import AdmitForm, EditForm, attach_errors
+from apps.students.models import Enrolment, Student
+from apps.students.services import (
+    admit_student,
+    set_student_photo,
+    update_student,
+    withdraw_student,
+)
+from apps.tenancy.limits import PlanLimitExceeded
+
+PAGE_SIZE = 50
+JUST_ADMITTED = "students:just_admitted"
+CONFLICT_MESSAGE = "Someone else changed this at the same time — please try again."
+FULL_VIEW_ROLES = (SCHOOL_ADMIN, PROPRIETOR, PRINCIPAL)
+
+
+def _visible_student(request: Any, pk: int) -> Student:
+    return get_object_or_404(
+        students_visible_to(request.user).select_related("user", "consent_recorded_by"), pk=pk
+    )
+
+
+def _enrolment_for_display(student: Student) -> Enrolment | None:
+    """The current session's enrolment, else the most recent one (needs prefetched rows)."""
+    rows = list(student.enrolments.all())
+    if not rows:
+        return None
+    session = current_session()
+    for row in rows:
+        if session is not None and row.session_id == session.pk:
+            return row
+    return max(rows, key=lambda r: r.session.start_date)
+
+
+def _enrolment_prefetch() -> Prefetch:
+    return Prefetch("enrolments", Enrolment.objects.select_related("arm__level", "session"))
+
+
+def _can_see_photo(user: Any, student: Student) -> bool:
+    if user.has_role(*FULL_VIEW_ROLES):
+        return True
+    return user.has_role(TEACHER) and teacher_students(user).filter(pk=student.pk).exists()
+
+
+def _no_store(response: HttpResponse) -> HttpResponse:
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@never_cache
+@require_roles(*STAFF_ROLES)
+def student_list(request):
+    qs = students_visible_to(request.user).select_related("user")
+    q = (request.GET.get("q") or "").strip()
+    for token in q.split():
+        qs = qs.filter(
+            Q(first_name__icontains=token)
+            | Q(middle_name__icontains=token)
+            | Q(last_name__icontains=token)
+            | Q(user__admission_number__icontains=token)
+        )
+    arm_id = (request.GET.get("arm") or "").strip()
+    session = current_session()
+    if arm_id.isdigit() and session is not None:
+        qs = qs.filter(enrolments__arm_id=int(arm_id), enrolments__session=session).distinct()
+    page = Paginator(qs.prefetch_related(_enrolment_prefetch()), PAGE_SIZE).get_page(
+        request.GET.get("page")
+    )
+    rows = [{"student": s, "enrolment": _enrolment_for_display(s)} for s in page.object_list]
+    query = request.GET.copy()
+    query.pop("page", None)
+    return render(
+        request,
+        "students/list.html",
+        {
+            "rows": rows,
+            "page": page,
+            "q": q,
+            "arm_id": arm_id,
+            "arms": ClassArm.objects.select_related("level"),
+            "querystring": query.urlencode(),
+            "can_admit": request.user.has_role(SCHOOL_ADMIN),
+        },
+    )
+
+
+@never_cache
+@require_roles(*STAFF_ROLES)
+def detail(request, pk: int):
+    student = get_object_or_404(
+        students_visible_to(request.user)
+        .select_related("user", "consent_recorded_by")
+        .prefetch_related(_enrolment_prefetch()),
+        pk=pk,
+    )
+    user = request.user
+    full = user.has_role(*FULL_VIEW_ROLES)
+    return render(
+        request,
+        "students/detail.html",
+        {
+            "student": student,
+            "enrolment": _enrolment_for_display(student),
+            "show_private": full,  # date of birth and consent details
+            "show_photo": bool(student.photo) and _can_see_photo(user, student),
+            "can_edit": user.has_role(SCHOOL_ADMIN),
+            "can_withdraw": user.has_role(SCHOOL_ADMIN)
+            and student.status != Student.Status.WITHDRAWN,
+        },
+    )
+
+
+def _admit_error(form: AdmitForm, exc: IntegrityError) -> None:
+    if "admission_number" in str(exc):
+        form.add_error("admission_number", "That admission number is already in use.")
+    else:
+        form.add_error(None, CONFLICT_MESSAGE)
+
+
+@never_cache
+@require_roles(SCHOOL_ADMIN)
+def admit(request):
+    session = current_session()
+    if session is None:
+        return render(request, "students/admit.html", {"no_session": True})
+    form = AdmitForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        d = form.cleaned_data
+        guardian, guardian2 = form.guardians()
+        has_second = any((guardian2.name, guardian2.relationship, guardian2.phone, guardian2.email))
+        try:
+            student, password = admit_student(
+                first_name=d["first_name"],
+                middle_name=d["middle_name"],
+                last_name=d["last_name"],
+                sex=d["sex"],
+                date_of_birth=d["date_of_birth"],
+                arm=d["arm"],
+                session=session,
+                guardian=guardian,
+                guardian2=guardian2 if has_second else None,
+                consent_method=d["consent_method"],
+                admission_number=d["admission_number"],
+                by=request.user,
+                request=request,
+            )
+        except ValidationError as exc:
+            attach_errors(form, exc)
+        except PlanLimitExceeded as exc:
+            form.add_error(None, exc.message)
+        except IntegrityError as exc:
+            _admit_error(form, exc)
+        else:
+            request.session[JUST_ADMITTED] = {"pk": student.pk, "password": password}
+            return redirect("students:admitted", pk=student.pk)
+    return render(request, "students/admit.html", {"form": form}, status=200)
+
+
+@require_roles(SCHOOL_ADMIN)
+def admitted(request, pk: int):
+    """One-time confirmation: the password is popped from the session on first view."""
+    student = get_object_or_404(Student.objects.select_related("user"), pk=pk)
+    stash = request.session.pop(JUST_ADMITTED, None)
+    if not isinstance(stash, dict) or stash.get("pk") != student.pk:
+        return redirect("students:detail", pk=student.pk)
+    enrolment = student.enrolments.select_related("arm__level").first()
+    response = render(
+        request,
+        "students/admitted.html",
+        {"student": student, "enrolment": enrolment, "password": stash.get("password")},
+    )
+    response["Referrer-Policy"] = "no-referrer"
+    return _no_store(response)
+
+
+@never_cache
+@require_roles(*STAFF_ROLES)
+def edit(request, pk: int):
+    student = _visible_student(request, pk)
+    if not request.user.has_role(SCHOOL_ADMIN):
+        raise PermissionDenied
+    initial = {f: getattr(student, f) for f in (*EditForm.base_fields.keys(),) if f != "photo"}
+    form = EditForm(request.POST or None, request.FILES or None, initial=initial)
+    if request.method == "POST" and form.is_valid():
+        d = form.cleaned_data
+        guardian, guardian2 = form.guardians()
+        data = {f: d[f] for f in ("first_name", "middle_name", "last_name", "sex", "date_of_birth")}
+        data["guardian"] = guardian
+        data["guardian2"] = guardian2
+        try:
+            update_student(student, data, by=request.user, request=request)
+            if d.get("photo"):
+                set_student_photo(student, d["photo"], by=request.user, request=request)
+        except ValidationError as exc:
+            attach_errors(form, exc)
+        except PlanLimitExceeded as exc:
+            form.add_error(None, exc.message)
+        except IntegrityError:
+            form.add_error(None, CONFLICT_MESSAGE)
+        else:
+            messages.success(request, "Student updated.")
+            return redirect("students:detail", pk=student.pk)
+    return render(request, "students/edit.html", {"form": form, "student": student})
+
+
+@require_roles(*STAFF_ROLES)
+@require_POST
+def withdraw(request, pk: int):
+    student = _visible_student(request, pk)
+    if not request.user.has_role(SCHOOL_ADMIN):
+        raise PermissionDenied
+    withdraw_student(student, by=request.user, request=request)
+    messages.success(request, "Student withdrawn.")
+    return redirect("students:detail", pk=student.pk)
+
+
+@require_roles(*STAFF_ROLES)
+def photo(request, pk: int):
+    if request.method != "GET":
+        return HttpResponse(status=405, headers={"Allow": "GET"})
+    student = _visible_student(request, pk)
+    if not student.photo or not _can_see_photo(request.user, student):
+        raise Http404
+    return _no_store(HttpResponseRedirect(default_storage.url(student.photo.name)))

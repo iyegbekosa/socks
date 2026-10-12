@@ -1,0 +1,49 @@
+{% extends "core/base.html" %}
+{% block title %}{{ student.full_name }}{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>{{ student.full_name }}</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if show_photo %}<p><img class="photo" src="{% url 'students:photo' student.pk %}" alt="Photo of {{ student.full_name }}"></p>{% endif %}
+  <dl class="facts">
+    <dt>Admission number</dt><dd>{{ student.user.admission_number }}</dd>
+    <dt>Class</dt><dd>{{ enrolment.arm.display_name|default:"—" }}{% if enrolment %} <span class="muted">({{ enrolment.session.name }})</span>{% endif %}</dd>
+    <dt>Status</dt><dd>{{ student.get_status_display }}</dd>
+    {% if show_private %}
+    <dt>Sex</dt><dd>{{ student.get_sex_display }}</dd>
+    <dt>Date of birth</dt><dd>{{ student.date_of_birth|date:"d/m/Y" }}</dd>
+    {% endif %}
+  </dl>
+  <h2>Main guardian</h2>
+  <dl class="facts">
+    <dt>Name</dt><dd>{{ student.guardian_name }} ({{ student.get_guardian_relationship_display }})</dd>
+    <dt>Phone</dt><dd>{{ student.guardian_phone|default:"—" }}</dd>
+    <dt>Email</dt><dd>{{ student.guardian_email|default:"—" }}</dd>
+  </dl>
+  {% if student.guardian2_name %}
+  <h2>Second guardian</h2>
+  <dl class="facts">
+    <dt>Name</dt><dd>{{ student.guardian2_name }}{% if student.guardian2_relationship %} ({{ student.get_guardian2_relationship_display }}){% endif %}</dd>
+    <dt>Phone</dt><dd>{{ student.guardian2_phone|default:"—" }}</dd>
+    <dt>Email</dt><dd>{{ student.guardian2_email|default:"—" }}</dd>
+  </dl>
+  {% endif %}
+  {% if show_private %}
+  <h2>Consent</h2>
+  <dl class="facts">
+    <dt>Method</dt><dd>{{ student.get_consent_method_display }}</dd>
+    <dt>Recorded</dt><dd>{{ student.consent_recorded_at|date:"d/m/Y" }}{% if student.consent_recorded_by %} by {{ student.consent_recorded_by.get_full_name }}{% endif %}</dd>
+  </dl>
+  {% endif %}
+  {% if can_edit %}<p><a class="button" href="{% url 'students:edit' student.pk %}">Edit</a></p>{% endif %}
+  {% if can_withdraw %}
+  <details class="no-print">
+    <summary>Withdraw this student</summary>
+    <p>This switches off the student's login and ends their enrolment. It cannot be undone here.</p>
+    <form method="post" action="{% url 'students:withdraw' student.pk %}">{% csrf_token %}<button type="submit" class="danger">Confirm withdrawal</button></form>
+  </details>
+  {% endif %}
+  <p><a href="{% url 'students:list' %}">Back to students</a></p>
+</div>
+{% endblock %}

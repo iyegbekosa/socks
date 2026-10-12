@@ -1,0 +1,27 @@
+{% extends "core/base.html" %}
+{% block title %}Edit student{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Edit {{ student.full_name }}</h1>
+  <form method="post" enctype="multipart/form-data" novalidate>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    <h2>Student</h2>
+    <div class="form-grid">
+      {% for field in form.student_fields %}{% include "students/_field.html" %}{% endfor %}
+      {% with field=form.photo %}{% include "students/_field.html" %}{% endwith %}
+    </div>
+    <h2>Main guardian</h2>
+    <div class="form-grid">
+      {% for field in form.guardian1_fields %}{% include "students/_field.html" %}{% endfor %}
+    </div>
+    <h2>Second guardian (optional)</h2>
+    <div class="form-grid">
+      {% for field in form.guardian2_fields %}{% include "students/_field.html" %}{% endfor %}
+    </div>
+    <button type="submit">Save changes</button>
+  </form>
+  <p><a href="{% url 'students:detail' student.pk %}">Cancel</a></p>
+</div>
+{% endblock %}
