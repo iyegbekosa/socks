@@ -190,3 +190,11 @@ def test_required_columns_are_checked_before_duplicates():
     with pytest.raises(ImportFileError) as exc:
         list(read_rows(io.BytesIO(data), "s.csv", required=("first_name",)))
     assert exc.value.message == "Missing columns: first_name."
+
+
+def test_openpyxl_parses_xlsx_with_defusedxml():
+    """XLSX files are untrusted XML: openpyxl must use defusedxml (a main dependency)."""
+    import defusedxml  # noqa: F401 - must be installed
+    import openpyxl
+
+    assert openpyxl.DEFUSEDXML is True
