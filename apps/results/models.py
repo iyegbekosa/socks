@@ -1,10 +1,11 @@
 from decimal import ROUND_HALF_UP, Decimal
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
-from apps.academics.models import SECTION_CHOICES, SubjectOffering
+from apps.academics.models import SECTION_CHOICES, ClassArm, SubjectOffering, Term
 from apps.students.models import Enrolment, Student
 
 
@@ -125,3 +126,98 @@ class ElectiveChoice(models.Model):
             status=Enrolment.Status.ACTIVE,
         ).exists():
             raise ValidationError("The student is not in this class for this session.")
+
+
+class Score(models.Model):
+    """One cell of a score sheet. ``value`` null means "not entered"; ``version`` starts at 0
+    for a cell that has never been saved and goes up by one on every change."""
+
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="scores")
+    offering = models.ForeignKey(SubjectOffering, on_delete=models.PROTECT, related_name="scores")
+    term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="scores")
+    component = models.ForeignKey(
+        AssessmentComponent, on_delete=models.PROTECT, related_name="scores"
+    )
+    value = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
+    version = models.PositiveIntegerField(default=0)
+    entered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+"
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "offering", "term", "component"], name="results_score_unique"
+            ),
+        ]
+        indexes = [models.Index(fields=["offering", "term"], name="results_score_sheet_idx")]
+
+    def __str__(self) -> str:
+        return f"score {self.pk}"
+
+    def __repr__(self) -> str:
+        return f"<Score {self.pk}>"
+
+
+class ScoreSheet(models.Model):
+    """Workflow state of one subject's scores for a term."""
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        SUBMITTED = "submitted", "Submitted"
+
+    offering = models.ForeignKey(SubjectOffering, on_delete=models.PROTECT, related_name="sheets")
+    term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="score_sheets")
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)
+    first_submitted_at = models.DateTimeField(null=True, blank=True)
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["offering", "term"], name="results_scoresheet_unique"),
+        ]
+
+    def __str__(self) -> str:
+        return f"sheet {self.offering_id}/{self.term_id} ({self.status})"
+
+
+class ClassResult(models.Model):
+    """Workflow state of one class arm's results for a term."""
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        REVIEWED = "reviewed", "Reviewed"
+        APPROVED = "approved", "Approved"
+        PUBLISHED = "published", "Published"
+
+    arm = models.ForeignKey(ClassArm, on_delete=models.PROTECT, related_name="class_results")
+    term = models.ForeignKey(Term, on_delete=models.PROTECT, related_name="class_results")
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    published_at = models.DateTimeField(null=True, blank=True)
+    published_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["arm", "term"], name="results_classresult_unique"),
+        ]
+
+    def __str__(self) -> str:
+        return f"class {self.arm_id}/{self.term_id} ({self.status})"

@@ -7,12 +7,21 @@ from apps.academics.models import SubjectOffering
 from apps.audit.services import record
 from apps.core.locks import school_lock
 from apps.results import scope
-from apps.results.models import AssessmentComponent, ElectiveChoice, GradeBand, validate_scale
+from apps.results.models import (
+    AssessmentComponent,
+    ElectiveChoice,
+    GradeBand,
+    Score,
+    validate_scale,
+)
 from apps.students.models import Enrolment, Student
 
 LOCKED_MESSAGE = (
     "Scores have already been entered for this section, so its assessment components "
     "can no longer be changed."
+)
+REMOVED_IN_USE_MESSAGE = (
+    "A component you removed has scores from an earlier session, so it cannot be removed."
 )
 
 
@@ -24,16 +33,32 @@ def save_components(section: str, rows: list[dict], *, by: Any, request: Any = N
         raise ValidationError("Component names must be different from each other.")
     with transaction.atomic():
         school_lock("results:settings")
+        # Lock the rows first: save_cells locks them too, so no score lands after this check.
+        existing = {
+            c.name.lower(): c
+            for c in AssessmentComponent.objects.select_for_update().filter(section=section)
+        }
         if scope.has_scores(section):
             raise ValidationError(LOCKED_MESSAGE)
-        AssessmentComponent.objects.filter(section=section).delete()
+        # Update in place by name (case-insensitive) so component pks stay stable for scores.
+        wanted = {r["name"].strip().lower() for r in rows}
+        removed = [c for key, c in existing.items() if key not in wanted]
+        if Score.objects.filter(component__in=removed, value__isnull=False).exists():
+            raise ValidationError(REMOVED_IN_USE_MESSAGE)
+        Score.objects.filter(component__in=removed).delete()  # blank cells only
+        AssessmentComponent.objects.filter(pk__in=[c.pk for c in removed]).delete()
         for row in rows:
-            AssessmentComponent.objects.create(
-                section=section,
-                name=row["name"].strip(),
-                max_score=row["max_score"],
-                order=row["order"],
-            )
+            name = row["name"].strip()
+            comp = existing.get(name.lower())
+            if comp is None:
+                AssessmentComponent.objects.create(
+                    section=section, name=name, max_score=row["max_score"], order=row["order"]
+                )
+            else:
+                comp.name = name
+                comp.max_score = row["max_score"]
+                comp.order = row["order"]
+                comp.save(update_fields=["name", "max_score", "order"])
         items = list(
             AssessmentComponent.objects.filter(section=section).values_list("name", "max_score")
         )
@@ -108,10 +133,22 @@ def set_electives(
         )
         added = sorted(wanted - current)
         removed = sorted((current - wanted) | stale)
-        # Task 4: refuse removal when scores exist
-        for sid in removed:
-            if scope.has_student_scores(offering, Student.objects.get(pk=sid)):
-                raise ValidationError("A student with scores for this subject cannot be removed.")
+        # Students still in the class keep the subject once they have scores. Stale choices
+        # (moved or withdrawn students) always go; their scores stay as history.
+        still_enrolled = (current - wanted) - stale
+        with_scores = (
+            Score.objects.filter(
+                offering=offering, student_id__in=still_enrolled, value__isnull=False
+            )
+            .values("student_id")
+            .distinct()
+            .count()
+        )
+        if with_scores:
+            noun = "student already has" if with_scores == 1 else "students already have"
+            raise ValidationError(
+                f"{with_scores} {noun} scores for this subject and cannot be removed."
+            )
         ElectiveChoice.objects.filter(offering=offering, student_id__in=removed).delete()
         ElectiveChoice.objects.bulk_create(
             [ElectiveChoice(offering=offering, student_id=sid) for sid in added]

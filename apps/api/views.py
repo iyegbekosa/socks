@@ -13,8 +13,9 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.academics.models import SubjectOffering, Term
 from apps.academics.scope import students_visible_to
-from apps.academics.services import current_session
+from apps.academics.services import current_session, current_term
 from apps.accounts.roles import (
     BURSAR,
     PRINCIPAL,
@@ -27,9 +28,20 @@ from apps.api.serializers import (
     ImportJobSerializer,
     ImportUploadSerializer,
     StudentListSerializer,
+    sheet_data_json,
 )
+from apps.core.errors import ApiError
+from apps.core.parsing import parse_id
 from apps.imports.models import ImportJob
 from apps.imports.services import ImportNotReady, create_import_job
+from apps.results.scope import can_enter_scores
+from apps.results.scores import (
+    CellInput,
+    ResultsLocked,
+    VersionConflict,
+    save_cells,
+    sheet_rows,
+)
 from apps.students.models import Enrolment, Student
 from apps.tenancy.limits import PlanLimitExceeded
 
@@ -145,3 +157,124 @@ class ImportDetailView(APIView):
     def get(self, request: Request, pk: int) -> Response:
         job = get_object_or_404(ImportJob, pk=pk)
         return Response(ImportJobSerializer(job).data)
+
+
+MAX_CELLS = 2000
+CELL_KEYS = {"student", "component", "value", "version"}
+
+
+def _bad(field: str, message: str) -> ApiError:
+    return ApiError(
+        "VALIDATION_ERROR",
+        "Some fields are invalid.",
+        400,
+        [{"field": field, "message": message}],
+    )
+
+
+def _forbidden() -> ApiError:
+    return ApiError("FORBIDDEN", "Only the subject's teacher can enter its scores.", 403)
+
+
+def _json_id(raw: Any) -> int | None:
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw if 0 < raw < 10**18 else None
+    return parse_id(raw) if isinstance(raw, str) else None
+
+
+def _parse_cells(data: Any) -> list[CellInput]:
+    if not isinstance(data, dict) or not isinstance(data.get("cells"), list):
+        raise _bad("cells", "Send a list of cells.")
+    raw_cells = data["cells"]
+    if len(raw_cells) > MAX_CELLS:
+        raise _bad("cells", f"Send at most {MAX_CELLS} cells at a time.")
+    cells = []
+    for i, raw in enumerate(raw_cells):
+        if not isinstance(raw, dict) or set(raw) != CELL_KEYS:
+            raise _bad(f"cells.{i}", "Each cell needs student, component, value and version.")
+        student, component = _json_id(raw["student"]), _json_id(raw["component"])
+        if student is None:
+            raise _bad(f"cells.{i}.student", "Must be a student id.")
+        if component is None:
+            raise _bad(f"cells.{i}.component", "Must be a component id.")
+        version = raw["version"]
+        if isinstance(version, bool) or not isinstance(version, int) or not 0 <= version < 2**31:
+            raise _bad(f"cells.{i}.version", "Must be a whole number from 0.")
+        value = raw["value"]
+        if isinstance(value, bool) or not isinstance(value, str | int | float | None):
+            raise _bad(f"cells.{i}.value", "Must be a number, a string or null.")
+        if isinstance(value, int | float):
+            value = str(value)
+        cells.append(CellInput(student, component, value, version))
+    return cells
+
+
+class ScoresView(APIView):
+    """GET/PUT one score sheet: ``?offering=<id>&term=<id>`` (term defaults to the current one).
+
+    Only the teacher assigned to the offering may use it (FR-06).
+    """
+
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["get", "put", "head", "options"]
+
+    def _sheet(self, request: Request) -> tuple[SubjectOffering, Term]:
+        user = request.user
+        if user.is_student or not user.has_role(TEACHER):  # type: ignore[union-attr]
+            raise _forbidden()
+        params = request.query_params
+        offering_id = parse_id(params.get("offering", ""))
+        if offering_id is None:
+            raise _bad("offering", "Must be a subject id.")
+        raw_term = params.get("term")
+        term_id = None
+        if raw_term is not None:
+            term_id = parse_id(raw_term)
+            if term_id is None:
+                raise _bad("term", "Must be a term id.")
+        offering = get_object_or_404(
+            SubjectOffering.objects.select_related("arm__level"), pk=offering_id
+        )
+        if not can_enter_scores(user, offering):
+            raise _forbidden()
+        if term_id is None:
+            term = current_term()
+            if term is None:
+                raise ApiError("VALIDATION_ERROR", "Set a current term first", 400)
+        else:
+            term = Term.objects.filter(pk=term_id).first()  # type: ignore[assignment]
+        if term is None or term.session_id != offering.session_id:
+            raise _bad("term", "Choose a term in this subject's session.")
+        return offering, term
+
+    def get(self, request: Request) -> Response:
+        offering, term = self._sheet(request)
+        return Response(sheet_data_json(sheet_rows(offering, term)))
+
+    def put(self, request: Request) -> Response:
+        offering, term = self._sheet(request)
+        cells = _parse_cells(request.data)
+        try:
+            result = save_cells(offering, term, cells, by=request.user, request=request)
+        except ResultsLocked as exc:
+            raise ApiError("RESULTS_LOCKED", exc.message, 409) from exc
+        except VersionConflict as exc:
+            raise ApiError(
+                "VERSION_CONFLICT",
+                "Someone else changed some of these scores. Reload to see their values.",
+                409,
+                exc.conflicts,
+            ) from exc
+        except DjangoValidationError as exc:
+            if hasattr(exc, "error_dict"):
+                details = [
+                    {"field": key, "message": message}
+                    for key, messages in exc.message_dict.items()
+                    for message in messages
+                ]
+            else:
+                details = [{"field": "non_field_errors", "message": m} for m in exc.messages]
+            raise ApiError("VALIDATION_ERROR", "Some scores are invalid.", 400, details) from exc
+        return Response({"versions": result.versions})

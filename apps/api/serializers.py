@@ -49,3 +49,19 @@ class ImportJobSerializer(serializers.ModelSerializer):  # type: ignore[type-arg
 
 class ImportUploadSerializer(serializers.Serializer):  # type: ignore[type-arg]
     file = serializers.FileField()
+
+
+def sheet_data_json(data: Any) -> dict[str, Any]:
+    """The score grid (``apps.results.scores.SheetData``) as the API returns it."""
+    return {
+        "offering": data.offering.pk,
+        "term": data.term.pk,
+        "sheet_status": data.sheet_status,
+        "class_status": data.class_status,
+        "editable": data.editable,
+        "components": [
+            {"id": c.pk, "name": c.name, "max_score": c.max_score, "order": c.order}
+            for c in data.components
+        ],
+        "rows": data.rows,
+    }

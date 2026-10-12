@@ -115,6 +115,29 @@ def _current_term_in_a() -> None:
     )
 
 
+def _score_in_active_schema():
+    """A saved score (with its offering, term, student and component) in the active schema."""
+    from decimal import Decimal
+
+    from apps.results.models import Score
+    from tests.results.factories import make_sheet_world
+
+    w = make_sheet_world()
+    return Score.objects.create(
+        student=w.students[0],
+        offering=w.offering,
+        term=w.term,
+        component=w.comps[0],
+        value=Decimal("4"),
+        version=1,
+        entered_by=w.teacher,
+    )
+
+
+def _scores_url(score) -> str:
+    return f"/api/v1/scores?offering={score.offering_id}&term={score.term_id}"
+
+
 def _tiny_csv() -> dict:
     from django.core.files.uploadedfile import SimpleUploadedFile
 
@@ -170,6 +193,17 @@ ISOLATION_CASES: list[IsolationCase] = [
         "GET",
         url=lambda j: f"/api/v1/imports/{j.pk}",
         make_obj=_import_job,
+    ),
+    # Scores are the assigned teacher's only, so school A's admin is refused outright (403);
+    # tests/api/test_scores_api.py::test_teacher_in_a_cannot_reach_school_b_scores covers a
+    # teacher assigned in school A asking for school B's offering.
+    IsolationCase("api:scores", "GET", url=_scores_url, make_obj=_score_in_active_schema),
+    IsolationCase(
+        "api:scores",
+        "PUT",
+        url=_scores_url,
+        make_obj=_score_in_active_schema,
+        body={"cells": [{"student": 1, "component": 1, "value": "9", "version": 1}]},
     ),
 ]
 
