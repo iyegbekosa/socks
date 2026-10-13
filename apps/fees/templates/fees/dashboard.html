@@ -21,9 +21,11 @@
   <dl class="facts">
     <dt>Invoiced</dt><dd>{{ invoiced_kobo|naira }}</dd>
     <dt>Collected</dt><dd>{{ collected_kobo|naira }}</dd>
-    <dt>Outstanding</dt><dd>{{ outstanding_kobo|naira }}</dd>
+    <dt>Outstanding on this term's invoices</dt><dd>{{ outstanding_kobo|naira }}</dd>
+    <dt>Owed up to this term</dt><dd><a href="{% url 'fees:debtors' %}?term={{ term.pk }}">{{ owed_kobo|naira }}</a></dd>
   </dl>
-  <p class="hint">Invoiced includes balances brought forward from earlier terms. Outstanding leaves out balances carried into a later invoice, so invoiced minus collected equals outstanding plus any balances carried forward from this term.</p>
+  <p class="hint">Invoiced, Collected and Outstanding count only invoices for this term. Invoiced includes balances brought forward from earlier terms; Outstanding leaves out balances carried into a later invoice, so invoiced minus collected equals outstanding plus any balances carried forward from this term.</p>
+  <p class="hint">Owed up to this term counts open balances on invoices for this term and every earlier term, exactly as the Debtors list does for this term.</p>
   <p><a href="{% url 'fees:debtors' %}?term={{ term.pk }}">Debtors list</a> · <a href="{% url 'fees:invoices' %}?term={{ term.pk }}">Invoices</a></p>
   {% else %}<p>No terms yet. Ask the school admin to set up the academic session first.</p>{% endif %}
 </div>

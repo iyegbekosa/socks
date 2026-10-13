@@ -21,7 +21,8 @@
     <button type="submit" name="export" value="csv">Download CSV</button>
   </form>
   <h2>{{ term }}</h2>
-  <p class="hint">Balances on invoices for this term and earlier terms. A balance carried into a later invoice is counted once, on the invoice it was carried into.</p>
+  <p class="hint">Counts open balances on invoices for this term and every earlier term (the dashboard's "Owed up to this term"). A balance carried into a later invoice is counted once, on the invoice it was carried into, so it appears under that later term.</p>
+  <p class="hint">A student whose debt for this term was carried into a later term is not listed here, but their results for this term can still be withheld while that debt is unpaid. Choose the later term to find them.</p>
   <p>{{ rows|length }} student(s) owing {{ total_balance_kobo|naira }} in all.</p>
   <table>
     <thead><tr><th>Admission no.</th><th>Name</th><th>Class</th><th>Total</th><th>Paid</th><th>Balance</th><th>Last payment</th></tr></thead>

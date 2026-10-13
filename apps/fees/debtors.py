@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from django.db.models import F, Max, Sum
+from django.db.models import F, Max, QuerySet, Sum
 
 from apps.academics.models import ClassArm, ClassLevel, Term
 from apps.fees.invoicing import _earlier_terms_q
@@ -25,6 +25,24 @@ class DebtorRow:
         return self.student.status != Student.Status.ACTIVE
 
 
+def owing_invoices(term: Term) -> QuerySet[Invoice]:
+    """Open invoices with a balance, for ``term`` and every earlier term: the one scope of
+    "owing as of a term" shared by the debtors list and the dashboard's "Owed up to this term".
+    Carried invoices are left out, since their balance sits on the later invoice."""
+    return (
+        Invoice.objects.filter(_earlier_terms_q(term, inclusive=True))
+        .exclude(status=Invoice.CARRIED)
+        .filter(total_kobo__gt=F("paid_kobo"))
+    )
+
+
+def total_owed(term: Term) -> int:
+    """Sum of balances on ``owing_invoices(term)``: equals the debtors list total for the term
+    with no filters."""
+    total = owing_invoices(term).aggregate(b=Sum(F("total_kobo") - F("paid_kobo")))["b"]
+    return int(total or 0)
+
+
 def debtors(
     term: Term,
     *,
@@ -40,11 +58,7 @@ def debtors(
     ``level``/``arm`` filter on the student's enrolment in ``term.session``.
     """
     minimum = max(1, min_balance_kobo)
-    invoices = (
-        Invoice.objects.filter(_earlier_terms_q(term, inclusive=True))
-        .exclude(status=Invoice.CARRIED)
-        .filter(total_kobo__gt=F("paid_kobo"))
-    )
+    invoices = owing_invoices(term)
     if level is not None or arm is not None:
         enrolled = Enrolment.objects.filter(session_id=term.session_id)
         if level is not None:

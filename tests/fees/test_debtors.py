@@ -326,6 +326,27 @@ def test_dashboard_with_a_carried_term(school_a, client_a):
     )
 
 
+def test_dashboard_owed_matches_debtors_list_and_pages_explain_scope(school_a, client_a):
+    """M6/M7: "Owed up to this term" is the debtors list total for the same term."""
+    with schema_context("school_a"):
+        w = _world()
+        item = make_item()
+        make_structure(w.level, w.term1, [(item, 1_000_000, False)])
+        make_structure(w.level, w.term2, [(item, 2_000_000, False)])
+        invoicing.generate_invoices(w.term1, by=w.bursar)
+        invoicing.generate_invoices(w.term2, by=w.bursar)  # term-1 balance carried
+    login_verified(client_a, w.bursar)
+    for term in (w.term1, w.term2):
+        dash = client_a.get(DASHBOARD, {"term": term.pk})
+        page = client_a.get(URL, {"term": term.pk})
+        assert dash.context["owed_kobo"] == page.context["total_balance_kobo"]
+        assert "Owed up to this term counts open balances" in dash.content.decode()
+        body = page.content.decode()
+        assert "Counts open balances on invoices for this term and every earlier term" in body
+        assert "can still be withheld" in body
+    assert client_a.get(DASHBOARD, {"term": w.term2.pk}).context["owed_kobo"] == 3_000_000
+
+
 def test_home_links_to_dashboard(w, client_a):
     login_verified(client_a, w.bursar)
     html = client_a.get(reverse("home")).content.decode()

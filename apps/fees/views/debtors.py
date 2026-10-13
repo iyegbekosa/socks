@@ -121,8 +121,9 @@ def _today_bounds() -> tuple[datetime, datetime]:
 @require_roles(*VIEW_ROLES)
 def dashboard(request):
     term = _term_or_404(request)
-    invoiced = collected = outstanding = 0
+    invoiced = collected = outstanding = owed = 0
     if term is not None:
+        owed = debtors_service.total_owed(term)
         invoiced = Invoice.objects.filter(term=term).aggregate(t=Sum("total_kobo"))["t"] or 0
         collected = (
             Allocation.objects.filter(invoice__term=term).aggregate(t=Sum("amount_kobo"))["t"] or 0
@@ -154,6 +155,7 @@ def dashboard(request):
             "invoiced_kobo": int(invoiced),
             "collected_kobo": int(collected),
             "outstanding_kobo": int(outstanding),
+            "owed_kobo": owed,
             "today_kobo": int(today),
             "pending_count": pending,
             "flagged_count": flagged,
