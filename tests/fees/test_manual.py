@@ -18,12 +18,12 @@ from django_tenants.utils import schema_context
 from PIL import Image
 
 from apps.audit.models import AuditEvent
-from apps.fees import hooks, ledger, manual
+from apps.fees import hooks, invoicing, ledger, manual
 from apps.fees.ledger import PlannedLine
 from apps.fees.models import FeeSettings, Invoice, ManualPayment, Payment, Receipt
 from apps.tenancy.limits import PlanLimitExceeded
 from tests.accounts.helpers import login_verified
-from tests.fees.factories import make_staff
+from tests.fees.factories import make_item, make_staff, make_structure
 from tests.fees.test_ledger import _invoice, _world
 from tests.results.test_cards import PNG, Uploads
 from tests.students.factories import StudentProfileFactory
@@ -631,3 +631,25 @@ def test_receipt_shows_teller_number(school_a, uploads, django_capture_on_commit
         receipt = Receipt.objects.get(payment=payment)
         text = pdf_text(uploads.files[f"dev/school_a/receipts/{receipt.year}/{receipt.pk}.pdf"])
         assert "TLR-55501" in text
+
+
+def test_pending_approval_then_next_term_generated_pays_the_new_invoice(school_a):
+    """I1 / Ruling Q: a manual payment waits for approval while 2nd-term invoices are
+    generated; on approval the money follows the carried debt to the new invoice."""
+    with schema_context("school_a"):
+        w = _mworld()  # 1st-term invoice of 100,000
+        mp = _record(w, 6_000_000, method="teller")
+        assert mp.status == ManualPayment.PENDING
+        make_structure(w.level, w.term2, [(make_item("Tuition"), 2_000_000, False)])
+        invoicing.generate_invoices(w.term2, by=w.bursar)
+        term2_inv = Invoice.objects.get(student=w.student, term=w.term2)
+        assert term2_inv.total_kobo == 12_000_000
+        payment = manual.approve(mp, by=w.admin)
+        assert not payment.flagged and payment.unallocated_kobo == 0
+        assert list(payment.allocations.values_list("invoice_id", "amount_kobo")) == [
+            (term2_inv.pk, 6_000_000)
+        ]
+        term2_inv.refresh_from_db()
+        assert term2_inv.paid_kobo == 6_000_000
+        w.inv.refresh_from_db()
+        assert w.inv.status == Invoice.CARRIED and w.inv.paid_kobo == 0

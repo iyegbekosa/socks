@@ -1,8 +1,10 @@
 """The ledger: the only place a Payment, its Allocations and its Receipt are created.
 
-Lock order inside ``confirm_payment``: invoice rows ``FOR UPDATE`` in ascending pk order, then
-the ``ReceiptCounter`` row for the year. No school lock is taken here, so callers may hold
-``school_lock(f"fees:student:{pk}")`` first (the same order as ``invoicing``).
+Lock order inside ``confirm_payment``: invoice rows ``FOR UPDATE`` in ascending pk order (the
+planned invoices plus, for a planned invoice that was carried, its student's newest non-carried
+invoice: Ruling Q), then the ``ReceiptCounter`` row for the year. No school lock is taken here,
+so callers may hold ``school_lock(f"fees:student:{pk}")`` first (the same order as
+``invoicing``).
 """
 
 from dataclasses import dataclass
@@ -85,6 +87,58 @@ def _available(invoice: Invoice) -> int:
     return max(invoice.balance_kobo, 0)
 
 
+# How many times to re-resolve redirect targets when a carry races the lock.
+_LOCK_TRIES = 3
+
+
+def _redirect_targets(ids: list[int]) -> dict[int, int]:
+    """For each carried invoice in ``ids``: its student's newest non-carried invoice (by the
+    shared term ordering). Carried invoices whose student has no open invoice are left out."""
+    carried = dict(
+        Invoice.objects.filter(pk__in=ids, status=Invoice.CARRIED).values_list("pk", "student_id")
+    )
+    if not carried:
+        return {}
+    newest: dict[int, int] = {}
+    rows = (
+        Invoice.objects.filter(student_id__in=set(carried.values()))
+        .exclude(status=Invoice.CARRIED)
+        .order_by("student_id", "-term__session__start_date", "-term__number", "-pk")
+        .values_list("student_id", "pk")
+    )
+    for student_id, pk in rows:
+        newest.setdefault(student_id, pk)
+    return {pk: newest[sid] for pk, sid in carried.items() if sid in newest}
+
+
+def _lock_invoices(ids: list[int]) -> tuple[dict[int, Invoice], dict[int, int]]:
+    """Lock the planned invoices and their redirect targets in one ascending-pk pass.
+
+    Targets are resolved first without a lock, then everything is locked, then re-resolved. If
+    a carry committed in between (the target changed), the savepoint is rolled back (releasing
+    those row locks) and the pass is repeated. On the last try the locked set is used as is,
+    redirecting only to a locked invoice that is still open."""
+    for attempt_no in range(_LOCK_TRIES):
+        targets = _redirect_targets(ids)
+        lock_ids = sorted(set(ids) | set(targets.values()))
+        sid = transaction.savepoint()
+        invoices = {
+            inv.pk: inv
+            for inv in Invoice.objects.select_for_update().filter(pk__in=lock_ids).order_by("pk")
+        }
+        fresh = _redirect_targets(ids)
+        if fresh == targets or attempt_no == _LOCK_TRIES - 1:
+            transaction.savepoint_commit(sid)
+            usable = {
+                pk: target
+                for pk, target in fresh.items()
+                if target in invoices and invoices[target].status != Invoice.CARRIED
+            }
+            return invoices, usable
+        transaction.savepoint_rollback(sid)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 def confirm_payment(
     *,
     student: Student,
@@ -104,33 +158,41 @@ def confirm_payment(
     same reference, or for the same ManualPayment or PaymentAttempt, returns the first Payment
     unchanged. Each planned line is capped at the invoice's balance and at what is left of the
     payment; any excess is kept as ``unallocated_kobo`` and the payment flagged.
+
+    A line planned for an invoice that has since been carried (next term generated while the
+    payment was pending) goes to that student's newest non-carried invoice, where the debt now
+    sits (Ruling Q), still capped at that invoice's balance. Each allocation records the
+    invoice's balance just after this payment (``balance_after_kobo``, Ruling T).
     """
     _validate(amount_kobo, method, plan, paid_at)
     gateway_reference = gateway_reference or None
 
     with transaction.atomic():
         ids = sorted({line.invoice_id for line in plan})
-        invoices = {
-            inv.pk: inv
-            for inv in Invoice.objects.select_for_update().filter(pk__in=ids).order_by("pk")
-        }
+        invoices, targets = _lock_invoices(ids)
         existing = _existing_payment(gateway_reference, manual, attempt)
         if existing is not None:
             return existing
-        if len(invoices) != len(ids):
+        if any(pk not in invoices for pk in ids):
             raise ValueError("The plan names an invoice that does not exist.")
 
         remaining = amount_kobo
         planned: dict[int, int] = {}  # invoice pk -> kobo, in plan order
+        redirected: list[dict[str, int]] = []
         for line in plan:
-            invoice = invoices[line.invoice_id]
-            take = min(
-                line.amount_kobo, _available(invoice) - planned.get(invoice.pk, 0), remaining
-            )
+            pk = line.invoice_id
+            if invoices[pk].status == Invoice.CARRIED and pk in targets:
+                pk = targets[pk]
+            invoice = invoices[pk]
+            take = min(line.amount_kobo, _available(invoice) - planned.get(pk, 0), remaining)
             if take <= 0:
                 continue
-            planned[invoice.pk] = planned.get(invoice.pk, 0) + take
+            planned[pk] = planned.get(pk, 0) + take
             remaining -= take
+            if pk != line.invoice_id:
+                redirected.append(
+                    {"from_invoice_id": line.invoice_id, "to_invoice_id": pk, "amount_kobo": take}
+                )
 
         try:
             with transaction.atomic():
@@ -158,15 +220,21 @@ def confirm_payment(
                 return Payment.objects.get(attempt=attempt)
             raise
 
-        Allocation.objects.bulk_create(
-            Allocation(payment=payment, invoice_id=pk, amount_kobo=kobo)
-            for pk, kobo in planned.items()
-        )
+        allocations: list[Allocation] = []
         for pk, kobo in planned.items():
             invoice = invoices[pk]
             invoice.paid_kobo += kobo
             invoice.save(update_fields=["paid_kobo", "updated_at"])
             invoicing.recompute(invoice)
+            allocations.append(
+                Allocation(
+                    payment=payment,
+                    invoice_id=pk,
+                    amount_kobo=kobo,
+                    balance_after_kobo=invoice.balance_kobo,
+                )
+            )
+        Allocation.objects.bulk_create(allocations)
 
         year = timezone.localtime(timezone.now()).year
         receipt = Receipt.objects.create(
@@ -187,6 +255,7 @@ def confirm_payment(
                 "allocations": [
                     {"invoice_id": pk, "amount_kobo": kobo} for pk, kobo in planned.items()
                 ],
+                **({"redirected": redirected} if redirected else {}),
                 "receipt_id": receipt.pk,
             },
         )

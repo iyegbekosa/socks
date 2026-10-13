@@ -12,13 +12,13 @@ from django_tenants.utils import schema_context
 
 from apps.audit.models import AuditEvent
 from apps.core.logging import SECRET_ARG_TASKS
-from apps.fees import checkout, confirm, hooks, ledger, manual, tasks
+from apps.fees import checkout, confirm, hooks, invoicing, ledger, manual, tasks
 from apps.fees.gateways import GatewayUnavailable, VerifyResult
 from apps.fees.gateways.fake import FakeGateway
 from apps.fees.ledger import PlannedLine
 from apps.fees.models import Allocation, Invoice, Payment, PaymentAttempt, Receipt
 from apps.tenancy.models import School
-from tests.fees.factories import make_staff
+from tests.fees.factories import make_item, make_staff, make_structure
 from tests.fees.test_ledger import _invoice, _world
 
 pytestmark = pytest.mark.django_db
@@ -378,3 +378,91 @@ def test_exhausted_retries_raise_and_leave_attempt_pending(w):
     attempt.refresh_from_db()
     assert attempt.status == PaymentAttempt.PENDING
     assert Payment.objects.count() == 0
+
+
+@pytest.mark.parametrize("previous", [PaymentAttempt.FAILED, PaymentAttempt.ABANDONED])
+def test_late_success_after_failed_or_abandoned_is_credited_once(w, previous):
+    attempt = _start(w)
+    PaymentAttempt.objects.filter(pk=attempt.pk).update(status=previous)
+    with _with_verify(_verify()):
+        assert confirm.process_attempt(attempt.reference) == PaymentAttempt.SUCCESS
+    payment = Payment.objects.get(attempt=attempt)
+    assert list(payment.allocations.values_list("invoice_id", "amount_kobo")) == [
+        (w.inv.pk, 5_000_000)
+    ]
+    assert AuditEvent.objects.get(action="fees.attempt_late_success").after == {
+        "attempt_id": attempt.pk
+    }
+    with _with_verify(_verify()) as verify:  # now final
+        assert confirm.process_attempt(attempt.reference) == PaymentAttempt.SUCCESS
+    verify.assert_not_called()
+    assert Payment.objects.count() == 1
+
+
+def test_failed_attempt_finalised_while_verifying_is_not_credited_twice(w):
+    """Race stand-in from FAILED: another worker credits the late success first."""
+    attempt = _start(w)
+    PaymentAttempt.objects.filter(pk=attempt.pk).update(status=PaymentAttempt.FAILED)
+
+    def racing_verify(self, reference):
+        with mock.patch.object(FakeGateway, "verify", return_value=_verify()):
+            confirm.process_attempt(reference)
+        return _verify()
+
+    with mock.patch.object(FakeGateway, "verify", racing_verify):
+        assert confirm.process_attempt(attempt.reference) == PaymentAttempt.SUCCESS
+    assert (Payment.objects.count(), Receipt.objects.count(), Allocation.objects.count()) == (
+        1,
+        1,
+        1,
+    )
+    assert AuditEvent.objects.filter(action="fees.attempt_late_success").count() == 1
+
+
+def _generate_next_term(w, fee_kobo=2_000_000):
+    """The bursar generates 2nd-term invoices: the 1st-term balance is carried forward."""
+    make_structure(w.level, w.term2, [(make_item("Tuition"), fee_kobo, False)])
+    assert invoicing.generate_invoices(w.term2, by=w.bursar).created == 1
+    w.inv.refresh_from_db()
+    assert w.inv.status == Invoice.CARRIED
+    return Invoice.objects.get(student=w.student, term=w.term2)
+
+
+def test_webhook_after_next_term_generated_pays_the_new_invoice(w):
+    """I1 / Ruling Q: pending online payment, next term generated, then the webhook confirms."""
+    attempt = _start(w)
+    term2_inv = _generate_next_term(w)
+    assert term2_inv.total_kobo == 7_000_000  # 20,000 fees + 50,000 brought forward
+    with _with_verify(_verify()):
+        assert confirm.process_attempt(attempt.reference) == PaymentAttempt.SUCCESS
+    payment = Payment.objects.get(attempt=attempt)
+    assert not payment.flagged and payment.unallocated_kobo == 0
+    assert list(payment.allocations.values_list("invoice_id", "amount_kobo")) == [
+        (term2_inv.pk, 5_000_000)
+    ]
+    term2_inv.refresh_from_db()
+    assert term2_inv.paid_kobo == 5_000_000 and term2_inv.status == Invoice.PART_PAID
+    w.inv.refresh_from_db()
+    assert w.inv.paid_kobo == 0 and w.inv.status == Invoice.CARRIED
+    assert invoicing.outstanding_for(w.student) == 2_000_000
+
+
+def test_webhook_after_next_term_generated_flags_only_the_overpaid_part(w):
+    attempt = _start(w)
+    term2_inv = _generate_next_term(w)
+    ledger.confirm_payment(  # cash at the counter meanwhile: 60,000 of the 70,000
+        student=w.student,
+        amount_kobo=6_000_000,
+        method="cash",
+        plan=[PlannedLine(term2_inv.pk, 6_000_000)],
+        paid_at=PAID_AT,
+        recorded_by=w.bursar,
+        approved_by=w.bursar,
+    )
+    with _with_verify(_verify()):
+        confirm.process_attempt(attempt.reference)
+    payment = Payment.objects.get(attempt=attempt)
+    assert list(payment.allocations.values_list("invoice_id", "amount_kobo")) == [
+        (term2_inv.pk, 1_000_000)
+    ]
+    assert payment.flagged and payment.unallocated_kobo == 4_000_000

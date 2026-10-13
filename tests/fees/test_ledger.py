@@ -1,5 +1,5 @@
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from unittest import mock
 
 import pytest
@@ -9,7 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django_tenants.utils import schema_context
 
-from apps.academics.models import AcademicSettings
+from apps.academics.models import AcademicSettings, Term
 from apps.audit.models import AuditEvent
 from apps.fees import hooks, invoicing, ledger
 from apps.fees.ledger import PlannedLine
@@ -194,19 +194,99 @@ def test_rollback_leaves_counter_unchanged(school_a):
         assert payment.receipt.number == "GFS/RCT/2026/000001"
 
 
-def test_carried_invoice_takes_nothing_and_excess_is_flagged(school_a):
+def test_carried_invoice_amount_goes_to_newest_open_invoice(school_a):
+    """Ruling Q: the carry moved the debt, so the money follows it, capped at the balance."""
     with schema_context("school_a"):
         w = _world()
         carried = _invoice(w.student, w.term1, 3_000_000, status=Invoice.CARRIED)
         open_ = _invoice(w.student, w.term2, 2_000_000)
         payment = _confirm(w, [(carried, 3_000_000), (open_, 500_000)], 3_500_000)
         allocs = {al.invoice_id: al.amount_kobo for al in payment.allocations.all()}
-        assert allocs == {open_.pk: 500_000}
-        assert payment.unallocated_kobo == 3_000_000 and payment.flagged
+        assert allocs == {open_.pk: 2_000_000}  # capped at its balance
+        assert payment.unallocated_kobo == 1_500_000 and payment.flagged
         carried.refresh_from_db()
         assert carried.paid_kobo == 0 and carried.status == Invoice.CARRIED
         open_.refresh_from_db()
-        assert open_.status == Invoice.PART_PAID
+        assert open_.status == Invoice.PAID
+        ev = AuditEvent.objects.get(action="fees.payment_confirmed")
+        assert ev.after["allocations"] == [{"invoice_id": open_.pk, "amount_kobo": 2_000_000}]
+        assert ev.after["redirected"] == [
+            {"from_invoice_id": carried.pk, "to_invoice_id": open_.pk, "amount_kobo": 2_000_000}
+        ]
+
+
+def test_carried_redirect_within_balance_is_not_flagged(school_a):
+    with schema_context("school_a"):
+        w = _world()
+        carried = _invoice(w.student, w.term1, 3_000_000, status=Invoice.CARRIED)
+        open_ = _invoice(w.student, w.term2, 5_000_000)
+        payment = _confirm(w, [(carried, 3_000_000)], 3_000_000)
+        assert list(payment.allocations.values_list("invoice_id", "amount_kobo")) == [
+            (open_.pk, 3_000_000)
+        ]
+        assert payment.unallocated_kobo == 0 and not payment.flagged
+        assert payment.allocations.get().balance_after_kobo == 2_000_000
+
+
+def test_carried_invoice_with_no_open_invoice_is_unallocated(school_a):
+    with schema_context("school_a"):
+        w = _world()
+        carried = _invoice(w.student, w.term1, 3_000_000, status=Invoice.CARRIED)
+        other = StudentProfileFactory()
+        _invoice(other, w.term2, 5_000_000)  # another student's open invoice is never used
+        payment = _confirm(w, [(carried, 3_000_000)], 3_000_000)
+        assert not payment.allocations.exists()
+        assert payment.unallocated_kobo == 3_000_000 and payment.flagged
+
+
+def test_redirect_target_locked_with_planned_invoices_in_one_pk_pass(school_a):
+    with schema_context("school_a"):
+        w = _world()
+        carried = _invoice(w.student, w.term1, 3_000_000, status=Invoice.CARRIED)
+        open_ = _invoice(w.student, w.term2, 5_000_000)
+        with CaptureQueriesContext(connection) as ctx:
+            _confirm(w, [(carried, 3_000_000)], 3_000_000)
+        invoice_locks = [
+            q["sql"]
+            for q in ctx.captured_queries
+            if "FOR UPDATE" in q["sql"] and 'FROM "fees_invoice"' in q["sql"]
+        ]
+        assert len(invoice_locks) == 1, invoice_locks
+        assert re.search(r'ORDER BY "fees_invoice"\."id" ASC', invoice_locks[0])
+        assert str(carried.pk) in invoice_locks[0] and str(open_.pk) in invoice_locks[0]
+
+
+def test_target_carried_between_read_and_lock_is_re_resolved(school_a):
+    """A carry that commits after the unlocked read: the pass is repeated with the new target."""
+    with schema_context("school_a"):
+        w = _world()
+        carried = _invoice(w.student, w.term1, 3_000_000, status=Invoice.CARRIED)
+        middle = _invoice(w.student, w.term2, 1_000_000)
+        newest = {}
+        real = ledger._redirect_targets
+        calls = {"n": 0}
+
+        def racing(ids):
+            calls["n"] += 1
+            out = real(ids)
+            if calls["n"] == 1:  # after the first unlocked read, a later term is generated
+                term3 = Term.objects.create(
+                    session=w.session,
+                    number=3,
+                    start_date=date(2027, 4, 20),
+                    end_date=date(2027, 7, 20),
+                )
+                newest["inv"] = _invoice(w.student, term3, 4_000_000)
+                Invoice.objects.filter(pk=middle.pk).update(status=Invoice.CARRIED)
+            return out
+
+        with mock.patch.object(ledger, "_redirect_targets", side_effect=racing):
+            payment = _confirm(w, [(carried, 3_000_000)], 3_000_000)
+        assert calls["n"] >= 3
+        assert list(payment.allocations.values_list("invoice_id", "amount_kobo")) == [
+            (newest["inv"].pk, 3_000_000)
+        ]
+        assert not payment.flagged
 
 
 def test_invoices_locked_for_update_in_pk_order_before_counter(school_a):

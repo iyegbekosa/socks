@@ -428,6 +428,9 @@ class Allocation(models.Model):
     payment = models.ForeignKey(Payment, on_delete=models.PROTECT, related_name="allocations")
     invoice = models.ForeignKey(Invoice, on_delete=models.PROTECT, related_name="allocations")
     amount_kobo = models.BigIntegerField()
+    # The invoice's balance just after this payment was applied (Ruling T). Null for
+    # allocations made before it was recorded.
+    balance_after_kobo = models.BigIntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ["pk"]
@@ -435,6 +438,9 @@ class Allocation(models.Model):
             models.UniqueConstraint(fields=["payment", "invoice"], name="fees_allocation_unique"),
             models.CheckConstraint(
                 condition=Q(amount_kobo__gt=0), name="fees_allocation_amount_gt0"
+            ),
+            models.CheckConstraint(
+                condition=Q(balance_after_kobo__gte=0), name="fees_allocation_balance_after_gte0"
             ),
         ]
 
