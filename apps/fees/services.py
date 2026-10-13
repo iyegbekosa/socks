@@ -64,7 +64,8 @@ def save_settings(values: dict[str, Any], *, by: Any, request: Any = None) -> Fe
 
     Only a school admin may change ``manual_approval_threshold_kobo`` (Ruling H): otherwise
     a bursar could raise it, record a large payment that confirms at once, and lower it.
-    The audit lists only the fields that changed (the note as ``note_changed``, not its text).
+    The audit lists only the fields that changed (the note as ``note_changed``, not its text),
+    and is skipped when nothing changed.
     """
     if THRESHOLD_FIELD in values and not (by is not None and by.has_role(SCHOOL_ADMIN)):
         raise PermissionDenied("Only a school admin can change the approval threshold.")
@@ -72,6 +73,8 @@ def save_settings(values: dict[str, Any], *, by: Any, request: Any = None) -> Fe
         school_lock("fees:settings")
         conf = FeeSettings.load()
         changed = [f for f, v in values.items() if getattr(conf, f) != v]
+        if not changed:
+            return conf
         numeric = [f for f in changed if f != "bank_transfer_note"]
         before = {f: getattr(conf, f) for f in numeric}
         for field, value in values.items():

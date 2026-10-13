@@ -247,6 +247,14 @@ def test_discount_form_requires_exactly_one_value(client_a):
         assert not Discount.objects.exists()
 
 
+def test_fixed_discount_is_listed_in_naira(client_a):
+    _login(client_a, "bursar")
+    with schema_context("school_a"):
+        make_fixed_discount("Scholarship", 500_000)
+    body = client_a.get(reverse("fees:discounts")).content.decode()
+    assert "₦5,000.00" in body and "kobo" not in body
+
+
 def test_settings_page_saves_and_audits(client_a):
     _login(client_a, "school_admin")
     r = client_a.get(reverse("fees:settings"))
@@ -267,8 +275,18 @@ def test_settings_page_saves_and_audits(client_a):
         assert conf.min_part_payment_kobo == 100_000
         assert conf.manual_approval_threshold_kobo == 2_000_000
         assert conf.block_results_when_owing is True
-        FeeSettings.objects.all().delete()
     assert len(_events("fees.settings_saved")) == 1
+    # Saving the same values again writes no audit event.
+    same = {
+        "min_part_payment": "1000",
+        "manual_approval_threshold": "20000",
+        "block_results_when_owing": "on",
+        "bank_transfer_note": "Pay into the school account.",
+    }
+    assert client_a.post(reverse("fees:settings"), same).status_code == 302
+    assert len(_events("fees.settings_saved")) == 1
+    with schema_context("school_a"):
+        FeeSettings.objects.all().delete()
 
 
 # --- models and services --------------------------------------------------

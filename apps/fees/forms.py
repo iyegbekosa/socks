@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 from django import forms
@@ -18,11 +19,26 @@ from apps.fees.models import (
 NAIRA_ATTRS = {"inputmode": "decimal", "autocomplete": "off"}
 
 
+# Commas are accepted only as thousands grouping ("1,250.00"), never as a decimal mark
+# ("12,50" is refused rather than read as 1,250).
+GROUPED = re.compile(r"^\d{1,3}(,\d{3})*(\.\d{1,2})?$")
+
+
+def naira_text(raw: str) -> str:
+    """Form text without the ₦ sign and thousands commas. Raises ``ValueError`` (with the
+    ``kobo_from_naira`` "Invalid naira amount" wording) when commas are not valid grouping."""
+    text = (raw or "").strip().lstrip("₦").strip()
+    if "," in text:
+        if not GROUPED.match(text):
+            raise ValueError(f"Invalid naira amount: {text!r}")
+        text = text.replace(",", "")
+    return text
+
+
 def parse_naira(raw: str, *, label: str = "Amount") -> int:
     """Naira text from a form to kobo, raising ValidationError with a friendly message."""
-    text = (raw or "").strip().replace(",", "").lstrip("₦").strip()
     try:
-        return kobo_from_naira(text)
+        return kobo_from_naira(naira_text(raw))
     except (ValueError, TypeError) as exc:
         message = str(exc)
         if message.startswith("Invalid naira amount"):

@@ -1,4 +1,5 @@
 {% extends "core/base.html" %}
+{% load fees_money %}
 {% block title %}Discounts{% endblock %}
 {% block content %}
 <div class="card">
@@ -6,7 +7,7 @@
   {% include "fees/_nav.html" %}
   {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
   {% if discounts %}
-  <ul>{% for d in discounts %}<li><a href="{% url 'fees:discount_edit' d.pk %}">{{ d.name }}</a> <span class="muted">{% if d.kind == "percent" %}{{ d.percent }}%{% else %}{{ d.amount_kobo|default:0 }} kobo{% endif %}</span></li>{% endfor %}</ul>
+  <ul>{% for d in discounts %}<li><a href="{% url 'fees:discount_edit' d.pk %}">{{ d.name }}</a> <span class="muted">{% if d.kind == "percent" %}{{ d.percent }}%{% else %}{{ d.amount_kobo|default:0|naira }}{% endif %}</span></li>{% endfor %}</ul>
   {% else %}<p>No discounts yet.</p>{% endif %}
   {% if can_edit %}
   <h2>Add a discount</h2>

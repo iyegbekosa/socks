@@ -16,6 +16,7 @@ from apps.academics.models import ClassArm, ClassLevel, Term
 from apps.accounts.roles import require_roles
 from apps.core.money import kobo_from_naira
 from apps.fees import debtors as debtors_service
+from apps.fees.forms import naira_text
 from apps.fees.models import Allocation, Invoice, ManualPayment, Payment, PaymentAttempt
 from apps.fees.scope import VIEW_ROLES
 from apps.fees.views.invoices import _filter_obj
@@ -73,12 +74,12 @@ def debtors(request):
     term = _term_or_404(request)
     level = _filter_obj(request, "level", ClassLevel)
     arm = _filter_obj(request, "arm", ClassArm)
-    raw_min = (request.GET.get("min") or "").strip().replace(",", "")
+    raw_min = (request.GET.get("min") or "").strip()
     min_error = ""
     min_kobo = 1
     if raw_min:
         try:
-            min_kobo = max(1, kobo_from_naira(raw_min))
+            min_kobo = max(1, kobo_from_naira(naira_text(raw_min)))
         except (TypeError, ValueError):
             min_error = "Enter a valid amount in naira, for example 20000."
     rows = (

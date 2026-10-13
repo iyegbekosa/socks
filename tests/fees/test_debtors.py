@@ -174,9 +174,13 @@ def test_bad_filters(w, client_a):
     _login_bursar(client_a, w)
     assert client_a.get(URL, {"term": "x"}).status_code == 404
     assert client_a.get(URL, {"term": w.term1.pk, "arm": "99999"}).status_code == 404
-    r = client_a.get(URL, {"term": w.term1.pk, "min": "abc"})
-    assert r.status_code == 200
-    assert "Enter a valid amount" in r.content.decode()
+    for bad in ("abc", "200,00"):  # commas only as thousands grouping (M1)
+        r = client_a.get(URL, {"term": w.term1.pk, "min": bad})
+        assert r.status_code == 200
+        assert "Enter a valid amount" in r.content.decode()
+    r = client_a.get(URL, {"term": w.term1.pk, "min": "20,000"})
+    html = r.content.decode()
+    assert w.big.full_name in html and w.small.full_name not in html
 
 
 def test_csv_export_guards_formulas(w, client_a):
