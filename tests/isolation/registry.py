@@ -200,6 +200,30 @@ def _manual_payment_count() -> int:
     return ManualPayment.objects.count()
 
 
+def student_actor():
+    """A student (with a profile) in school A."""
+    from tests.students.factories import StudentProfileFactory
+
+    return StudentProfileFactory.create().user
+
+
+def _school_a_online_ready() -> None:
+    """School A has a payout subaccount, so a refusal is about the invoice, not readiness."""
+    from apps.tenancy.models import School
+
+    School.objects.filter(schema_name="school_a").update(paystack_subaccount_code="ACCT_iso")
+
+
+def _initialize_body(invoice) -> dict:
+    return {"invoices": [{"invoice": invoice.pk, "amount_kobo": 100_000}]}
+
+
+def _attempt_count() -> int:
+    from apps.fees.models import PaymentAttempt
+
+    return PaymentAttempt.objects.count()
+
+
 def _tiny_csv() -> dict:
     from django.core.files.uploadedfile import SimpleUploadedFile
 
@@ -306,6 +330,40 @@ ISOLATION_CASES: list[IsolationCase] = [
         body_for=_manual_payment_body,
         actor=None,
         label="anonymous",
+    ),
+    # A school A student posts school B's invoice id: unknown in A, so 404, and no attempt
+    # in either school. tests/api/test_payments_initialize_api.py covers the rest.
+    IsolationCase(
+        "api:payments_initialize",
+        "POST",
+        url=lambda i: "/api/v1/payments/initialize",
+        make_obj=_invoice_in_active_schema,
+        body_for=_initialize_body,
+        actor=student_actor,
+        count_model=_attempt_count,
+        setup_a=_school_a_online_ready,
+        label="student",
+    ),
+    IsolationCase(
+        "api:payments_initialize",
+        "POST",
+        url=lambda i: "/api/v1/payments/initialize",
+        make_obj=_invoice_in_active_schema,
+        body_for=_initialize_body,
+        actor=None,
+        count_model=_attempt_count,
+        label="anonymous",
+    ),
+    # Staff never start online payments: 403.
+    IsolationCase(
+        "api:payments_initialize",
+        "POST",
+        url=lambda i: "/api/v1/payments/initialize",
+        make_obj=_invoice_in_active_schema,
+        body_for=_initialize_body,
+        count_model=_attempt_count,
+        setup_a=_school_a_online_ready,
+        label="staff",
     ),
 ]
 

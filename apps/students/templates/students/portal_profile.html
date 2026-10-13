@@ -9,6 +9,7 @@
     <dt>Term</dt><dd>{% if term %}{{ term.get_number_display }} ({{ term.session.name }}){% else %}—{% endif %}</dd>
   </dl>
   <p><a href="{{ results_url }}">My results</a></p>
+  {% if pay_url %}<p><a href="{{ pay_url }}">Pay online</a></p>{% endif %}
   <p><a href="{% url 'accounts:password_change' %}">Change password</a></p>
 </div>
 {% endblock %}

@@ -1,0 +1,18 @@
+{% extends "core/base.html" %}
+{% block title %}Payment status{% endblock %}
+{% block content %}
+<div class="card">
+  {% if status == "success" %}
+  <h1>Payment received</h1>
+  <p>Thank you. Your receipt will be ready shortly.</p>
+  {% elif status == "pending" %}
+  <h1>We are confirming your payment…</h1>
+  <p>This can take a few minutes. Refresh this page to check again. Do not pay twice.</p>
+  {% else %}
+  <h1>Payment was not completed</h1>
+  <p>If money left your account, contact the school bursar and give this reference.</p>
+  {% endif %}
+  <p>Reference: <code>{{ reference }}</code></p>
+  <p><a href="{% url 'home' %}">Back</a></p>
+</div>
+{% endblock %}

@@ -20,6 +20,7 @@ def _student_home(request):
     # Imported here, not at module level: apps.students and apps.academics import from
     # apps.accounts, so a top-level import would be circular.
     from apps.academics.services import current_term
+    from apps.fees.checkout import payable_invoices
     from apps.students.models import Enrolment, Student
 
     term = current_term()
@@ -41,5 +42,9 @@ def _student_home(request):
             "enrolment": enrolment,
             "term": term,
             "results_url": reverse("results:my_results"),
+            # Only when there is something to pay; the full fees page arrives in Task 10.
+            "pay_url": reverse("fees:pay")
+            if student is not None and payable_invoices(student)
+            else "",
         },
     )

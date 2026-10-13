@@ -1,6 +1,6 @@
 from django.urls import path
 
-from apps.fees.views import invoices, manual, payout, receipts, setup
+from apps.fees.views import invoices, manual, pay, payout, receipts, setup
 
 app_name = "fees"
 
@@ -26,5 +26,7 @@ urlpatterns = [
         name="receipt_regenerate",
     ),
     path("payout/", payout.payout, name="payout"),
+    path("pay/", pay.pay, name="pay"),
+    path("pay/return/", pay.pay_return, name="pay_return"),
     path("pay/test/<str:reference>/", payout.fake_checkout, name="fake_checkout"),
 ]

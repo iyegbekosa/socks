@@ -20,6 +20,7 @@ from apps.fees.models import (
     Invoice,
     ManualPayment,
     Payment,
+    PaymentAttempt,
     Receipt,
     ReceiptCounter,
 )
@@ -48,14 +49,20 @@ def next_receipt_number(year: int) -> str:
 
 
 def _existing_payment(
-    gateway_reference: str | None, manual: ManualPayment | None = None
+    gateway_reference: str | None,
+    manual: ManualPayment | None = None,
+    attempt: PaymentAttempt | None = None,
 ) -> Payment | None:
     if gateway_reference:
         found = Payment.objects.filter(gateway_reference=gateway_reference).first()
         if found is not None:
             return found
     if manual is not None:
-        return Payment.objects.filter(manual=manual).first()
+        found = Payment.objects.filter(manual=manual).first()
+        if found is not None:
+            return found
+    if attempt is not None:
+        return Payment.objects.filter(attempt=attempt).first()
     return None
 
 
@@ -89,13 +96,14 @@ def confirm_payment(
     recorded_by: Any = None,
     approved_by: Any = None,
     manual: ManualPayment | None = None,
+    attempt: PaymentAttempt | None = None,
 ) -> Payment:
     """Record a payment, allocate it across ``plan`` in order and number its receipt.
 
-    Idempotent on ``gateway_reference`` and on ``manual``: a second call with the same
-    reference, or for the same ManualPayment, returns the first Payment unchanged. Each
-    planned line is capped at the invoice's balance and at what is left of the payment; any
-    excess is kept as ``unallocated_kobo`` and the payment flagged.
+    Idempotent on ``gateway_reference``, ``manual`` and ``attempt``: a second call with the
+    same reference, or for the same ManualPayment or PaymentAttempt, returns the first Payment
+    unchanged. Each planned line is capped at the invoice's balance and at what is left of the
+    payment; any excess is kept as ``unallocated_kobo`` and the payment flagged.
     """
     _validate(amount_kobo, method, plan, paid_at)
     gateway_reference = gateway_reference or None
@@ -106,7 +114,7 @@ def confirm_payment(
             inv.pk: inv
             for inv in Invoice.objects.select_for_update().filter(pk__in=ids).order_by("pk")
         }
-        existing = _existing_payment(gateway_reference, manual)
+        existing = _existing_payment(gateway_reference, manual, attempt)
         if existing is not None:
             return existing
         if len(invoices) != len(ids):
@@ -138,13 +146,16 @@ def confirm_payment(
                     flagged=remaining > 0,
                     flag_reason=FLAG_OVERPAID if remaining > 0 else "",
                     manual=manual,
+                    attempt=attempt,
                 )
         except IntegrityError:
-            # Lost a race on the unique reference or the one-to-one manual link: re-read.
+            # Lost a race on the unique reference or a one-to-one link: re-read.
             if gateway_reference is not None:
                 return Payment.objects.get(gateway_reference=gateway_reference)
             if manual is not None:
                 return Payment.objects.get(manual=manual)
+            if attempt is not None:
+                return Payment.objects.get(attempt=attempt)
             raise
 
         Allocation.objects.bulk_create(

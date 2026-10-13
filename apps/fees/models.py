@@ -277,6 +277,78 @@ class ManualPayment(models.Model):
         return f"Manual payment {self.pk}: {self.amount_kobo} ({self.status})"
 
 
+class PaymentAttempt(models.Model):
+    """One online checkout (§4.5): created before the gateway call, confirmed by Task 8.
+
+    ``raw_response`` holds the gateway payload with ``customer``/``authorization`` removed.
+    ``student`` is the payer; its lines may name sibling invoices.
+    """
+
+    PENDING, SUCCESS, FAILED, ABANDONED, FLAGGED = (
+        "pending",
+        "success",
+        "failed",
+        "abandoned",
+        "flagged",
+    )
+    STATUS_CHOICES = [
+        (PENDING, "Pending"),
+        (SUCCESS, "Successful"),
+        (FAILED, "Failed"),
+        (ABANDONED, "Abandoned"),
+        (FLAGGED, "Flagged"),
+    ]
+
+    reference = models.CharField(max_length=40, unique=True)
+    student = models.ForeignKey(Student, on_delete=models.PROTECT, related_name="payment_attempts")
+    amount_kobo = models.BigIntegerField()
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=PENDING)
+    gateway = models.CharField(max_length=20, default="paystack")
+    raw_response = models.JSONField(default=dict, blank=True)
+    flag_reason = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # Set by ``checkout.start`` after initialize; not stored.
+    authorization_url: str = ""
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+        indexes = [
+            models.Index(fields=["status", "created_at"], name="fees_attempt_status_created")
+        ]
+        constraints = [
+            models.CheckConstraint(condition=Q(amount_kobo__gt=0), name="fees_attempt_amount_gt0"),
+            models.CheckConstraint(
+                condition=Q(status__in=["pending", "success", "failed", "abandoned", "flagged"]),
+                name="fees_attempt_status_valid",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"Attempt {self.reference} ({self.status})"
+
+
+class PaymentAttemptLine(models.Model):
+    """An invoice and amount planned by an attempt, in allocation order (pk)."""
+
+    attempt = models.ForeignKey(PaymentAttempt, on_delete=models.PROTECT, related_name="lines")
+    invoice = models.ForeignKey(Invoice, on_delete=models.PROTECT, related_name="attempt_lines")
+    amount_kobo = models.BigIntegerField()
+
+    class Meta:
+        ordering = ["pk"]
+        constraints = [
+            models.UniqueConstraint(fields=["attempt", "invoice"], name="fees_attempt_line_unique"),
+            models.CheckConstraint(
+                condition=Q(amount_kobo__gt=0), name="fees_attempt_line_amount_gt0"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.attempt_id} -> {self.invoice_id}: {self.amount_kobo}"
+
+
 class Payment(models.Model):
     """A confirmed payment. Created only by ``ledger.confirm_payment``."""
 
@@ -313,6 +385,13 @@ class Payment(models.Model):
     flag_reason = models.CharField(max_length=200, blank=True)
     manual = models.OneToOneField(
         ManualPayment,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="payment",
+    )
+    attempt = models.OneToOneField(
+        PaymentAttempt,
         on_delete=models.PROTECT,
         null=True,
         blank=True,

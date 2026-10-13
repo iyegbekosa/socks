@@ -6,6 +6,7 @@ from django.db import connection
 from django.db.models import Prefetch, Q, QuerySet
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404
+from django.urls import reverse
 from rest_framework import exceptions, status
 from rest_framework.generics import ListAPIView
 from rest_framework.pagination import PageNumberPagination
@@ -35,7 +36,8 @@ from apps.api.serializers import (
 from apps.core.errors import ApiError
 from apps.core.money import money_fields
 from apps.core.parsing import parse_id
-from apps.fees import manual
+from apps.fees import checkout, manual
+from apps.fees.gateways import GatewayUnavailable
 from apps.fees.ledger import PlannedLine
 from apps.fees.models import Invoice, ManualPayment
 from apps.fees.scope import can_manage_fees
@@ -442,5 +444,69 @@ class ManualPaymentView(APIView):
             }
         return Response(
             {"id": mp.pk, "status": mp.status, "payment": payment},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+INITIALIZE_KEYS = {"invoices"}
+
+
+class PaymentsInitializeView(APIView):
+    """POST: a student starts an online payment for their own or siblings' invoices (§4.5).
+
+    Body ``{invoices: [{invoice, amount_kobo}]}``. 201 ``{reference, authorization_url}``.
+    Staff get 403; an invoice that is not the student's or a sibling's is a 404; no payout
+    account is a 409 ``ONLINE_PAYMENTS_NOT_READY``; a gateway outage is a 503
+    ``GATEWAY_UNAVAILABLE`` whose message carries the school's bank transfer note.
+    """
+
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["post", "options"]
+
+    def post(self, request: Request) -> Response:
+        user = request.user
+        student = (
+            Student.objects.filter(user=user).first()
+            if getattr(user, "kind", None) == "student"
+            else None
+        )
+        if student is None:
+            raise ApiError("FORBIDDEN", "Only students can pay online.", 403)
+        data = request.data
+        if not isinstance(data, dict):
+            raise _bad("non_field_errors", "Send a JSON object.")
+        unknown = sorted(set(data) - INITIALIZE_KEYS)
+        if unknown:
+            raise _bad(unknown[0], "Unknown field.")
+        raw_lines = data.get("invoices")
+        if not isinstance(raw_lines, list) or not 1 <= len(raw_lines) <= checkout.MAX_LINES:
+            raise _bad("invoices", f"Send 1 to {checkout.MAX_LINES} invoices.")
+        lines: list[PlannedLine] = []
+        for i, raw in enumerate(raw_lines):
+            if not isinstance(raw, dict) or set(raw) != {"invoice", "amount_kobo"}:
+                raise _bad(f"invoices.{i}", "Each line needs invoice and amount_kobo.")
+            invoice_id = _json_id(raw["invoice"])
+            if invoice_id is None:
+                raise _bad(f"invoices.{i}.invoice", "Must be an invoice id.")
+            kobo = _json_kobo(raw["amount_kobo"])
+            if kobo is None:
+                raise _bad(f"invoices.{i}.amount_kobo", "Must be a whole number of kobo.")
+            lines.append(PlannedLine(invoice_id, kobo))
+
+        try:
+            attempt = checkout.start(
+                student,
+                lines,
+                callback_url=request.build_absolute_uri(reverse("fees:pay_return")),
+                request=request,
+            )
+        except checkout.OnlinePaymentsNotReady:
+            raise ApiError("ONLINE_PAYMENTS_NOT_READY", checkout.MSG_NOT_READY, 409) from None
+        except DjangoValidationError as exc:
+            raise _validation([{"field": "invoices", "message": m} for m in exc.messages]) from exc
+        except GatewayUnavailable:
+            raise ApiError("GATEWAY_UNAVAILABLE", checkout.unavailable_message(), 503) from None
+        return Response(
+            {"reference": attempt.reference, "authorization_url": attempt.authorization_url},
             status=status.HTTP_201_CREATED,
         )

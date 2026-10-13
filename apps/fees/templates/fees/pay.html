@@ -1,0 +1,49 @@
+{% extends "core/base.html" %}
+{% load fees_money %}
+{% block title %}Pay school fees{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Pay school fees</h1>
+  {% if not ready %}
+  <p role="status">{{ not_ready_message }}</p>
+  {% else %}
+  {% if unavailable %}
+  <div class="error" role="alert">
+    <p>{{ unavailable }}</p>
+    {% if bank_transfer_note %}<p>{{ bank_transfer_note|linebreaksbr }}</p>{% endif %}
+  </div>
+  {% endif %}
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  {% if rows %}
+  <form method="post">
+    {% csrf_token %}
+    {% if allow_part %}
+    <p class="hint">Tick the invoices to pay. You can pay part of a balance{% if minimum %}: at least {{ minimum|naira }} on each invoice, or its whole balance if smaller{% endif %}.</p>
+    {% else %}
+    <p class="hint">Tick the invoices to pay. Each one is paid in full.</p>
+    {% endif %}
+    <table>
+      <thead><tr><th>Pay</th><th>Student</th><th>Term</th><th>Balance</th>{% if allow_part %}<th>Amount (naira)</th>{% endif %}</tr></thead>
+      <tbody>
+      {% for row in rows %}
+      <tr>
+        <td><input type="checkbox" name="invoice" value="{{ row.invoice.pk }}" id="pay_{{ row.invoice.pk }}"{% if row.checked %} checked{% endif %}>{% if not allow_part %}<input type="hidden" name="amount_{{ row.invoice.pk }}" value="{{ row.balance_input }}">{% endif %}</td>
+        <td><label for="pay_{{ row.invoice.pk }}">{{ row.first_name }}{% if row.own %} (you){% endif %}</label></td>
+        <td>{{ row.invoice.term }}</td>
+        <td>{{ row.invoice.balance_kobo|naira }}</td>
+        {% if allow_part %}
+        <td><input type="text" name="amount_{{ row.invoice.pk }}" value="{{ row.amount }}" inputmode="decimal" autocomplete="off" aria-label="Amount for {{ row.invoice.term }}"></td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <button type="submit">Pay online</button>
+  </form>
+  {% else %}
+  <p>There is nothing to pay right now.</p>
+  {% endif %}
+  {% endif %}
+  <p><a href="{% url 'home' %}">Back</a></p>
+</div>
+{% endblock %}

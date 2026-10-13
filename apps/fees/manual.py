@@ -24,7 +24,7 @@ from django.utils import timezone
 from apps.audit.services import record as audit
 from apps.core.images import clean_image
 from apps.core.storage import unique_upload_name
-from apps.fees import ledger
+from apps.fees import ledger, siblings
 from apps.fees.ledger import PlannedLine
 from apps.fees.models import FeeSettings, Invoice, ManualPayment, Payment
 from apps.fees.scope import can_manage_fees
@@ -164,10 +164,11 @@ def _check_fields(
 
 
 def _check_invoices(student: Student, plan: list[PlannedLine], invoices: dict[int, Invoice]):
-    """Ownership (the student only, until siblings exist), carried and balance checks."""
+    """Ownership (the student or a sibling), carried and balance checks."""
+    owners = payer_and_siblings(student)
     for line in plan:
         invoice = invoices.get(line.invoice_id)
-        if invoice is None or invoice.student_id != student.pk:
+        if invoice is None or invoice.student_id not in owners:
             return MSG_OWNER
     for line in plan:
         invoice = invoices[line.invoice_id]
@@ -176,6 +177,11 @@ def _check_invoices(student: Student, plan: list[PlannedLine], invoices: dict[in
         if line.amount_kobo > invoice.balance_kobo:
             return MSG_OVER_BALANCE
     return None
+
+
+def payer_and_siblings(student: Student) -> set[int]:
+    """Pks of the students whose invoices ``student`` may pay: itself and its siblings."""
+    return {student.pk, *(s.pk for s in siblings.siblings_of(student))}
 
 
 def _invoices(plan: list[PlannedLine], *, lock: bool) -> dict[int, Invoice]:

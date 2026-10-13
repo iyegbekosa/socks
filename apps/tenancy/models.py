@@ -53,5 +53,20 @@ class School(TenantMixin):
         return bool(self.paystack_subaccount_code)
 
 
+class PaymentRoute(models.Model):
+    """Public map from a payment reference to its school's schema, for the webhook (Task 8).
+
+    Created from the tenant request in the same transaction as the PaymentAttempt: the public
+    schema is on the tenant search_path, so a plain ORM create lands here.
+    """
+
+    reference = models.CharField(max_length=40, unique=True)
+    schema_name = models.CharField(max_length=63)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"{self.reference} -> {self.schema_name}"
+
+
 class Domain(DomainMixin):
     pass
