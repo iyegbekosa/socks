@@ -170,6 +170,19 @@ def test_three_terms_brought_forward_is_counted_once(school_a):
         assert invoicing.outstanding_for(student, up_to_term=w.term2) == 0
 
 
+def test_outstanding_by_student_matches_outstanding_for(school_a):
+    with schema_context("school_a"):
+        w = _jss1_world()
+        make_structure(w.level, w.term2, [(w.tuition, 2_000_000, False)])
+        a, b = StudentProfileFactory(), StudentProfileFactory()
+        invoicing.generate_invoices(w.term1, by=w.bursar)
+        invoicing.generate_invoices(w.term2, by=w.bursar)
+        nobody = StudentProfileFactory(enrolment__status="withdrawn")
+        got = invoicing.outstanding_by_student([a.pk, b.pk, nobody.pk])
+        assert got == {s.pk: invoicing.outstanding_for(s) for s in (a, b, nobody)}
+        assert got[a.pk] == 7_500_000 and got[nobody.pk] == 0
+
+
 def test_brought_forward_crosses_sessions_and_skips_settled(school_a):
     with schema_context("school_a"):
         w = _jss1_world()

@@ -14,7 +14,7 @@ from django.views.decorators.http import require_GET
 
 from apps.academics.services import current_session
 from apps.fees import siblings
-from apps.fees.invoicing import outstanding_for
+from apps.fees.invoicing import outstanding_by_student, outstanding_for
 from apps.fees.models import Invoice
 from apps.fees.receipts import receipts_for_student
 from apps.fees.views.pay import _student
@@ -44,11 +44,12 @@ def my_fees(request):
     )
     sibs = siblings.siblings_of(student)
     classes = _classes([s.pk for s in sibs])
+    sibling_balances = outstanding_by_student([s.pk for s in sibs])
     sibling_rows = [
         {
             "first_name": s.first_name,
             "class_name": classes.get(s.pk, "—"),
-            "balance": outstanding_for(s),
+            "balance": sibling_balances[s.pk],
             "pk": s.pk,
         }
         for s in sibs

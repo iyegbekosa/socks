@@ -302,3 +302,16 @@ def outstanding_for(student: Student, *, up_to_term: Term | None = None) -> int:
     balance = Sum(F("total_kobo") - F("paid_kobo"))
     total = _open_invoices(student, up_to_term).aggregate(b=balance)["b"]
     return int(total or 0)
+
+
+def outstanding_by_student(student_ids: list[int]) -> dict[int, int]:
+    """``outstanding_for`` (no term limit) for several students in one query; 0 when none."""
+    rows = (
+        Invoice.objects.filter(student_id__in=student_ids)
+        .exclude(status=Invoice.CARRIED)
+        .order_by()
+        .values("student_id")
+        .annotate(b=Sum(F("total_kobo") - F("paid_kobo")))
+    )
+    found = {row["student_id"]: int(row["b"] or 0) for row in rows}
+    return {pk: found.get(pk, 0) for pk in student_ids}
