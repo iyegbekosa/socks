@@ -32,7 +32,7 @@ RECHECKABLE = (
 )
 
 
-def _page(request, *, status: int = 200, resolve_errors=None):
+def _page(request, *, status: int = 200, resolve_errors=None, resolve_notes=None):
     attempts = PaymentAttempt.objects.filter(status=PaymentAttempt.FLAGGED).select_related(
         "student__user"
     )
@@ -61,6 +61,7 @@ def _page(request, *, status: int = 200, resolve_errors=None):
             "recheck": recheck,
             "can_act": can_manage_fees(request.user),
             "resolve_errors": resolve_errors or {},
+            "resolve_notes": resolve_notes or {},
         },
         status=status,
     )
@@ -93,7 +94,12 @@ def payment_resolve(request, payment_id):
         messages.error(request, exc.messages[0])
         return _page(request, status=409)
     except ValidationError as exc:
-        return _page(request, status=400, resolve_errors={payment.pk: exc.messages})
+        return _page(
+            request,
+            status=400,
+            resolve_errors={payment.pk: exc.messages},
+            resolve_notes={payment.pk: request.POST.get("note", "")},  # keep what was typed
+        )
     messages.success(request, "Payment marked as resolved.")
     return redirect("fees:reconcile")
 

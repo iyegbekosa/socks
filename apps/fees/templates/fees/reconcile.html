@@ -58,7 +58,7 @@
         <form method="post" action="{% url 'fees:payment_resolve' p.pk %}">
           {% csrf_token %}
           <label for="note-{{ p.pk }}">Note (what was done about the excess)</label>
-          <textarea name="note" id="note-{{ p.pk }}" rows="2" maxlength="500" required></textarea>
+          <textarea name="note" id="note-{{ p.pk }}" rows="2" maxlength="500" required>{% for k, v in resolve_notes.items %}{% if k == p.pk %}{{ v }}{% endif %}{% endfor %}</textarea>
           {% for k, errs in resolve_errors.items %}{% if k == p.pk %}{% for e in errs %}<p class="error" role="alert">{{ e }}</p>{% endfor %}{% endif %}{% endfor %}
           <button type="submit">Mark resolved</button>
         </form>

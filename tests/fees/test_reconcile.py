@@ -269,6 +269,10 @@ def test_mark_resolved_needs_a_note(w, client_a):
     for note in ("", "   ", "x" * 501):
         r = client_a.post(url, {"note": note})
         assert r.status_code == 400
+    # The typed note is kept on the re-rendered page.
+    r = client_a.post(url, {"note": "Refunded <part> " + "y" * 500})
+    assert r.status_code == 400
+    assert "Refunded &lt;part&gt; " + "y" * 500 + "</textarea>" in r.content.decode()
     pay.refresh_from_db()
     assert pay.flagged
 
