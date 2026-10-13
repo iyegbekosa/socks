@@ -81,6 +81,7 @@ def test_bursar_generates_from_list_page(client_a):
     page = client_a.get(url, follow=True)
     body = page.content.decode()
     assert "Created 1 invoice" in body
+    assert "0 student(s) already have an invoice for a later term" in body
     assert "₦55,000.00" in body
     assert w.student.last_name in body
     # filters

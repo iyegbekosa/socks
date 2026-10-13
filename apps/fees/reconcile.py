@@ -1,10 +1,11 @@
 """Re-verification sweep for one school and the bursar's "mark resolved" action (§4.5 step 7)."""
 
 import logging
+from contextlib import nullcontext
 from datetime import timedelta
 
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import DatabaseError, connection, transaction
 from django.utils import timezone
 
 from apps.audit.services import record
@@ -56,11 +57,21 @@ def reverify_school() -> dict[str, int]:
 
     A gateway error skips that attempt (only its exception type is logged); three in a row stop
     the run, since the gateway is probably down and the next sweep is 15 minutes away.
+
+    A database error on one attempt (a deadlock, say) is logged by type and the sweep goes on.
+    Inside an outer transaction each attempt runs in its own savepoint so the error does not
+    poison the rest; outside one, ``process_attempt``'s own atomic blocks roll back, and no
+    transaction is held open across its gateway call.
     """
     checked = errors = consecutive = 0
     for reference in sweep_references():
         try:
-            process_attempt(reference, abandon_stale=True)
+            with transaction.atomic() if connection.in_atomic_block else nullcontext():
+                process_attempt(reference, abandon_stale=True)
+        except DatabaseError as exc:
+            errors += 1
+            logger.warning("Re-verification skipped an attempt (%s).", type(exc).__name__)
+            continue
         except GatewayUnavailable as exc:
             errors += 1
             consecutive += 1

@@ -1,16 +1,18 @@
 """Re-verification sweep and the reconciliation page (§4.5 step 7, §8.1)."""
 
+import logging
 from datetime import timedelta
 from unittest import mock
 
 import pytest
 from django.core.cache import cache
+from django.db import connection
 from django.urls import reverse
 from django.utils import timezone
 from django_tenants.utils import schema_context
 
 from apps.audit.models import AuditEvent
-from apps.fees import checkout, hooks, tasks
+from apps.fees import checkout, hooks, reconcile, tasks
 from apps.fees.gateways import GatewayUnavailable
 from apps.fees.gateways.fake import FakeGateway
 from apps.fees.ledger import PlannedLine
@@ -189,6 +191,29 @@ def test_a_gateway_error_does_not_stop_the_next_attempt(w):
     with mock.patch("apps.fees.reconcile.process_attempt", side_effect=fake):
         tasks.reverify_school_task.apply(headers={"schema_name": "school_a"})
     assert calls == [first.reference, second.reference]
+
+
+def test_a_database_error_is_logged_by_type_and_the_sweep_goes_on(w, caplog):
+    """M4: a deadlock-like DatabaseError on one attempt rolls back only that attempt."""
+    first = _attempt(w, 90)
+    second = _attempt(w, 60)
+    _succeed(second)
+    real = reconcile.process_attempt
+
+    def fake(ref, **kw):
+        if ref == first.reference:
+            with connection.cursor() as cur:
+                cur.execute("SELECT * FROM fees_no_such_table_secret")
+        return real(ref, **kw)
+
+    with (
+        mock.patch("apps.fees.reconcile.process_attempt", side_effect=fake),
+        caplog.at_level(logging.WARNING),
+    ):
+        assert reconcile.reverify_school() == {"checked": 1, "errors": 1}
+    assert _status(second) == PaymentAttempt.SUCCESS
+    assert _status(first) == PaymentAttempt.PENDING
+    assert "ProgrammingError" in caplog.text and "secret" not in caplog.text
 
 
 # --- page -------------------------------------------------------------------------------

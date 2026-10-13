@@ -1,8 +1,10 @@
+import re
 from datetime import date
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django_tenants.utils import schema_context
 
 from apps.academics.models import AcademicSession, ClassArm, ClassLevel, Term
@@ -172,15 +174,51 @@ def test_brought_forward_crosses_sessions_and_skips_settled(school_a):
         assert paid.status == Invoice.PAID
 
 
-def test_later_invoice_is_not_brought_forward_into_earlier_term(school_a):
+def test_generation_skips_students_with_a_later_invoice(school_a):
+    """Ruling S: generating an earlier term after a later one skips those students."""
     with schema_context("school_a"):
         w = _jss1_world()
         make_structure(w.level, w.term2, [(w.tuition, 5_000_000, False)])
-        student = StudentProfileFactory()
+        ahead = StudentProfileFactory()
         invoicing.generate_invoices(w.term2, by=w.bursar)
-        invoicing.generate_invoices(w.term1, by=w.bursar)
-        assert _kinds(_invoice(student, w.term1)) == ["fee", "fee"]
-        assert _invoice(student, w.term2).status == Invoice.UNPAID
+        newcomer = StudentProfileFactory()
+        result = invoicing.generate_invoices(w.term1, by=w.bursar)
+        assert result == invoicing.GenerationResult(
+            created=1, skipped_existing=0, skipped_no_structure=0, skipped_later_exists=1
+        )
+        assert not Invoice.objects.filter(student=ahead, term=w.term1).exists()
+        assert _invoice(newcomer, w.term1).total_kobo == 5_500_000
+        assert _invoice(ahead, w.term2).status == Invoice.UNPAID
+        event = AuditEvent.objects.filter(action="fees.invoices_generated").latest("pk")
+        assert event.after["skipped_later_exists"] == 1
+
+
+def test_generation_locks_earlier_invoices_in_pk_order_and_carries_in_term_order(school_a):
+    """M4: same lock order as the ledger, even when pk order differs from term order."""
+    with schema_context("school_a"):
+        w = _jss1_world()
+        student = StudentProfileFactory()
+        term3 = Term.objects.create(
+            session=w.session, number=3, start_date=date(2027, 4, 20), end_date=date(2027, 7, 20)
+        )
+        make_structure(w.level, term3, [(w.tuition, 1_000_000, False)])
+        # A late earlier-term invoice: the 2nd term's has the lower pk.
+        for term, amount in ((w.term2, 2_000_000), (w.term1, 3_000_000)):
+            inv = Invoice.objects.create(student=student, term=term)
+            InvoiceLine.objects.create(
+                invoice=inv, kind=InvoiceLine.FEE, description="Tuition", amount_kobo=amount
+            )
+            invoicing.recompute(inv)
+        with CaptureQueriesContext(connection) as ctx:
+            invoicing.generate_invoices(term3, by=w.bursar)
+        locks = [
+            q["sql"]
+            for q in ctx.captured_queries
+            if "FOR UPDATE" in q["sql"] and 'FROM "fees_invoice"' in q["sql"]
+        ]
+        assert len(locks) == 1 and re.search(r'ORDER BY "fees_invoice"\."id" ASC', locks[0])
+        bf = _invoice(student, term3).lines.filter(kind="brought_forward").order_by("pk")
+        assert [line.amount_kobo for line in bf] == [3_000_000, 2_000_000]  # 1st term first
 
 
 def test_generation_is_idempotent_and_picks_up_new_students(school_a):
@@ -244,6 +282,7 @@ def test_generation_audit_holds_counts_only(school_a):
             "created": 1,
             "skipped_existing": 0,
             "skipped_no_structure": 0,
+            "skipped_later_exists": 0,
         }
 
 

@@ -36,6 +36,8 @@ class GenerationResult:
     created: int
     skipped_existing: int
     skipped_no_structure: int
+    # Students who already have an invoice for a term after this one (Ruling S).
+    skipped_later_exists: int = 0
 
 
 def _earlier_terms_q(term: Term, *, prefix: str = "term__", inclusive: bool = False) -> Q:
@@ -44,6 +46,14 @@ def _earlier_terms_q(term: Term, *, prefix: str = "term__", inclusive: bool = Fa
     number_cmp = "lte" if inclusive else "lt"
     return Q(**{f"{prefix}session__start_date__lt": start}) | Q(
         **{f"{prefix}session_id": term.session_id, f"{prefix}number__{number_cmp}": term.number}
+    )
+
+
+def _later_terms_q(term: Term, *, prefix: str = "term__") -> Q:
+    """Terms after ``term`` in the same ordering as ``_earlier_terms_q``."""
+    start = term.session.start_date
+    return Q(**{f"{prefix}session__start_date__gt": start}) | Q(
+        **{f"{prefix}session_id": term.session_id, f"{prefix}number__gt": term.number}
     )
 
 
@@ -123,14 +133,16 @@ def _build_invoice(student: Student, term: Term, structure: FeeStructure) -> Inv
             )
         )
 
-    earlier = (
+    # Lock in ascending pk order, as the ledger does (no lock cycle), then carry in term order.
+    locked = list(
         Invoice.objects.select_for_update(of=("self",))
         .select_related("term__session")
         .filter(_earlier_terms_q(term), student=student)
         .exclude(status=Invoice.CARRIED)
-        .order_by("term__session__start_date", "term__number", "pk")
+        .order_by("pk")
     )
-    for old in earlier:
+    locked.sort(key=lambda inv: (inv.term.session.start_date, inv.term.number, inv.pk))
+    for old in locked:
         if old.balance_kobo <= 0:
             continue
         lines.append(
@@ -157,7 +169,9 @@ def generate_invoices(
 ) -> GenerationResult:
     """Invoice every actively enrolled student in ``term.session`` whose level has a structure.
 
-    Existing invoices for (student, term) are never touched, so this is safe to run again.
+    Existing invoices for (student, term) are never touched, so this is safe to run again. A
+    student who already has an invoice for a later term is skipped (Ruling S): generating out
+    of order would carry a later debt into an earlier term and break results attribution.
     """
     term = Term.objects.select_related("session").get(pk=term.pk)
     level_ids = None if levels is None else sorted({getattr(lv, "pk", lv) for lv in levels})
@@ -177,7 +191,7 @@ def generate_invoices(
         for s in FeeStructure.objects.filter(term=term).prefetch_related("lines__item")
     }
 
-    created = skipped_existing = skipped_no_structure = 0
+    created = skipped_existing = skipped_no_structure = skipped_later = 0
     for enrolment in enrolments:
         structure = structures.get(enrolment.arm.level_id)
         if structure is None:
@@ -189,10 +203,13 @@ def generate_invoices(
             if Invoice.objects.filter(student=student, term=term).exists():
                 skipped_existing += 1
                 continue
+            if Invoice.objects.filter(_later_terms_q(term), student=student).exists():
+                skipped_later += 1
+                continue
             _build_invoice(student, term, structure)
             created += 1
 
-    result = GenerationResult(created, skipped_existing, skipped_no_structure)
+    result = GenerationResult(created, skipped_existing, skipped_no_structure, skipped_later)
     record(
         "fees.invoices_generated",
         request=request,
@@ -204,6 +221,7 @@ def generate_invoices(
             "created": created,
             "skipped_existing": skipped_existing,
             "skipped_no_structure": skipped_no_structure,
+            "skipped_later_exists": skipped_later,
         },
     )
     return result

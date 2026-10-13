@@ -55,7 +55,9 @@ def invoices(request):
                 f"Created {result.created} invoice(s). "
                 f"{result.skipped_existing} student(s) already had one. "
                 f"{result.skipped_no_structure} student(s) are in a class level with no fee "
-                "structure for this term.",
+                "structure for this term. "
+                f"{result.skipped_later_exists} student(s) already have an invoice for a later "
+                "term and were skipped (generate terms in order).",
             )
             return redirect(f"{reverse('fees:invoices')}?term={term.pk}")
     else:
