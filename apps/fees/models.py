@@ -383,6 +383,16 @@ class Payment(models.Model):
     unallocated_kobo = models.BigIntegerField(default=0)
     flagged = models.BooleanField(default=False)
     flag_reason = models.CharField(max_length=200, blank=True)
+    # Set when a bursar clears the flag by hand (reconciliation page).
+    resolution_note = models.CharField(max_length=500, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    resolved_at = models.DateTimeField(null=True, blank=True)
     manual = models.OneToOneField(
         ManualPayment,
         on_delete=models.PROTECT,

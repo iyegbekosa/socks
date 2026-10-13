@@ -159,6 +159,13 @@ CELERY_TASK_DEFAULT_QUEUE = "default"
 CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TIMEZONE = "Africa/Lagos"
+CELERY_BEAT_SCHEDULE = {
+    "fees-reverify": {
+        "task": "apps.fees.tasks.reverify_all_schools",
+        "schedule": 900.0,
+        "options": {"queue": "payments"},
+    },
+}
 # Workers keep Django's JSON LOGGING (see the setup_logging receiver in config/celery.py).
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 if not DEBUG and not REDIS_URL:

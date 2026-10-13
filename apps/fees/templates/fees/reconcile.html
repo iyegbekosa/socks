@@ -1,0 +1,75 @@
+{% extends "core/base.html" %}
+{% load fees_money %}
+{% block title %}Reconciliation{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Reconciliation</h1>
+  {% include "fees/_nav.html" %}
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+
+  <h2>Flagged payment attempts</h2>
+  <table>
+    <thead><tr><th>Reference</th><th>Admission number</th><th>Amount</th><th>Reason</th><th>Date</th>{% if can_act %}<th>Action</th>{% endif %}</tr></thead>
+    <tbody>
+    {% for a in attempts %}
+    <tr>
+      <td>{{ a.reference }}</td>
+      <td>{{ a.student.admission_number }}</td>
+      <td>{{ a.amount_kobo|naira }}</td>
+      <td>{{ a.flag_reason }}</td>
+      <td>{{ a.updated_at|date:"j M Y" }}</td>
+      {% if can_act %}<td>
+        <form method="post" action="{% url 'fees:attempt_recheck' a.pk %}">{% csrf_token %}<button type="submit">Re-check now</button></form>
+      </td>{% endif %}
+    </tr>
+    {% empty %}<tr><td colspan="{% if can_act %}6{% else %}5{% endif %}">No flagged payment attempts.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Flagged payments</h2>
+  <table>
+    <thead><tr><th>Receipt</th><th>Unallocated</th><th>Reason</th>{% if can_act %}<th>Resolve</th>{% endif %}</tr></thead>
+    <tbody>
+    {% for p in payments %}
+    <tr>
+      <td>{{ p.receipt.number }}</td>
+      <td>{{ p.unallocated_kobo|naira }}</td>
+      <td>{{ p.flag_reason }}</td>
+      {% if can_act %}<td>
+        <form method="post" action="{% url 'fees:payment_resolve' p.pk %}">
+          {% csrf_token %}
+          <label for="note-{{ p.pk }}">Note (what was done about the excess)</label>
+          <textarea name="note" id="note-{{ p.pk }}" rows="2" maxlength="500" required></textarea>
+          {% for k, errs in resolve_errors.items %}{% if k == p.pk %}{% for e in errs %}<p class="error" role="alert">{{ e }}</p>{% endfor %}{% endif %}{% endfor %}
+          <button type="submit">Mark resolved</button>
+        </form>
+      </td>{% endif %}
+    </tr>
+    {% empty %}<tr><td colspan="{% if can_act %}4{% else %}3{% endif %}">No flagged payments.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Manual payments waiting for approval</h2>
+  <p>{{ pending_count }} waiting. <a href="{% url 'fees:manual_pending' %}">Open the pending approvals</a></p>
+
+  <h2>Receipts without a PDF</h2>
+  <table>
+    <thead><tr><th>Receipt</th><th>Date</th>{% if can_act %}<th>Action</th>{% endif %}</tr></thead>
+    <tbody>
+    {% for r in missing_receipts %}
+    <tr>
+      <td>{{ r.number }}</td>
+      <td>{{ r.created_at|date:"j M Y" }}</td>
+      {% if can_act %}<td>
+        <form method="post" action="{% url 'fees:receipt_regenerate' r.pk %}">{% csrf_token %}<button type="submit">Regenerate</button></form>
+      </td>{% endif %}
+    </tr>
+    {% empty %}<tr><td colspan="{% if can_act %}3{% else %}2{% endif %}">Every receipt has its PDF.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

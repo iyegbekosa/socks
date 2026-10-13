@@ -12,6 +12,7 @@ both take in the same order: no lock cycle. The gateway is called with no transa
 """
 
 import logging
+from datetime import timedelta
 
 from django.db import connection, transaction
 from django.utils import timezone
@@ -25,6 +26,8 @@ from apps.tenancy.models import School
 logger = logging.getLogger(__name__)
 
 CURRENCY = "NGN"
+# A pending attempt older than this that the gateway does not report as paid is abandoned.
+ABANDON_AFTER = timedelta(hours=24)
 MISSING = "missing"
 # Settled for good: never verified again.
 FINAL = frozenset({PaymentAttempt.SUCCESS, PaymentAttempt.FLAGGED})
@@ -71,7 +74,11 @@ def _finish(attempt: PaymentAttempt, status: str, result: VerifyResult, reason: 
     attempt.save(update_fields=fields)
 
 
-def process_attempt(reference: str) -> str:
+def _is_stale(attempt: PaymentAttempt) -> bool:
+    return attempt.created_at < timezone.now() - ABANDON_AFTER
+
+
+def process_attempt(reference: str, *, abandon_stale: bool = False) -> str:
     """Verify ``reference`` with the gateway and settle its attempt. Returns the status.
 
     Only ``success`` and ``flagged`` are final here: they return without calling the gateway.
@@ -81,7 +88,10 @@ def process_attempt(reference: str) -> str:
     verify status leaves a failed/abandoned attempt unchanged.
 
     Idempotent: the attempt is re-checked under its row lock before any write, and
-    ``confirm_payment`` is itself idempotent per attempt and gateway reference. Raises
+    ``confirm_payment`` is itself idempotent per attempt and gateway reference. With
+    ``abandon_stale`` (the re-verification sweep), an attempt still ``pending`` after 24 hours
+    whose verify is not a success becomes ``abandoned``, decided under the row lock; a
+    ``failed`` attempt is never changed to ``abandoned``. Raises
     ``GatewayUnavailable`` (writing nothing) for the task to retry.
     """
     attempt = PaymentAttempt.objects.filter(reference=reference).first()
@@ -93,7 +103,8 @@ def process_attempt(reference: str) -> str:
 
     # No lock and no transaction across the network call.
     result = get_gateway().verify(reference)
-    if result.status != "success" and result.status not in FINAL_FROM_GATEWAY:
+    in_progress = result.status != "success" and result.status not in FINAL_FROM_GATEWAY
+    if in_progress and not (abandon_stale and _is_stale(attempt)):
         return attempt.status  # still in progress at the gateway: leave it
 
     with transaction.atomic():
@@ -106,7 +117,13 @@ def process_attempt(reference: str) -> str:
             # Gateway says failed/abandoned: settle a pending attempt; never rewrite one
             # that is already failed or abandoned.
             if previous == PaymentAttempt.PENDING:
-                _finish(attempt, FINAL_FROM_GATEWAY[result.status], result)
+                if abandon_stale and _is_stale(attempt):
+                    new = PaymentAttempt.ABANDONED
+                elif in_progress:
+                    return previous  # only reachable for a stale sweep that lost the race
+                else:
+                    new = FINAL_FROM_GATEWAY[result.status]
+                _finish(attempt, new, result)
             return attempt.status
 
         field = _mismatch(attempt, result)

@@ -1,8 +1,12 @@
+from django_tenants.utils import get_public_schema_name
+
 from apps.core.tasks import TenantTask
 from apps.fees.confirm import process_attempt
 from apps.fees.gateways import GatewayUnavailable
 from apps.fees.models import Receipt
 from apps.fees.receipts import generate_receipt, send_receipt
+from apps.fees.reconcile import reverify_school
+from apps.tenancy.models import School
 from config.celery import app
 
 # Seconds before each retry of a verification the gateway could not answer.
@@ -34,3 +38,25 @@ def process_attempt_task(self, reference: str) -> str:
     except GatewayUnavailable as exc:
         step = min(self.request.retries, len(VERIFY_RETRY_COUNTDOWNS) - 1)
         raise self.retry(exc=exc, countdown=VERIFY_RETRY_COUNTDOWNS[step]) from None
+
+
+@app.task(base=TenantTask, queue="payments")
+def reverify_school_task() -> dict[str, int]:
+    """Re-verify this school's open payment attempts (``reconcile.reverify_school``)."""
+    return reverify_school()
+
+
+@app.task(queue="payments")
+def reverify_all_schools() -> int:
+    """Beat entry (every 15 minutes), run in the public schema: queue one re-verification per
+    active, fully provisioned school, with an explicit schema header. Returns the count."""
+    schools = School.objects.filter(is_active=True, provisioning_status="ready").exclude(
+        schema_name=get_public_schema_name()
+    )
+    count = 0
+    for school in schools:
+        reverify_school_task.apply_async(
+            queue="payments", headers={"schema_name": school.schema_name}
+        )
+        count += 1
+    return count
