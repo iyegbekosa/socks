@@ -283,9 +283,9 @@ def student_discounts(request, student_pk):
         _require_manage(request)
         if "remove" in request.POST:
             row_id = parse_id(request.POST.get("remove", ""))
-            row = get_object_or_404(rows, pk=row_id) if row_id else None
-            if row is None:
-                raise PermissionDenied
+            if row_id is None:
+                raise Http404
+            row = get_object_or_404(rows, pk=row_id)
             services.remove_discount(row, by=request.user, request=request)
             messages.success(request, "Discount removed.")
             return redirect("fees:student_discounts", student_pk=student.pk)

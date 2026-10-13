@@ -148,6 +148,28 @@ def test_balance_brought_forward_and_carried(school_a):
         assert invoicing.outstanding_for(student, up_to_term=w.term2) == 6_000_000
 
 
+def test_three_terms_brought_forward_is_counted_once(school_a):
+    """Term 1 debt carried into term 2, then (with term 2's own debt) into term 3."""
+    with schema_context("school_a"):
+        w = _jss1_world()
+        term3 = Term.objects.create(
+            session=w.session, number=3, start_date=date(2027, 4, 20), end_date=date(2027, 7, 20)
+        )
+        make_structure(w.level, w.term2, [(w.tuition, 2_000_000, False)])
+        make_structure(w.level, term3, [(w.tuition, 1_000_000, False)])
+        student = StudentProfileFactory()
+        invoicing.generate_invoices(w.term1, by=w.bursar)  # 55,000
+        invoicing.generate_invoices(w.term2, by=w.bursar)  # 20,000 + 55,000 b/f
+        invoicing.generate_invoices(term3, by=w.bursar)  # 10,000 + 75,000 b/f
+        first, second, third = (_invoice(student, t) for t in (w.term1, w.term2, term3))
+        assert first.status == second.status == Invoice.CARRIED
+        bf = list(third.lines.filter(kind="brought_forward").values_list("amount_kobo", flat=True))
+        assert bf == [7_500_000]  # only term 2, which already holds term 1's balance
+        assert third.total_kobo == 8_500_000
+        assert invoicing.outstanding_for(student) == 8_500_000
+        assert invoicing.outstanding_for(student, up_to_term=w.term2) == 0
+
+
 def test_brought_forward_crosses_sessions_and_skips_settled(school_a):
     with schema_context("school_a"):
         w = _jss1_world()

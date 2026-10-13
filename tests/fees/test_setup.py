@@ -176,6 +176,14 @@ def test_bursar_sets_up_fees_end_to_end(client_a):
     _assert_ids_only(events[0])
     assert client_a.get(reverse("fees:student_discounts", args=[student.pk])).status_code == 200
 
+    # remove: a malformed or unknown row id is a 404 (Task 1 minor); a real one is removed
+    url = reverse("fees:student_discounts", args=[student.pk])
+    for bad in ("abc", "", "-1", "999999"):
+        assert client_a.post(url, {"remove": bad}).status_code == 404, bad
+    assert client_a.post(url, {"remove": sd.pk}).status_code == 302
+    with schema_context("school_a"):
+        assert not StudentDiscount.objects.filter(student=student).exists()
+
 
 def test_structure_edit_removes_blank_lines(client_a):
     _login(client_a, "bursar")

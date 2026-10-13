@@ -2,8 +2,7 @@
 
 from django.contrib import messages
 from django.core.exceptions import ValidationError
-from django.core.files.storage import default_storage
-from django.http import Http404, HttpResponseBadRequest, HttpResponseRedirect
+from django.http import Http404, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
@@ -15,6 +14,7 @@ from apps.fees.forms import ManualPaymentForm
 from apps.fees.models import Invoice, ManualPayment
 from apps.fees.scope import MANAGE_ROLES, VIEW_ROLES, can_manage_fees
 from apps.fees.views.setup import _require_manage, _settings_or_defaults
+from apps.results.views.cards import signed_redirect
 from apps.students.models import Student
 from apps.tenancy.limits import PlanLimitExceeded
 
@@ -167,6 +167,4 @@ def teller_photo(request, pk):
     mp = _get_or_404(ManualPayment, pk)
     if not mp.photo_name:
         raise Http404
-    response = HttpResponseRedirect(default_storage.url(mp.photo_name))
-    response["Cache-Control"] = "no-store"
-    return response
+    return signed_redirect(mp.photo_name)

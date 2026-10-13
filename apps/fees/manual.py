@@ -23,6 +23,7 @@ from django.utils import timezone
 
 from apps.audit.services import record as audit
 from apps.core.images import clean_image
+from apps.core.money import MAX_KOBO
 from apps.core.storage import unique_upload_name
 from apps.fees import ledger, siblings
 from apps.fees.ledger import PlannedLine
@@ -33,7 +34,6 @@ from apps.tenancy.limits import PlanLimits
 
 logger = logging.getLogger(__name__)
 
-MAX_KOBO = 10_000_000_000  # ₦100,000,000.00
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
 MAX_PHOTO_SIDE = 6000  # pixels; a tiny compressed file can declare a huge canvas
 IMAGE_FORMATS = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG"}

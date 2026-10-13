@@ -170,6 +170,18 @@ def test_integrity_error_on_reference_returns_existing(school_a):
         assert ReceiptCounter.objects.get(year=timezone.localtime().year).last == 1
 
 
+def test_other_integrity_error_is_not_masked(school_a):
+    """Task 5 minor: an IntegrityError with no racing payment to re-read is raised as is."""
+    with schema_context("school_a"):
+        w = _world()
+        a = _invoice(w.student, w.term1, 3_000_000)
+        with (
+            mock.patch.object(Payment.objects, "create", side_effect=IntegrityError("check")),
+            pytest.raises(IntegrityError, match="check"),
+        ):
+            _confirm(w, [(a, 1_000_000)], 1_000_000, method="online", gateway_reference="R9")
+
+
 def test_manual_payments_without_reference_are_not_deduplicated(school_a):
     with schema_context("school_a"):
         w = _world()

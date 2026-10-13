@@ -211,13 +211,18 @@ def confirm_payment(
                     attempt=attempt,
                 )
         except IntegrityError:
-            # Lost a race on the unique reference or a one-to-one link: re-read.
-            if gateway_reference is not None:
-                return Payment.objects.get(gateway_reference=gateway_reference)
-            if manual is not None:
-                return Payment.objects.get(manual=manual)
-            if attempt is not None:
-                return Payment.objects.get(attempt=attempt)
+            # Lost a race on the unique reference or a one-to-one link: re-read. Anything else
+            # (a check constraint, say) finds nothing and the original error is raised.
+            links = (
+                ("gateway_reference", gateway_reference),
+                ("manual", manual),
+                ("attempt", attempt),
+            )
+            for field, value in links:
+                if value is not None:
+                    found = Payment.objects.filter(**{field: value}).first()
+                    if found is not None:
+                        return found
             raise
 
         allocations: list[Allocation] = []
