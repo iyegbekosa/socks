@@ -1,0 +1,45 @@
+{% extends "core/base.html" %}
+{% load fees_money %}
+{% block title %}Debtors{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Debtors</h1>
+  {% include "fees/_nav.html" %}
+  {% if term %}
+  <form method="get">
+    <label for="term">Term</label>
+    <select name="term" id="term">{% for t in terms %}<option value="{{ t.pk }}"{% if t.pk == term.pk %} selected{% endif %}>{{ t }}</option>{% endfor %}</select>
+    <label for="level">Class level</label>
+    <select name="level" id="level"><option value="">All levels</option>{% for lv in levels %}<option value="{{ lv.pk }}"{% if level and lv.pk == level.pk %} selected{% endif %}>{{ lv.name }}</option>{% endfor %}</select>
+    <label for="arm">Class</label>
+    <select name="arm" id="arm"><option value="">All classes</option>{% for a in arms %}<option value="{{ a.pk }}"{% if arm and a.pk == arm.pk %} selected{% endif %}>{{ a }}</option>{% endfor %}</select>
+    <label for="min">Owing at least (₦)</label>
+    <input type="text" name="min" id="min" inputmode="decimal" value="{{ raw_min }}"{% if min_error %} aria-invalid="true" aria-describedby="min-error"{% endif %}>
+    {% if min_error %}<p class="error" id="min-error" role="alert">{{ min_error }}</p>{% endif %}
+    <button type="submit">Show</button>
+    <button type="submit" name="export" value="csv">Download CSV</button>
+  </form>
+  <h2>{{ term }}</h2>
+  <p class="hint">Balances on invoices for this term and earlier terms. A balance carried into a later invoice is counted once, on the invoice it was carried into.</p>
+  <p>{{ rows|length }} student(s) owing {{ total_balance_kobo|naira }} in all.</p>
+  <table>
+    <thead><tr><th>Admission no.</th><th>Name</th><th>Class</th><th>Total</th><th>Paid</th><th>Balance</th><th>Last payment</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.student.admission_number|default:"" }}</td>
+      <td>{{ row.student.full_name }}{% if row.withdrawn %} <span class="muted">(Withdrawn)</span>{% endif %}</td>
+      <td>{{ row.arm.display_name|default:no_class }}</td>
+      <td>{{ row.total_kobo|naira }}</td>
+      <td>{{ row.paid_kobo|naira }}</td>
+      <td>{{ row.balance_kobo|naira }}</td>
+      <td>{% if row.last_payment_at %}{{ row.last_payment_at|date:"j M Y, H:i" }}{% else %}<span class="muted">None</span>{% endif %}</td>
+    </tr>
+    {% empty %}<tr><td colspan="7">Nobody owes fees for this selection.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p>No terms yet. Ask the school admin to set up the academic session first.</p>{% endif %}
+</div>
+{% endblock %}

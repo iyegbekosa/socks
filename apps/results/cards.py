@@ -471,3 +471,13 @@ def downloadable_card(user: Any, raw_student: Any, raw_term: Any) -> ReportCard 
             ),
         ).first()
     return None
+
+
+def card_withheld(user: Any, card: ReportCard) -> bool:
+    """True when a student's own card is withheld for unpaid fees (UC-17). Staff never are:
+    the check is by user kind, so a staff login is unaffected whatever it is linked to."""
+    if getattr(user, "kind", None) != "student":
+        return False
+    from apps.fees.blocking import results_withheld  # no module-level results -> fees import
+
+    return results_withheld(card.student, card.term)

@@ -1,0 +1,9 @@
+{% extends "core/base.html" %}
+{% block title %}Results withheld{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Results withheld</h1>
+  <p role="alert">{{ message }}</p>
+  <p><a href="{% url 'results:my_results' %}">Back to my results</a></p>
+</div>
+{% endblock %}

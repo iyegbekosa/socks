@@ -38,6 +38,7 @@ from apps.core.errors import ApiError
 from apps.core.money import money_fields
 from apps.core.parsing import parse_id
 from apps.fees import checkout, manual, siblings
+from apps.fees.blocking import WITHHELD_MESSAGE
 from apps.fees.gateways import GatewayUnavailable
 from apps.fees.invoicing import outstanding_for
 from apps.fees.ledger import PlannedLine
@@ -45,7 +46,7 @@ from apps.fees.models import Invoice, ManualPayment
 from apps.fees.scope import can_manage_fees, can_view_fees
 from apps.imports.models import ImportJob
 from apps.imports.services import ImportNotReady, create_import_job
-from apps.results.cards import downloadable_card
+from apps.results.cards import card_withheld, downloadable_card
 from apps.results.scope import can_enter_scores
 from apps.results.scores import (
     CellInput,
@@ -406,6 +407,8 @@ class ReportCardView(APIView):
         card = downloadable_card(request.user, student, term)
         if card is None:
             raise ApiError("NOT_FOUND", "Report card not found.", 404)
+        if card_withheld(request.user, card):
+            raise ApiError("RESULTS_WITHHELD", WITHHELD_MESSAGE, 403)
         return signed_redirect(card.file_name)
 
 

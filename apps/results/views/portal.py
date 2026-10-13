@@ -37,6 +37,16 @@ def published_summaries(student: Student) -> list[ResultSummary]:
     )
 
 
+def _withheld_term_ids(student: Student, summaries: list[ResultSummary]) -> set[int]:
+    """Terms whose results are withheld for unpaid fees (UC-17). Imported here so results
+    never imports fees at module level."""
+    from apps.fees.blocking import blocking_enabled, results_withheld
+
+    if not summaries or not blocking_enabled():
+        return set()
+    return {s.term_id for s in summaries if results_withheld(student, s.term)}
+
+
 @never_cache
 @require_GET
 @login_required
@@ -47,23 +57,30 @@ def my_results(request):
     summaries = published_summaries(student) if student is not None else []
     terms: list[dict[str, Any]] = []
     if student is not None and summaries:
+        from apps.fees.blocking import WITHHELD_MESSAGE
+
+        withheld = _withheld_term_ids(student, summaries)
+        shown = [s.term_id for s in summaries if s.term_id not in withheld]
         # One query for every subject row: each term's rows from the summary's own arm.
         by_term: dict[int, list[SubjectResult]] = defaultdict(list)
         for r in in_summary_arm(
-            SubjectResult.objects.filter(
-                student=student, term_id__in=[s.term_id for s in summaries]
-            )
+            SubjectResult.objects.filter(student=student, term_id__in=shown)
         ).order_by("subject_name", "pk"):
             r.position_label = ordinal(r.position)  # type: ignore[attr-defined]
             by_term[r.term_id].append(r)
         cards = set(
-            ReportCard.objects.filter(
-                student=student, term_id__in=[s.term_id for s in summaries]
-            ).values_list("term_id", "arm_id")
+            ReportCard.objects.filter(student=student, term_id__in=shown).values_list(
+                "term_id", "arm_id"
+            )
         )
         for s in summaries:
+            if s.term_id in withheld:
+                # Only the term heading and the message: none of the term's data.
+                terms.append({"term": s.term, "withheld": True, "message": WITHHELD_MESSAGE})
+                continue
             terms.append(
                 {
+                    "withheld": False,
                     "summary": s,
                     "term": s.term,
                     "position": ordinal(s.position),

@@ -1,0 +1,30 @@
+{% extends "core/base.html" %}
+{% load fees_money %}
+{% block title %}Fees{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Fees</h1>
+  {% include "fees/_nav.html" %}
+  <h2>Today</h2>
+  <dl class="facts">
+    <dt>Collected today</dt><dd>{{ today_kobo|naira }}</dd>
+    <dt>Manual payments waiting for approval</dt><dd><a href="{% url 'fees:manual_pending' %}">{{ pending_count }}</a></dd>
+    <dt>Flagged payments to review</dt><dd><a href="{% url 'fees:reconcile' %}">{{ flagged_count }}</a></dd>
+  </dl>
+  {% if term %}
+  <form method="get">
+    <label for="term">Term</label>
+    <select name="term" id="term">{% for t in terms %}<option value="{{ t.pk }}"{% if t.pk == term.pk %} selected{% endif %}>{{ t }}</option>{% endfor %}</select>
+    <button type="submit">Show</button>
+  </form>
+  <h2>{{ term }}</h2>
+  <dl class="facts">
+    <dt>Invoiced</dt><dd>{{ invoiced_kobo|naira }}</dd>
+    <dt>Collected</dt><dd>{{ collected_kobo|naira }}</dd>
+    <dt>Outstanding</dt><dd>{{ outstanding_kobo|naira }}</dd>
+  </dl>
+  <p class="hint">Invoiced includes balances brought forward from earlier terms. Outstanding leaves out balances carried into a later invoice.</p>
+  <p><a href="{% url 'fees:debtors' %}?term={{ term.pk }}">Debtors list</a> · <a href="{% url 'fees:invoices' %}?term={{ term.pk }}">Invoices</a></p>
+  {% else %}<p>No terms yet. Ask the school admin to set up the academic session first.</p>{% endif %}
+</div>
+{% endblock %}

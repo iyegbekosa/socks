@@ -1,6 +1,7 @@
 from django.urls import path
 
 from apps.fees.views import (
+    debtors,
     fake_checkout,
     invoices,
     manual,
@@ -15,7 +16,9 @@ from apps.fees.views import (
 app_name = "fees"
 
 urlpatterns = [
-    path("", setup.structures, name="structures"),
+    path("", debtors.dashboard, name="dashboard"),
+    path("structures/", setup.structures, name="structures"),
+    path("debtors/", debtors.debtors, name="debtors"),
     path("settings/", setup.settings_page, name="settings"),
     path("items/", setup.items, name="items"),
     path("items/<int:item_id>/", setup.item_edit, name="item_edit"),

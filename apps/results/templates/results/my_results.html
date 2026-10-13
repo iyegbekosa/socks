@@ -6,6 +6,9 @@
   {% for entry in terms %}
   <section>
     <h2>{{ entry.term.get_number_display }} ({{ entry.term.session.name }})</h2>
+    {% if entry.withheld %}
+    <p role="alert">{{ entry.message }}</p>
+    {% else %}
     <p class="muted">{{ entry.summary.arm.display_name }}</p>
     <dl class="facts">
       <dt>Total</dt><dd>{{ entry.summary.total }}</dd>
@@ -26,6 +29,7 @@
     <p><a href="{% url 'results:report_card' entry.summary.student_id entry.term.pk %}">Download report card</a></p>
     {% else %}
     <p class="muted">Your report card is being prepared. Check back soon.</p>
+    {% endif %}
     {% endif %}
   </section>
   {% empty %}
