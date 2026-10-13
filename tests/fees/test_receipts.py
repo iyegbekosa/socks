@@ -46,13 +46,14 @@ def uploads():
 
 
 def _paid_world(*, email="Guardian@Example.com", email2="guardian@example.com"):
-    """A student, two invoices, and a 30,000 naira payment (20,000 + 10,000)."""
+    """A student, two invoices (55,000 and 20,000), and a 30,000 naira payment (20,000 +
+    10,000), leaving balances of 35,000 and 10,000."""
     w = _world()
     w.student.first_name = "Ada"
     w.student.guardian_email = email
     w.student.guardian2_email = email2
     w.student.save()
-    w.inv1 = _invoice(w.student, w.term1, 5_000_000)
+    w.inv1 = _invoice(w.student, w.term1, 5_500_000)
     w.inv2 = _invoice(w.student, w.term2, 2_000_000)
     with mock.patch.object(hooks, "on_payment_confirmed"):
         w.payment = confirm_payment(
@@ -84,7 +85,7 @@ def test_pdf_contents(school_a, uploads):
         assert w.student.admission_number in text
         assert "₦30,000.00" in text
         assert str(w.term1) in text and str(w.term2) in text
-        assert "₦30,000.00" in text and "₦10,000.00" in text  # remaining balances 30k and 10k
+        assert "₦35,000.00" in text and "₦10,000.00" in text  # remaining balances 35k and 10k
         assert "Recorded by" in text and w.bursar.get_full_name() in text
 
 
@@ -196,7 +197,9 @@ def test_download_rules(school_a, uploads, client_a):
         r = client_a.get(url)
         assert r.status_code == 302
         assert "no-store" in r["Cache-Control"]
-        assert r["Location"] == default_storage.url(Receipt.objects.get(pk=w.receipt.pk).pdf_name)
+        expected = default_storage.url(Receipt.objects.get(pk=w.receipt.pk).pdf_name)
+        # Signed URLs carry an expiry in the query string, so compare without it.
+        assert r["Location"].split("?")[0] == expected.split("?")[0]
 
         client_a.force_login(other.user)
         assert client_a.get(url).status_code == 404
@@ -241,3 +244,59 @@ def test_invoice_page_links_each_allocation_to_its_receipt(school_a, uploads, cl
         login_verified(client_a, w.bursar)
         r = client_a.get(reverse("fees:invoice", args=[w.inv1.pk]))
         assert reverse("fees:receipt_download", args=[w.receipt.pk]) in r.text
+
+
+def test_pdf_prints_balance_at_confirmation_not_later(school_a, uploads):
+    """Ruling T: a later payment does not change the balance a receipt prints."""
+    with schema_context("school_a"):
+        w = _paid_world()
+        al = w.payment.allocations.get(invoice=w.inv1)
+        assert al.balance_after_kobo == 3_500_000
+        assert w.payment.allocations.get(invoice=w.inv2).balance_after_kobo == 1_000_000
+        with mock.patch.object(hooks, "on_payment_confirmed"):
+            confirm_payment(
+                student=w.student,
+                amount_kobo=1_200_000,
+                method="cash",
+                plan=[PlannedLine(w.inv1.pk, 1_200_000)],
+                paid_at=PAID_AT,
+                recorded_by=w.bursar,
+                approved_by=w.bursar,
+            )
+        assert receipts.generate_receipt(w.payment.pk) is True
+        text = pdf_text(_stored_pdf(uploads, w.receipt))
+        assert "₦35,000.00" in text  # as at the first payment
+        assert "₦23,000.00" not in text  # the current balance
+
+
+def test_allocation_without_snapshot_falls_back_to_current_balance(school_a):
+    with schema_context("school_a"):
+        w = _paid_world()
+        w.payment.allocations.update(balance_after_kobo=None)
+        lines = receipts.receipt_context(w.receipt, logo=None)["lines"]
+        assert [ln["balance"] for ln in lines] == ["₦35,000.00", "₦10,000.00"]
+
+
+def test_racing_runs_message_guardians_once(school_a, uploads):
+    with schema_context("school_a"):
+        w = _paid_world()
+        assert receipts.store_receipt(w.payment.pk) == receipts.FIRST_STORED
+        assert receipts.store_receipt(w.payment.pk) == receipts.STORED
+        mail.outbox.clear()
+        tasks.generate_receipt_task.apply_async(args=[w.payment.pk], queue="reports")
+        assert mail.outbox == []  # the PDF already existed: no second message
+
+
+def test_message_enqueue_failure_is_logged_by_type_and_swallowed(school_a, uploads, caplog):
+    with schema_context("school_a"):
+        w = _paid_world()
+        with (
+            mock.patch.object(
+                tasks.send_receipt_task, "apply_async", side_effect=OSError("broker-secret")
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            tasks.generate_receipt_task.apply_async(args=[w.payment.pk], queue="reports")
+        assert "OSError" in caplog.text and "broker-secret" not in caplog.text
+        w.receipt.refresh_from_db()
+        assert w.receipt.pdf_name != ""

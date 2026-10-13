@@ -61,7 +61,13 @@ def receipt_context(receipt: Receipt, *, logo: str | None) -> dict[str, Any]:
         {
             "term": str(al.invoice.term),
             "amount": naira_display(al.amount_kobo),
-            "balance": naira_display(al.invoice.balance_kobo),
+            # The balance just after this payment (Ruling T); older allocations fall back to
+            # the current balance.
+            "balance": naira_display(
+                al.balance_after_kobo
+                if al.balance_after_kobo is not None
+                else al.invoice.balance_kobo
+            ),
         }
         for al in payment.allocations.select_related("invoice__term__session").order_by("pk")
     ]
@@ -91,20 +97,33 @@ def render_receipt(receipt: Receipt) -> bytes:
     return render_pdf(html)
 
 
-def generate_receipt(payment_id: int) -> bool:
-    """Render and store the payment's receipt PDF. True when stored. Never raises: a failure is
-    logged by type and leaves ``pdf_name`` as it was ("Regenerate" retries)."""
+# Outcomes of ``store_receipt``.
+FAILED, STORED, FIRST_STORED = "failed", "stored", "first_stored"
+
+
+def store_receipt(payment_id: int) -> str:
+    """Render and store the payment's receipt PDF. Returns ``FIRST_STORED`` when this run set
+    ``pdf_name`` for the first time (a conditional update, so of two racing runs only one gets
+    it), ``STORED`` when it replaced an existing PDF and ``FAILED`` otherwise. Never raises: a
+    failure is logged by type and leaves ``pdf_name`` as it was ("Regenerate" retries)."""
     try:
         receipt = _receipt_for_payment(payment_id)
         if receipt is None:
-            return False
+            return FAILED
         pdf = render_receipt(receipt)
         name = default_storage.save(receipt_name(receipt), ContentFile(pdf))
+        if Receipt.objects.filter(pk=receipt.pk, pdf_name="").update(pdf_name=name):
+            return FIRST_STORED
         Receipt.objects.filter(pk=receipt.pk).update(pdf_name=name)
-        return True
+        return STORED
     except Exception:  # noqa: BLE001 - the receipt stays without a PDF
         log_exception_redacted(logger, "Receipt PDF for payment %s failed", payment_id)
-        return False
+        return FAILED
+
+
+def generate_receipt(payment_id: int) -> bool:
+    """Render and store the payment's receipt PDF. True when stored; see ``store_receipt``."""
+    return store_receipt(payment_id) != FAILED
 
 
 def _unique(values: list[str | None]) -> list[str]:
