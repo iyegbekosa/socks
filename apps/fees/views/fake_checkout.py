@@ -3,7 +3,8 @@
 "Pay (test)" and "Fail (test)" record the outcome in the FakeGateway, then hand a correctly
 signed ``charge.success`` / ``charge.failed`` body to the real public webhook handler in
 process (no HTTP call to ourselves). The handler runs all of its checks, and with eager Celery
-the payment is verified and confirmed before the redirect to the return page.
+the payment is verified and confirmed before the redirect to the return page. "Fail (test)"
+then runs ``confirm.process_attempt`` itself, since the webhook ignores ``charge.failed``.
 """
 
 import json
@@ -17,7 +18,7 @@ from django.urls import reverse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
-from apps.fees import webhooks
+from apps.fees import confirm, webhooks
 from apps.fees.models import PaymentAttempt
 
 OUTCOMES = {"success": "charge.success", "failed": "charge.failed"}
@@ -72,6 +73,10 @@ def fake_checkout(request, reference: str):
             return HttpResponseBadRequest()
         FakeGateway.record_result(reference, outcome, amount_kobo=attempt.amount_kobo)
         _deliver_webhook(reference, outcome, attempt.amount_kobo)
+        if outcome == "failed":
+            # The webhook ignores charge.failed; settle it now (as re-verification would
+            # later) so the tester sees "Payment was not completed" straight away.
+            confirm.process_attempt(reference)
         return redirect(f"{reverse('fees:pay_return')}?{urlencode({'reference': reference})}")
 
     return render(

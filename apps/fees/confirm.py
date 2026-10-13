@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 CURRENCY = "NGN"
 MISSING = "missing"
+# Settled for good: never verified again.
+FINAL = frozenset({PaymentAttempt.SUCCESS, PaymentAttempt.FLAGGED})
 FINAL_FROM_GATEWAY = {
     "failed": PaymentAttempt.FAILED,
     "abandoned": PaymentAttempt.ABANDONED,
@@ -72,37 +74,42 @@ def _finish(attempt: PaymentAttempt, status: str, result: VerifyResult, reason: 
 def process_attempt(reference: str) -> str:
     """Verify ``reference`` with the gateway and settle its attempt. Returns the status.
 
-    Idempotent: a final attempt returns its status without calling the gateway, the attempt
-    is re-checked under its row lock before any write, and ``confirm_payment`` is itself
-    idempotent per attempt and gateway reference. Raises ``GatewayUnavailable`` (leaving the
-    attempt pending) for the task to retry.
+    Only ``success`` and ``flagged`` are final here: they return without calling the gateway.
+    A ``failed`` or ``abandoned`` attempt is verified again, because Paystack lets a customer
+    retry a charge on the same reference; a matching success is then credited late (audit
+    ``fees.attempt_late_success``) instead of the money arriving with no record. Any other
+    verify status leaves a failed/abandoned attempt unchanged.
+
+    Idempotent: the attempt is re-checked under its row lock before any write, and
+    ``confirm_payment`` is itself idempotent per attempt and gateway reference. Raises
+    ``GatewayUnavailable`` (writing nothing) for the task to retry.
     """
     attempt = PaymentAttempt.objects.filter(reference=reference).first()
     if attempt is None:
         logger.warning("No payment attempt for a routed reference.")
         return MISSING
-    if attempt.status != PaymentAttempt.PENDING:
+    if attempt.status in FINAL:
         return attempt.status
 
     # No lock and no transaction across the network call.
     result = get_gateway().verify(reference)
-
-    if result.status == "success":
-        field = _mismatch(attempt, result)
-    elif result.status in FINAL_FROM_GATEWAY:
-        field = None
-    else:
-        return attempt.status  # still pending at the gateway: leave it
+    if result.status != "success" and result.status not in FINAL_FROM_GATEWAY:
+        return attempt.status  # still in progress at the gateway: leave it
 
     with transaction.atomic():
         attempt = PaymentAttempt.objects.select_for_update().get(pk=attempt.pk)
-        if attempt.status != PaymentAttempt.PENDING:
+        previous = attempt.status
+        if previous in FINAL:
+            return previous
+
+        if result.status != "success":
+            # Gateway says failed/abandoned: settle a pending attempt; never rewrite one
+            # that is already failed or abandoned.
+            if previous == PaymentAttempt.PENDING:
+                _finish(attempt, FINAL_FROM_GATEWAY[result.status], result)
             return attempt.status
 
-        if result.status in FINAL_FROM_GATEWAY:
-            _finish(attempt, FINAL_FROM_GATEWAY[result.status], result)
-            return attempt.status
-
+        field = _mismatch(attempt, result)
         if field is not None:
             _finish(attempt, PaymentAttempt.FLAGGED, result, MISMATCH_REASONS[field])
             record(
@@ -124,4 +131,7 @@ def process_attempt(reference: str) -> str:
             attempt=attempt,
         )
         _finish(attempt, PaymentAttempt.SUCCESS, result)
+        if previous != PaymentAttempt.PENDING:
+            record("fees.attempt_late_success", obj=attempt, after={"attempt_id": attempt.pk})
+            logger.warning("Payment attempt %s succeeded after being %s.", attempt.pk, previous)
         return attempt.status

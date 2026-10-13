@@ -1,6 +1,6 @@
 """Server-side verification and idempotent confirmation of online payments (§4.5 steps 5–6)."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from unittest import mock
 
 import pytest
@@ -12,12 +12,13 @@ from django_tenants.utils import schema_context
 
 from apps.audit.models import AuditEvent
 from apps.core.logging import SECRET_ARG_TASKS
-from apps.fees import checkout, confirm, hooks, ledger, tasks
+from apps.fees import checkout, confirm, hooks, ledger, manual, tasks
 from apps.fees.gateways import GatewayUnavailable, VerifyResult
 from apps.fees.gateways.fake import FakeGateway
 from apps.fees.ledger import PlannedLine
 from apps.fees.models import Allocation, Invoice, Payment, PaymentAttempt, Receipt
 from apps.tenancy.models import School
+from tests.fees.factories import make_staff
 from tests.fees.test_ledger import _invoice, _world
 
 pytestmark = pytest.mark.django_db
@@ -251,15 +252,19 @@ def test_integrity_error_path_returns_existing_payment(w):
 
 def test_overpayment_after_manual_payment_is_flagged_not_lost(w):
     attempt = _start(w)  # pending for the full ₦50,000
-    ledger.confirm_payment(
+    # The bursar records ₦50,000 (at the approval threshold) and an admin approves it.
+    mp = manual.record(
         student=w.student,
-        amount_kobo=5_000_000,
         method="cash",
+        amount_kobo=5_000_000,
         plan=[PlannedLine(w.inv.pk, 5_000_000)],
-        paid_at=PAID_AT,
-        recorded_by=w.bursar,
-        approved_by=w.bursar,
+        paid_on=date.today(),
+        reference_no="",
+        by=w.bursar,
     )
+    manual.approve(mp, by=make_staff("school_admin"))
+    w.inv.refresh_from_db()
+    assert w.inv.paid_kobo == 5_000_000
     with _with_verify(_verify()):
         assert confirm.process_attempt(attempt.reference) == PaymentAttempt.SUCCESS
     online = Payment.objects.get(attempt=attempt)
@@ -270,6 +275,38 @@ def test_overpayment_after_manual_payment_is_flagged_not_lost(w):
     assert w.inv.paid_kobo == w.inv.total_kobo == 5_000_000
     assert w.inv.status == Invoice.PAID
     assert Receipt.objects.filter(payment=online).count() == 1
+
+
+@pytest.mark.parametrize("previous", [PaymentAttempt.FAILED, PaymentAttempt.ABANDONED])
+def test_late_success_with_mismatch_is_flagged_not_credited(w, previous):
+    attempt = _start(w)
+    PaymentAttempt.objects.filter(pk=attempt.pk).update(status=previous)
+    with _with_verify(_verify(amount=1)):
+        assert confirm.process_attempt(attempt.reference) == PaymentAttempt.FLAGGED
+    assert Payment.objects.count() == 0
+    assert AuditEvent.objects.get(action="fees.attempt_mismatch").after == {
+        "attempt_id": attempt.pk,
+        "field": "amount",
+    }
+    assert not AuditEvent.objects.filter(action="fees.attempt_late_success").exists()
+
+
+def test_failed_attempt_is_not_rewritten_as_abandoned(w):
+    attempt = _start(w)
+    PaymentAttempt.objects.filter(pk=attempt.pk).update(status=PaymentAttempt.FAILED)
+    with _with_verify(_verify(status="abandoned")) as verify:
+        assert confirm.process_attempt(attempt.reference) == PaymentAttempt.FAILED
+    verify.assert_called_once()
+    attempt.refresh_from_db()
+    assert attempt.status == PaymentAttempt.FAILED
+    assert attempt.raw_response == {}
+
+
+def test_success_on_pending_attempt_has_no_late_audit(w):
+    attempt = _start(w)
+    with _with_verify(_verify()):
+        confirm.process_attempt(attempt.reference)
+    assert not AuditEvent.objects.filter(action="fees.attempt_late_success").exists()
 
 
 # --- the task -------------------------------------------------------------------------------
@@ -329,3 +366,15 @@ def test_gateway_unavailable_via_apply_async_raises_retry(w):
             )
     attempt.refresh_from_db()
     assert attempt.status == PaymentAttempt.PENDING
+
+
+def test_exhausted_retries_raise_and_leave_attempt_pending(w):
+    attempt = _start(w)
+    with _with_verify(GatewayUnavailable("down")), schema_context("public"):
+        with pytest.raises(GatewayUnavailable):
+            tasks.process_attempt_task.apply(
+                args=[attempt.reference], retries=3, headers={"schema_name": "school_a"}
+            ).get()
+    attempt.refresh_from_db()
+    assert attempt.status == PaymentAttempt.PENDING
+    assert Payment.objects.count() == 0
