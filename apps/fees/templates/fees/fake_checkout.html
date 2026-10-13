@@ -8,5 +8,10 @@
   <p>Reference: <code>{{ reference }}</code></p>
   <p>Amount: <strong>{{ amount_kobo|naira }}</strong></p>
   <p>Status: {{ state.status }}</p>
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit" name="outcome" value="success">Pay (test)</button>
+    <button type="submit" name="outcome" value="failed">Fail (test)</button>
+  </form>
 </div>
 {% endblock %}

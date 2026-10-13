@@ -4,7 +4,11 @@
 <div class="card">
   {% if status == "success" %}
   <h1>Payment received</h1>
+  {% if receipt %}
+  <p>Thank you. Receipt {{ receipt.number }}: <a href="{% url 'fees:receipt_download' receipt.pk %}">download receipt</a>.</p>
+  {% else %}
   <p>Thank you. Your receipt will be ready shortly.</p>
+  {% endif %}
   {% elif status == "pending" %}
   <h1>We are confirming your payment…</h1>
   <p>This can take a few minutes. Refresh this page to check again. Do not pay twice.</p>

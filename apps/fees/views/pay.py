@@ -1,6 +1,7 @@
 """Student online payment (§4.5): choose invoices, go to the gateway, come back to a status page.
 
-The return page only reads the attempt's status; confirmation is the webhook's job (Task 8).
+The return page only reads the attempt's status (and its receipt once confirmed); confirmation
+is the webhook's job (``apps.fees.webhooks`` → ``confirm.process_attempt``).
 """
 
 from typing import Any
@@ -18,7 +19,7 @@ from apps.fees import checkout
 from apps.fees.forms import naira_input, parse_naira
 from apps.fees.gateways import GatewayUnavailable
 from apps.fees.ledger import PlannedLine
-from apps.fees.models import FeeSettings
+from apps.fees.models import FeeSettings, PaymentAttempt, Receipt
 from apps.students.models import Student
 from apps.tenancy.limits import _current_school
 
@@ -115,8 +116,13 @@ def pay_return(request):
     references = request.GET.getlist("reference")
     reference = references[0] if references else ""
     status = checkout.status_for(student, reference)
+    receipt = None
+    if status == PaymentAttempt.SUCCESS:
+        receipt = Receipt.objects.filter(
+            payment__attempt__reference=reference, payment__attempt__student=student
+        ).first()
     return render(
         request,
         "fees/pay_return.html",
-        {"reference": reference, "status": status},
+        {"reference": reference, "status": status, "receipt": receipt},
     )

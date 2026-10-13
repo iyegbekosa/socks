@@ -1,4 +1,4 @@
-"""School payout account (FR-11, school_admin only) and the DEBUG-only fake checkout page.
+"""School payout account (FR-11, school_admin only).
 
 Flow: pick a bank and enter the account number → "Check account" resolves the account name
 and keeps the pending details in the session only → "Confirm" creates or updates the Paystack
@@ -7,9 +7,7 @@ subaccount. The database keeps the bank name and the last 4 digits, never the fu
 
 from typing import Any
 
-from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth.decorators import login_required
 from django.db import connection
 from django.http import Http404
 from django.shortcuts import redirect, render
@@ -116,22 +114,4 @@ def payout(request):
             "pending": pending,
             "pending_last4": pending["account_number"][-4:] if pending else "",
         },
-    )
-
-
-@never_cache
-@login_required
-def fake_checkout(request, reference: str):
-    """DEBUG only: shows what the FakeGateway recorded. Task 8 adds the pay/fail buttons."""
-    if not settings.DEBUG:
-        raise Http404
-    from apps.fees.gateways.fake import FakeGateway
-
-    state = FakeGateway.lookup(reference)
-    if state is None:
-        raise Http404
-    return render(
-        request,
-        "fees/fake_checkout.html",
-        {"reference": reference, "amount_kobo": state.get("amount_kobo") or 0, "state": state},
     )

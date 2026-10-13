@@ -18,6 +18,7 @@ SECRET_ARG_TASKS = frozenset(
         "apps.results.tasks.notify_published_task",
         "apps.fees.tasks.generate_receipt_task",
         "apps.fees.tasks.send_receipt_task",
+        "apps.fees.tasks.process_attempt_task",
     }
 )
 _TASK_ARG_KEYS = ("args", "kwargs", "argsrepr", "kwargsrepr")
