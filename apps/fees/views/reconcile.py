@@ -1,12 +1,14 @@
 """Reconciliation (§8.1): flagged attempts and payments, pending approvals, missing receipts."""
 
 import logging
+from datetime import timedelta
 
 from django.contrib import messages
 from django.core.exceptions import ValidationError
-from django.db.models import Count
+from django.db.models import Q
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
@@ -21,8 +23,9 @@ from apps.fees.views.setup import _require_manage
 
 logger = logging.getLogger(__name__)
 
+RECHECK_LIMIT = 100
+RECHECK_WINDOW = timedelta(hours=24)
 RECHECKABLE = (
-    PaymentAttempt.FLAGGED,
     PaymentAttempt.PENDING,
     PaymentAttempt.FAILED,
     PaymentAttempt.ABANDONED,
@@ -33,9 +36,20 @@ def _page(request, *, status: int = 200, resolve_errors=None):
     attempts = PaymentAttempt.objects.filter(status=PaymentAttempt.FLAGGED).select_related(
         "student__user"
     )
+    recheck = (
+        PaymentAttempt.objects.filter(
+            Q(status=PaymentAttempt.PENDING)
+            | Q(
+                status__in=(PaymentAttempt.FAILED, PaymentAttempt.ABANDONED),
+                updated_at__gte=timezone.now() - RECHECK_WINDOW,
+            )
+        )
+        .select_related("student__user")
+        .order_by("-created_at", "-pk")[:RECHECK_LIMIT]
+    )
     payments = Payment.objects.filter(flagged=True).select_related("receipt", "student__user")
     missing = Receipt.objects.filter(pdf_name="").select_related("payment")
-    pending = ManualPayment.objects.filter(status=ManualPayment.PENDING).aggregate(n=Count("pk"))
+    pending_count = ManualPayment.objects.filter(status=ManualPayment.PENDING).count()
     return render(
         request,
         "fees/reconcile.html",
@@ -43,7 +57,8 @@ def _page(request, *, status: int = 200, resolve_errors=None):
             "attempts": attempts,
             "payments": payments,
             "missing_receipts": missing,
-            "pending_count": pending["n"],
+            "pending_count": pending_count,
+            "recheck": recheck,
             "can_act": can_manage_fees(request.user),
             "resolve_errors": resolve_errors or {},
         },
@@ -90,7 +105,8 @@ def attempt_recheck(request, attempt_id):
     _require_manage(request)
     attempt = _get_or_404(PaymentAttempt, attempt_id)
     if attempt.status not in RECHECKABLE:
-        messages.info(request, "This payment attempt is already confirmed.")
+        # Success and flagged are final: no gateway call.
+        messages.info(request, "This payment attempt is already settled and cannot be re-checked.")
         return redirect("fees:reconcile")
     try:
         status = process_attempt(attempt.reference)

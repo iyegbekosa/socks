@@ -212,7 +212,8 @@ def test_page_lists_flagged_items_and_shows_buttons_to_managers(w, client_a):
     assert pay.receipt.number in html
     assert a.reference in html and "Amount mismatch" in html
     assert w.student.admission_number in html
-    assert "Mark resolved" in html and "Re-check now" in html and "Regenerate" in html
+    assert "Mark resolved" in html and "Regenerate" in html
+    assert "Re-check now" not in html  # the only attempt is flagged: read-only
     assert reverse("fees:manual_pending") in html
 
 
@@ -225,6 +226,7 @@ def test_proprietor_sees_page_without_buttons(w, client_a):
     html = r.content.decode()
     assert r.status_code == 200 and "₦20,000.00" in html
     assert "Mark resolved" not in html and "Re-check now" not in html
+    assert a.reference in html
 
 
 def test_teacher_gets_403(w, client_a):
@@ -311,3 +313,48 @@ def test_recheck_proprietor_403_and_bad_id_404(w, client_a):
 def test_nav_links_to_reconciliation(w, client_a):
     login_verified(client_a, w.bursar)
     assert reverse("fees:reconcile") in client_a.get(reverse("fees:structures")).content.decode()
+
+
+def test_recheck_section_lists_open_attempts_only(w, client_a):
+    pend = _attempt(w, 5)
+    failed = _attempt(w, 60)
+    PaymentAttempt.objects.filter(pk=failed.pk).update(status="failed")
+    old_failed = _attempt(w, 60)
+    PaymentAttempt.objects.filter(pk=old_failed.pk).update(
+        status="failed", updated_at=timezone.now() - timedelta(hours=30)
+    )
+    login_verified(client_a, w.bursar)
+    html = client_a.get(reverse("fees:reconcile")).content.decode()
+    assert pend.reference in html and failed.reference in html
+    assert old_failed.reference not in html
+    assert reverse("fees:attempt_recheck", args=[pend.pk]) in html
+
+
+def test_recheck_of_flagged_or_success_attempt_never_calls_gateway(w, client_a):
+    a = _attempt(w, 60)
+    login_verified(client_a, w.bursar)
+    for status in ("flagged", "success"):
+        PaymentAttempt.objects.filter(pk=a.pk).update(status=status)
+        with mock.patch.object(FakeGateway, "verify") as verify:
+            r = client_a.post(reverse("fees:attempt_recheck", args=[a.pk]))
+        assert r.status_code == 302
+        verify.assert_not_called()
+        assert _status(a) == status
+
+
+def test_recheck_unknown_attempt_is_404(w, client_a):
+    login_verified(client_a, w.bursar)
+    assert client_a.post(reverse("fees:attempt_recheck", args=[10**9])).status_code == 404
+
+
+def test_abandon_loses_to_a_success_that_lands_during_verify(w):
+    """The gateway call runs unlocked; a confirmation landing meanwhile wins."""
+    a = _attempt(w, 25 * 60)
+
+    def verify(reference):
+        PaymentAttempt.objects.filter(pk=a.pk).update(status="success")
+        return mock.Mock(status="failed", raw={})
+
+    with mock.patch.object(FakeGateway, "verify", side_effect=verify):
+        tasks.reverify_school_task.apply(headers={"schema_name": "school_a"})
+    assert _status(a) == PaymentAttempt.SUCCESS

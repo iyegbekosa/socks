@@ -8,9 +8,29 @@
   {% include "fees/_nav.html" %}
   {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
 
+  <h2>Payments to re-check</h2>
+  <table>
+    <thead><tr><th>Reference</th><th>Admission number</th><th>Amount</th><th>Status</th><th>Started</th>{% if can_act %}<th>Action</th>{% endif %}</tr></thead>
+    <tbody>
+    {% for a in recheck %}
+    <tr>
+      <td>{{ a.reference }}</td>
+      <td>{{ a.student.admission_number }}</td>
+      <td>{{ a.amount_kobo|naira }}</td>
+      <td>{{ a.get_status_display }}</td>
+      <td>{{ a.created_at|date:"j M Y H:i" }}</td>
+      {% if can_act %}<td>
+        <form method="post" action="{% url 'fees:attempt_recheck' a.pk %}">{% csrf_token %}<button type="submit">Re-check now</button></form>
+      </td>{% endif %}
+    </tr>
+    {% empty %}<tr><td colspan="{% if can_act %}6{% else %}5{% endif %}">No payments need re-checking.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
   <h2>Flagged payment attempts</h2>
   <table>
-    <thead><tr><th>Reference</th><th>Admission number</th><th>Amount</th><th>Reason</th><th>Date</th>{% if can_act %}<th>Action</th>{% endif %}</tr></thead>
+    <thead><tr><th>Reference</th><th>Admission number</th><th>Amount</th><th>Reason</th><th>Date</th></tr></thead>
     <tbody>
     {% for a in attempts %}
     <tr>
@@ -19,11 +39,8 @@
       <td>{{ a.amount_kobo|naira }}</td>
       <td>{{ a.flag_reason }}</td>
       <td>{{ a.updated_at|date:"j M Y" }}</td>
-      {% if can_act %}<td>
-        <form method="post" action="{% url 'fees:attempt_recheck' a.pk %}">{% csrf_token %}<button type="submit">Re-check now</button></form>
-      </td>{% endif %}
     </tr>
-    {% empty %}<tr><td colspan="{% if can_act %}6{% else %}5{% endif %}">No flagged payment attempts.</td></tr>
+    {% empty %}<tr><td colspan="5">No flagged payment attempts.</td></tr>
     {% endfor %}
     </tbody>
   </table>
