@@ -16,20 +16,30 @@
 
   {% if pending %}
   <h2>Confirm account</h2>
-  <p>Account name: <strong>{{ pending.account_name }}</strong></p>
-  <p>{{ pending.bank_name }}, account ending {{ pending_last4 }}</p>
+  {% if confirm_error %}<p class="error" role="alert">{{ confirm_error }}</p>{% endif %}
+  <p>Account name: <strong>{{ pending.resolved_name }}</strong></p>
+  <p>{{ pending_bank_name|default:pending.bank_code }}, account ending {{ pending.last4 }}</p>
   <form method="post">
     {% csrf_token %}
+    {% if confirm_number %}
+    <input type="hidden" name="account_number" value="{{ confirm_number }}">
+    {% else %}
+    <p><label for="id_confirm_account_number">Enter the account number again to confirm</label>
+      <input type="text" id="id_confirm_account_number" name="account_number" inputmode="numeric" autocomplete="off" maxlength="20" required></p>
+    {% endif %}
     <button type="submit" name="action" value="confirm">Confirm</button>
     <button type="submit" name="action" value="cancel">Cancel</button>
   </form>
-  {% elif banks_available %}
+  {% else %}
+  {% if check_error %}<p class="error" role="alert">{{ check_error }}</p>{% endif %}
+  {% if banks_available %}
   <form method="post">
     {% csrf_token %}
     {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
     {% for field in form %}{% include "fees/_field.html" %}{% endfor %}
     <button type="submit" name="action" value="check">Check account</button>
   </form>
+  {% endif %}
   {% endif %}
 </div>
 {% endblock %}

@@ -145,7 +145,7 @@ class PaystackGateway:
     def banks(self) -> list[Bank]:
         with schema_context(get_public_schema_name()):
             cached = cache.get(BANKS_CACHE_KEY)
-        if cached is not None:
+        if cached:
             return [Bank(code=code, name=name) for code, name in cached]
         data = self._data("GET", "/bank", params={"country": "nigeria", "currency": "NGN"})
         if not isinstance(data, list):
@@ -155,8 +155,9 @@ class PaystackGateway:
             for row in data
             if isinstance(row, dict) and row.get("code") and row.get("name")
         ]
-        with schema_context(get_public_schema_name()):
-            cache.set(BANKS_CACHE_KEY, pairs, BANKS_CACHE_SECONDS)
+        if pairs:  # never cache an empty list: the payout page would be blank for a day
+            with schema_context(get_public_schema_name()):
+                cache.set(BANKS_CACHE_KEY, pairs, BANKS_CACHE_SECONDS)
         return [Bank(code=code, name=name) for code, name in pairs]
 
     def resolve_account(self, account_number: str, bank_code: str) -> str:

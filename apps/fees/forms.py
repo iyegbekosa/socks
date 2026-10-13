@@ -368,6 +368,14 @@ class ManualPaymentForm(forms.Form):
         return lines
 
 
+def clean_nuban(raw: Any) -> str | None:
+    """A 10-digit NUBAN with spaces removed, or None."""
+    value = "".join(str(raw or "").split())
+    if len(value) != 10 or not value.isascii() or not value.isdigit():
+        return None
+    return value
+
+
 class PayoutAccountForm(forms.Form):
     """Bank and 10-digit NUBAN for the school's payout (Paystack subaccount)."""
 
@@ -386,7 +394,7 @@ class PayoutAccountForm(forms.Form):
         bank_field.choices = [("", "Choose a bank")] + [(bank.code, bank.name) for bank in banks]
 
     def clean_account_number(self) -> str:
-        value = "".join(self.cleaned_data["account_number"].split())
-        if len(value) != 10 or not value.isascii() or not value.isdigit():
+        value = clean_nuban(self.cleaned_data["account_number"])
+        if value is None:
             raise forms.ValidationError("Enter the 10-digit account number.")
         return value

@@ -1,18 +1,24 @@
 """School payout account page (FR-11): bank + account number become a Paystack subaccount."""
 
+import hashlib
+import hmac
 import json
+from datetime import timedelta
 from unittest import mock
 
 import httpx
 import pytest
+from django.conf import settings
 from django.core.cache import cache
 from django.urls import reverse
+from django.utils import timezone
 from django_tenants.utils import schema_context
 
 from apps.audit.models import AuditEvent
 from apps.fees.gateways import RESOLVE_REJECTED_MESSAGE, UNAVAILABLE_MESSAGE
 from apps.fees.gateways.fake import FakeGateway
 from apps.fees.gateways.paystack import PaystackGateway
+from apps.fees.views import payout
 from apps.tenancy.models import School
 from tests.accounts.helpers import login_verified
 from tests.fees.factories import make_staff
@@ -130,8 +136,9 @@ def test_admin_resolve_then_confirm_saves_subaccount(client_a, paystack):
     assert paystack.calls("POST", "/subaccount") == []
     assert _school().paystack_subaccount_code == ""
 
-    confirmed = client_a.post(URL, {"action": "confirm"})
+    confirmed = client_a.post(URL, {"action": "confirm", "account_number": ACCOUNT})
     assert confirmed.status_code == 302
+    assert len(paystack.calls("GET", "/bank/resolve")) == 2  # resolved again at confirm
     school = _school()
     assert school.paystack_subaccount_code == "ACCT_school_a"
     assert school.payout_bank_name == "GTBank"
@@ -164,7 +171,8 @@ def test_update_existing_subaccount_uses_put(client_a, paystack):
     )
     _login(client_a, "school_admin")
     client_a.post(URL, {"action": "check", "bank_code": "044", "account_number": "9876543210"})
-    assert client_a.post(URL, {"action": "confirm"}).status_code == 302
+    r = client_a.post(URL, {"action": "confirm", "account_number": "9876543210"})
+    assert r.status_code == 302
     assert paystack.calls("POST", "/subaccount") == []
     (update,) = paystack.calls("PUT", "/subaccount/ACCT_school_a")
     assert json.loads(update.content)["settlement_bank"] == "044"
@@ -226,7 +234,7 @@ def test_gateway_down_at_check_and_confirm(client_a, paystack):
     paystack.down = False
     client_a.post(URL, {"action": "check", "bank_code": "058", "account_number": ACCOUNT})
     paystack.down = True
-    resp = client_a.post(URL, {"action": "confirm"})
+    resp = client_a.post(URL, {"action": "confirm", "account_number": ACCOUNT})
     assert resp.status_code == 200
     assert UNAVAILABLE_MESSAGE.encode() in resp.content
     assert _school().paystack_subaccount_code == ""
@@ -247,6 +255,84 @@ def test_cancel_clears_the_pending_check(client_a, paystack):
     assert client_a.post(URL, {"action": "cancel"}).status_code == 302
     client_a.post(URL, {"action": "confirm"})
     assert _school().paystack_subaccount_code == ""
+
+
+def _check(client):
+    return client.post(URL, {"action": "check", "bank_code": "058", "account_number": ACCOUNT})
+
+
+def test_session_never_holds_the_full_number(client_a, paystack):
+    _login(client_a, "school_admin")
+    page = _check(client_a)
+    stored = json.dumps(dict(client_a.session))
+    assert ACCOUNT not in stored
+    pending = client_a.session[payout.PENDING_KEY]
+    assert set(pending) == {
+        "schema",
+        "bank_code",
+        "last4",
+        "resolved_name",
+        "number_hmac",
+        "expires_at",
+    }
+    assert pending["last4"] == "6789" and pending["resolved_name"] == "SCHOOL A LIMITED"
+    assert (
+        pending["number_hmac"]
+        == hmac.new(settings.SECRET_KEY.encode(), ACCOUNT.encode(), hashlib.sha256).hexdigest()
+    )
+    ttl = pending["expires_at"] - timezone.now().timestamp()
+    assert 14 * 60 < ttl <= 15 * 60
+    # The number is re-posted by the confirm form instead.
+    assert f'name="account_number" value="{ACCOUNT}"'.encode() in page.content
+
+
+def test_confirm_with_a_different_number_is_a_form_error(client_a, paystack):
+    _login(client_a, "school_admin")
+    _check(client_a)
+    resp = client_a.post(URL, {"action": "confirm", "account_number": "0123456780"})
+    assert resp.status_code == 200
+    assert payout.MSG_MISMATCH.encode() in resp.content
+    assert paystack.calls("POST", "/subaccount") == []
+    assert len(paystack.calls("GET", "/bank/resolve")) == 1
+    assert _school().paystack_subaccount_code == ""
+    # Still pending: re-entering the right number confirms.
+    assert b"Enter the account number again" in resp.content
+    r = client_a.post(URL, {"action": "confirm", "account_number": ACCOUNT})
+    assert r.status_code == 302 and _school().paystack_subaccount_code == "ACCT_school_a"
+    assert payout.PENDING_KEY not in client_a.session
+
+
+def test_expired_check_is_a_form_error_and_cleared(client_a, paystack):
+    _login(client_a, "school_admin")
+    _check(client_a)
+    later = timezone.now() + timedelta(minutes=16)
+    with mock.patch("django.utils.timezone.now", return_value=later):
+        resp = client_a.post(URL, {"action": "confirm", "account_number": ACCOUNT})
+    assert resp.status_code == 200
+    assert payout.MSG_EXPIRED.encode() in resp.content
+    assert payout.PENDING_KEY not in client_a.session
+    assert paystack.calls("POST", "/subaccount") == []
+    assert _school().paystack_subaccount_code == ""
+
+
+def test_name_changed_at_confirm_is_refused(client_a, paystack):
+    _login(client_a, "school_admin")
+    _check(client_a)
+    with mock.patch.object(PaystackGateway, "resolve_account", return_value="SOMEONE ELSE"):
+        resp = client_a.post(URL, {"action": "confirm", "account_number": ACCOUNT})
+    assert resp.status_code == 200
+    assert payout.MSG_NAME_CHANGED.encode() in resp.content
+    assert payout.PENDING_KEY not in client_a.session
+    assert paystack.calls("POST", "/subaccount") == []
+
+
+def test_empty_bank_list_shows_unavailable(client_a, paystack):
+    _login(client_a, "school_admin")
+    with mock.patch.object(PaystackGateway, "banks", return_value=[]):
+        page = client_a.get(URL)
+    assert page.status_code == 200
+    assert b"Bank list unavailable, try again shortly." in page.content
+    assert b"Check account" not in page.content
 
 
 # --- fake checkout route (DEBUG only) -----------------------------------------

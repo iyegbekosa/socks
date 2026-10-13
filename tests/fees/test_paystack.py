@@ -211,6 +211,14 @@ def test_banks_failure_is_unavailable_and_not_cached():
     assert len(rec2.requests) == 1
 
 
+def test_empty_bank_list_is_not_cached():
+    gw, _ = _gateway(_ok([]))
+    assert gw.banks() == []
+    gw2, rec2 = _gateway(_ok([{"code": "058", "name": "GTBank"}]))
+    assert gw2.banks() == [Bank(code="058", name="GTBank")]
+    assert len(rec2.requests) == 1
+
+
 def test_resolve_returns_the_account_name():
     gw, rec = _gateway(_ok({"account_number": "0123456789", "account_name": "SCHOOL A LTD"}))
     assert gw.resolve_account("0123456789", "058") == "SCHOOL A LTD"
