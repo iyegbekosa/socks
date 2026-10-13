@@ -11,6 +11,7 @@ from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.core.mail import send_mail
+from django.db.models import Q, QuerySet
 from django.template.loader import render_to_string
 
 from apps.branding.models import get_branding
@@ -163,6 +164,14 @@ def send_receipt(payment_id: int) -> dict[str, int]:
     return counts
 
 
+def receipts_for_student(student: Student) -> QuerySet[Receipt]:
+    """Receipts a student may open: their own payments', or a payment allocated to one of
+    their invoices. The one definition of the student rule (download check and portal)."""
+    return Receipt.objects.filter(
+        Q(payment__student=student) | Q(payment__allocations__invoice__student=student)
+    ).distinct()
+
+
 def downloadable_receipt(user: Any, raw_pk: Any) -> Receipt | None:
     """The receipt this user may open, or None (404). Staff who can view fees: any. Students:
     receipts of their own payments, or of a payment allocated to one of their invoices."""
@@ -181,10 +190,6 @@ def downloadable_receipt(user: Any, raw_pk: Any) -> Receipt | None:
     student = Student.objects.filter(user=user).first()
     if student is None:
         return None
-    payment = receipt.payment
-    if (
-        payment.student_id == student.pk
-        or payment.allocations.filter(invoice__student_id=student.pk).exists()
-    ):
+    if receipts_for_student(student).filter(pk=receipt.pk).exists():
         return receipt
     return None

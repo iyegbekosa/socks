@@ -7,7 +7,6 @@ the last name, invoice lines, receipts or payments.
 from urllib.parse import urlencode
 
 from django.contrib.auth.decorators import login_required
-from django.db.models import Q
 from django.shortcuts import render
 from django.urls import reverse
 from django.views.decorators.cache import never_cache
@@ -16,21 +15,10 @@ from django.views.decorators.http import require_GET
 from apps.academics.services import current_session
 from apps.fees import siblings
 from apps.fees.invoicing import outstanding_for
-from apps.fees.models import Invoice, Receipt
+from apps.fees.models import Invoice
+from apps.fees.receipts import receipts_for_student
 from apps.fees.views.pay import _student
 from apps.students.models import Enrolment
-
-
-def own_receipts(student):
-    """Receipts this student may download: own payments, or allocations to own invoices."""
-    return (
-        Receipt.objects.filter(
-            Q(payment__student=student) | Q(payment__allocations__invoice__student=student)
-        )
-        .select_related("payment")
-        .distinct()
-        .order_by("-pk")
-    )
 
 
 def _classes(student_ids: list[int]) -> dict[int, str]:
@@ -81,6 +69,6 @@ def my_fees(request):
                 if owing_siblings
                 else ""
             ),
-            "receipts": own_receipts(student),
+            "receipts": receipts_for_student(student).select_related("payment").order_by("-pk"),
         },
     )

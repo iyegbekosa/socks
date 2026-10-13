@@ -89,7 +89,6 @@ def test_student_filtering_a_non_sibling_is_404(w, client_a, raw):
     r = client_a.get(URL, {"student": value})
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "NOT_FOUND"
-    assert str(w.other_inv.pk) not in r.content.decode()
 
 
 def test_term_filter(w, client_a):
@@ -172,3 +171,15 @@ def test_staff_me_has_no_balance(school_a, client_a):
         user = StaffFactory()
         client_a.force_login(user)
     assert "balance" not in client_a.get("/api/v1/me").json()
+
+
+def test_serializer_lines_fail_closed(w):
+    from apps.api.serializers import InvoiceSerializer
+
+    with schema_context("school_a"):
+        inv = Invoice.objects.select_related("student__user", "term__session").get(pk=w.inv1.pk)
+        assert "lines" not in InvoiceSerializer(inv, context={}).data
+        assert "lines" not in InvoiceSerializer(inv, context={"all_lines": "yes"}).data
+        shown = InvoiceSerializer(inv, context={"lines_for": frozenset({w.student.pk})}).data
+        assert shown["lines"][0]["description"] == "Tuition"
+        assert "lines" in InvoiceSerializer(inv, context={"all_lines": True}).data

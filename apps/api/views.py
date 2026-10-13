@@ -163,7 +163,9 @@ class InvoiceListView(ListAPIView):  # type: ignore[type-arg]
 
     def get_serializer_context(self) -> dict[str, Any]:
         context = super().get_serializer_context()
-        context["lines_for"] = getattr(self, "_lines_for", None)
+        # Fail closed: no lines unless _owners() granted them.
+        context["lines_for"] = getattr(self, "_lines_for", frozenset())
+        context["all_lines"] = getattr(self, "_all_lines", False)
         return context
 
     def _owners(self) -> set[int]:
@@ -173,7 +175,7 @@ class InvoiceListView(ListAPIView):  # type: ignore[type-arg]
             me = Student.objects.filter(user=user).first()
             if me is None:
                 raise _not_found("Student")
-            self._lines_for: set[int] | None = {me.pk}
+            self._lines_for: frozenset[int] = frozenset({me.pk})
             owners = {me.pk, *(s.pk for s in siblings.siblings_of(me))}
             if raw_student is None:
                 return owners
@@ -183,7 +185,7 @@ class InvoiceListView(ListAPIView):  # type: ignore[type-arg]
             return {pk}
         if not can_view_fees(user):
             raise ApiError("FORBIDDEN", "Only fee staff can view invoices.", 403)
-        self._lines_for = None
+        self._all_lines = True
         if raw_student is None or raw_student == "":
             raise _bad("student", "Choose a student.")
         pk = parse_id(raw_student)

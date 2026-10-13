@@ -71,9 +71,9 @@ def sheet_data_json(data: Any) -> dict[str, Any]:
 class InvoiceSerializer(serializers.Serializer):  # type: ignore[type-arg]
     """An invoice with money in ``money_fields`` shape.
 
-    ``context["lines_for"]`` is the set of student pks whose invoice lines may be shown (the
-    caller themself, or every student for fee staff). Other invoices (a student's siblings')
-    omit ``lines`` entirely.
+    Lines fail closed: they are shown only when ``context["all_lines"]`` is true (fee staff)
+    or the invoice's student pk is in ``context["lines_for"]`` (a student caller themself).
+    Other invoices (a student's siblings') omit ``lines`` entirely.
     """
 
     def to_representation(self, invoice: Any) -> dict[str, Any]:
@@ -96,8 +96,10 @@ class InvoiceSerializer(serializers.Serializer):  # type: ignore[type-arg]
             "paid": money_fields(invoice.paid_kobo),
             "balance": money_fields(invoice.balance_kobo),
         }
-        lines_for = self.context.get("lines_for")
-        if lines_for is None or student.pk in lines_for:
+        show_lines = self.context.get("all_lines") is True or student.pk in self.context.get(
+            "lines_for", frozenset()
+        )
+        if show_lines:
             data["lines"] = [
                 {
                     "kind": line.kind,

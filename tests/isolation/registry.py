@@ -224,28 +224,21 @@ def _attempt_count() -> int:
     return PaymentAttempt.objects.count()
 
 
-INVOICE_MARKER_DESCRIPTION = "ZQX-SCHOOL-B-ONLY-INVOICE-LINE-7731"
+# School B's student's first name. Every api:invoices item shows ``student.first_name``,
+# including sibling items (which omit ``lines``), so a leaked invoice always carries it.
+INVOICE_MARKER = "Zqxschoolbonly"
 
 
 def _marked_invoice_in_active_schema():
-    """An invoice whose line description cannot appear anywhere by accident.
+    """An invoice whose student's first name cannot appear anywhere by accident.
 
-    Its student shares the guardian phone that ``student_actor`` gets in school A, so a
-    sibling lookup that crossed schemas would surface it.
+    Its student shares the guardian phone that ``student_sibling_actor`` gets in school A, so
+    a sibling lookup or invoice query that crossed schemas would return it as a sibling's.
     """
-    from apps.fees import invoicing
-    from apps.fees.models import InvoiceLine
-
     invoice = _invoice_in_active_schema()
+    invoice.student.first_name = INVOICE_MARKER
     invoice.student.guardian_phone = SHARED_PHONE
-    invoice.student.save(update_fields=["guardian_phone"])
-    InvoiceLine.objects.create(
-        invoice=invoice,
-        kind=InvoiceLine.OPTIONAL,
-        description=INVOICE_MARKER_DESCRIPTION,
-        amount_kobo=1,
-    )
-    invoicing.recompute(invoice)
+    invoice.student.save(update_fields=["first_name", "guardian_phone"])
     return invoice
 
 
@@ -398,7 +391,7 @@ ISOLATION_CASES: list[IsolationCase] = [
         make_obj=_marked_invoice_in_active_schema,
         actor=student_sibling_actor,
         expect="absent",
-        marker=lambda i: INVOICE_MARKER_DESCRIPTION,
+        marker=lambda i: INVOICE_MARKER,
         label="student",
     ),
     # Asking for school B's student id is a 404 (unknown in A).
