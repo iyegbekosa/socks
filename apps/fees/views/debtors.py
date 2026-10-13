@@ -17,7 +17,7 @@ from apps.accounts.roles import require_roles
 from apps.core.money import kobo_from_naira
 from apps.fees import debtors as debtors_service
 from apps.fees.models import Allocation, Invoice, ManualPayment, Payment, PaymentAttempt
-from apps.fees.scope import VIEW_ROLES, can_manage_fees
+from apps.fees.scope import VIEW_ROLES
 from apps.fees.views.invoices import _filter_obj
 from apps.fees.views.setup import _pick_term
 from apps.results.csvsheet import safe_cell
@@ -156,6 +156,5 @@ def dashboard(request):
             "today_kobo": int(today),
             "pending_count": pending,
             "flagged_count": flagged,
-            "can_edit": can_manage_fees(request.user),
         },
     )

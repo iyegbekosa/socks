@@ -220,6 +220,19 @@ def test_proprietor_reads_teacher_forbidden(w, client_a):
     assert client_a.get(URL).status_code == 403
 
 
+def test_csv_guards_admission_number_and_class(w, client_a):
+    with schema_context("school_a"):
+        level = ClassLevel.objects.create(name="+Evil", section="jss", order=12)
+        arm = ClassArm.objects.create(level=level, suffix="A")
+        evil = StudentProfileFactory(user__admission_number="@SUM(A1)", enrolment__arm=arm)
+        _invoice(evil, w.term1, 9_000_000)
+    _login_bursar(client_a, w)
+    r = client_a.get(URL, {"term": w.term1.pk, "export": "csv"})
+    rows = list(csv.reader(io.StringIO(r.content.decode())))
+    assert rows[1][0] == "'@SUM(A1)"
+    assert rows[1][2] == "'" + arm.display_name
+
+
 # --- dashboard ----------------------------------------------------------------------------
 
 
@@ -277,6 +290,36 @@ def test_dashboard_totals(w, client_a):
     assert reverse("fees:reconcile") in html
     assert reverse("fees:debtors") in html
     assert "₦7,000.00" in html
+
+
+def test_dashboard_with_a_carried_term(school_a, client_a):
+    """invoiced − collected = outstanding + balances carried forward from the term."""
+    with schema_context("school_a"):
+        w = _world()
+        item = make_item()
+        make_structure(w.level, w.term1, [(item, 1_000_000, False)])
+        make_structure(w.level, w.term2, [(item, 2_000_000, False)])
+        invoicing.generate_invoices(w.term1, by=w.bursar)
+        inv1 = Invoice.objects.get(student=w.student, term=w.term1)
+        with mock.patch.object(hooks, "on_payment_confirmed"):
+            _confirm(w, [(inv1, 400_000)], 400_000)
+        invoicing.generate_invoices(w.term2, by=w.bursar)
+        inv1.refresh_from_db()
+        assert inv1.status == Invoice.CARRIED and inv1.balance_kobo == 600_000
+    login_verified(client_a, w.bursar)
+    ctx = client_a.get(DASHBOARD, {"term": w.term1.pk}).context
+    assert (ctx["invoiced_kobo"], ctx["collected_kobo"], ctx["outstanding_kobo"]) == (
+        1_000_000,
+        400_000,
+        0,
+    )
+    assert ctx["invoiced_kobo"] - ctx["collected_kobo"] == ctx["outstanding_kobo"] + 600_000
+    ctx = client_a.get(DASHBOARD, {"term": w.term2.pk}).context
+    assert (ctx["invoiced_kobo"], ctx["collected_kobo"], ctx["outstanding_kobo"]) == (
+        2_600_000,
+        0,
+        2_600_000,
+    )
 
 
 def test_home_links_to_dashboard(w, client_a):

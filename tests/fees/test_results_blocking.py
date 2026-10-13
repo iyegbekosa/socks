@@ -7,10 +7,12 @@ from unittest import mock
 
 import cloudinary
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django_tenants.utils import schema_context
 
-from apps.academics.models import Term
+from apps.academics.models import FormTeacher, Term
 from apps.fees import hooks, invoicing
 from apps.fees.blocking import WITHHELD_MESSAGE, owed_up_to, results_withheld
 from apps.fees.models import FeeSettings, Invoice
@@ -138,11 +140,19 @@ def test_no_settings_row_means_not_blocked(r):
         assert not FeeSettings.objects.exists()
 
 
-def test_staff_are_unaffected(client_a, r):
+@pytest.mark.parametrize("role", ["principal", "school_admin", "form_teacher"])
+def test_staff_are_unaffected(client_a, r, role):
     with schema_context("school_a"):
         _block()
-        principal = make_staff("principal")
-    login_verified(client_a, principal)
+        if role == "form_teacher":
+            user = make_staff("teacher")
+            FormTeacher.objects.create(arm=r.w.arm, session=r.w.session, teacher=user)
+        else:
+            user = make_staff(role)
+    if role == "form_teacher":
+        client_a.force_login(user)
+    else:
+        login_verified(client_a, user)
     with mock.patch("apps.fees.blocking.results_withheld") as withheld:
         assert client_a.get(card_url(r, r.w.term)).status_code == 302
         assert client_a.get(api_url(r, r.w.term)).status_code == 302
@@ -178,29 +188,34 @@ def _chain_world():
     return w
 
 
+def _invoices(w, *terms):
+    for term in terms:
+        invoicing.generate_invoices(term, by=w.bursar)
+    return [Invoice.objects.get(student=w.student, term=t) for t in terms]
+
+
 def test_carried_debt_still_withholds_the_earlier_term(school_a):
     with schema_context("school_a"):
         w = _chain_world()
-        invoicing.generate_invoices(w.term1, by=w.bursar)
-        invoicing.generate_invoices(w.term2, by=w.bursar)
-        inv1 = Invoice.objects.get(student=w.student, term=w.term1)
-        inv2 = Invoice.objects.get(student=w.student, term=w.term2)
+        inv1, inv2 = _invoices(w, w.term1, w.term2)
         assert inv1.status == Invoice.CARRIED and inv2.total_kobo == 3_000_000
-        _pay(w.student, w.bursar, inv2, 2_000_000)  # the new fees, not the ₦10,000 carried
+        # Payments clear the oldest debt first: ₦5,000 of the ₦10,000 carried is still owed.
+        _pay(w.student, w.bursar, inv2, 500_000)
         assert invoicing.outstanding_for(w.student, up_to_term=w.term1) == 0
-        assert owed_up_to(w.student, w.term1) == 1_000_000
+        assert owed_up_to(w.student, w.term1) == 500_000
         assert results_withheld(w.student, w.term1) is True
         assert results_withheld(w.student, w.term2) is True
 
-        # Term 3 carries term 2's remaining ₦10,000 forward again.
-        invoicing.generate_invoices(w.term3, by=w.bursar)
-        inv3 = Invoice.objects.get(student=w.student, term=w.term3)
-        assert inv3.total_kobo == 1_500_000
+        # Term 3 carries term 2's remaining ₦25,000 forward again.
+        [inv3] = _invoices(w, w.term3)
+        assert inv3.total_kobo == 3_000_000
         assert results_withheld(w.student, w.term1) is True
-        _pay(w.student, w.bursar, inv3, 500_000)
-        assert results_withheld(w.student, w.term1) is True
-        _pay(w.student, w.bursar, inv3, 1_000_000)
-        assert owed_up_to(w.student, w.term1) == 0
+        _pay(w.student, w.bursar, inv3, 400_000)
+        assert owed_up_to(w.student, w.term1) == 100_000
+        _pay(w.student, w.bursar, inv3, 100_000)  # term 1's ₦10,000 is now fully paid
+        assert results_withheld(w.student, w.term1) is False
+        assert results_withheld(w.student, w.term2) is True
+        _pay(w.student, w.bursar, inv3, 2_500_000)
         for term in (w.term1, w.term2, w.term3):
             assert results_withheld(w.student, term) is False
 
@@ -208,23 +223,68 @@ def test_carried_debt_still_withholds_the_earlier_term(school_a):
 def test_new_fees_only_do_not_withhold_the_earlier_term(school_a):
     with schema_context("school_a"):
         w = _chain_world()
-        invoicing.generate_invoices(w.term1, by=w.bursar)
-        inv1 = Invoice.objects.get(student=w.student, term=w.term1)
+        [inv1] = _invoices(w, w.term1)
         _pay(w.student, w.bursar, inv1, 1_000_000)
-        invoicing.generate_invoices(w.term2, by=w.bursar)
-        inv2 = Invoice.objects.get(student=w.student, term=w.term2)
+        [inv2] = _invoices(w, w.term2)
         assert inv2.total_kobo == 2_000_000  # nothing brought forward
         assert results_withheld(w.student, w.term1) is False
         assert results_withheld(w.student, w.term2) is True
 
 
-def test_payment_of_full_balance_releases_the_carried_term(school_a):
+def test_paid_term_not_withheld_when_later_debt_is_carried(school_a):
+    """Review Important #1: term 1 paid, term 2 unpaid and carried into term 3."""
     with schema_context("school_a"):
         w = _chain_world()
-        invoicing.generate_invoices(w.term1, by=w.bursar)
-        invoicing.generate_invoices(w.term2, by=w.bursar)
-        inv2 = Invoice.objects.get(student=w.student, term=w.term2)
-        _pay(w.student, w.bursar, inv2, 2_500_000)  # half of the carried ₦10,000 is still owed
-        assert owed_up_to(w.student, w.term1) == 500_000
-        _pay(w.student, w.bursar, inv2, 500_000)
+        [inv1] = _invoices(w, w.term1)
+        _pay(w.student, w.bursar, inv1, 1_000_000)
+        _invoices(w, w.term2, w.term3)
+        assert Invoice.objects.get(student=w.student, term=w.term2).status == Invoice.CARRIED
+        assert owed_up_to(w.student, w.term1) == 0
         assert results_withheld(w.student, w.term1) is False
+        assert results_withheld(w.student, w.term2) is True
+        assert results_withheld(w.student, w.term3) is True
+
+
+def test_second_carry_does_not_withhold_the_paid_term(school_a):
+    """Term 1's carried ₦10,000 is paid in term 2; term 2's new fees are carried to term 3."""
+    with schema_context("school_a"):
+        w = _chain_world()
+        _, inv2 = _invoices(w, w.term1, w.term2)
+        _pay(w.student, w.bursar, inv2, 1_000_000)
+        [inv3] = _invoices(w, w.term3)
+        assert inv3.total_kobo == 2_500_000
+        assert results_withheld(w.student, w.term1) is False
+        assert results_withheld(w.student, w.term2) is True
+
+
+def test_unpaid_carried_term_stays_withheld(school_a):
+    with schema_context("school_a"):
+        w = _chain_world()
+        _invoices(w, w.term1, w.term2)
+        assert results_withheld(w.student, w.term1) is True
+        _invoices(w, w.term3)
+        assert owed_up_to(w.student, w.term1) == 1_000_000
+        assert owed_up_to(w.student, w.term2) == 3_000_000
+        for term in (w.term1, w.term2, w.term3):
+            assert results_withheld(w.student, term) is True
+
+
+def test_payment_of_full_carried_balance_releases_the_term(school_a):
+    with schema_context("school_a"):
+        w = _chain_world()
+        _, inv2 = _invoices(w, w.term1, w.term2)
+        _pay(w.student, w.bursar, inv2, 999_900)
+        assert owed_up_to(w.student, w.term1) == 100
+        _pay(w.student, w.bursar, inv2, 100)
+        assert results_withheld(w.student, w.term1) is False
+        assert results_withheld(w.student, w.term2) is True
+
+
+def test_owed_up_to_is_one_query(school_a):
+    with schema_context("school_a"):
+        w = _chain_world()
+        _invoices(w, w.term1, w.term2, w.term3)
+        with CaptureQueriesContext(connection) as ctx:
+            owed_up_to(w.student, w.term1)
+        real = [q for q in ctx.captured_queries if not q["sql"].startswith("SET search_path")]
+        assert len(real) == 1

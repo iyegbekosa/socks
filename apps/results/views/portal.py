@@ -40,11 +40,12 @@ def published_summaries(student: Student) -> list[ResultSummary]:
 def _withheld_term_ids(student: Student, summaries: list[ResultSummary]) -> set[int]:
     """Terms whose results are withheld for unpaid fees (UC-17). Imported here so results
     never imports fees at module level."""
-    from apps.fees.blocking import blocking_enabled, results_withheld
+    from apps.fees.blocking import blocking_enabled, owed_up_to
 
+    # The setting is read once here; ``owed_up_to`` is ``results_withheld`` without re-reading it.
     if not summaries or not blocking_enabled():
         return set()
-    return {s.term_id for s in summaries if results_withheld(student, s.term)}
+    return {s.term_id for s in summaries if owed_up_to(student, s.term) > 0}
 
 
 @never_cache

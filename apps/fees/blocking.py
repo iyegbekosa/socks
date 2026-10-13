@@ -1,17 +1,17 @@
 """Results withheld while fees are owed (UC-17).
 
-Debt attribution: a payment clears the oldest debt first, so a later invoice's balance covers
-its ``brought_forward`` part before its own fees. A term's debt therefore survives being
-carried into a later invoice until that brought-forward amount is paid.
+Debt attribution (Ruling G'): payments clear the oldest debt first. When a student's latest
+invoice up to term T was carried forward, its balance (frozen at carry) is the debt that left
+terms <= T; each later invoice's payments pay it down, in term order, before anything newer.
 
 Only student-facing paths call ``results_withheld``; staff views never do.
 """
 
-from django.db.models import F, Q, Sum
+from django.db.models import BooleanField, Case, Value, When
 
 from apps.academics.models import Term
-from apps.fees.invoicing import _earlier_terms_q, outstanding_for
-from apps.fees.models import FeeSettings, Invoice, InvoiceLine
+from apps.fees.invoicing import _earlier_terms_q
+from apps.fees.models import FeeSettings, Invoice
 from apps.students.models import Student
 
 WITHHELD_MESSAGE = (
@@ -28,24 +28,39 @@ def blocking_enabled() -> bool:
 
 
 def owed_up_to(student: Student, term: Term) -> int:
-    """What the student still owes for ``term`` and earlier terms, in kobo.
+    """What the student still owes for ``term`` and earlier terms, in kobo (one query).
 
-    The non-carried balances up to and including ``term``, plus, for each later non-carried
-    invoice, the part of its balance that is balance brought forward.
+    ``outstanding_for(student, up_to_term=term)`` (non-carried balances up to ``term``) plus D:
+    if the latest invoice up to ``term`` was carried, D starts at its balance and each later
+    invoice's ``paid_kobo`` reduces it, oldest first, never below 0. Otherwise D is 0.
     """
-    owed = outstanding_for(student, up_to_term=term)
-    later = (
+    invoices = (
         Invoice.objects.filter(student=student)
-        .exclude(status=Invoice.CARRIED)
-        .exclude(_earlier_terms_q(term, inclusive=True))
-        .filter(total_kobo__gt=F("paid_kobo"))
         .annotate(
-            carried_in=Sum("lines__amount_kobo", filter=Q(lines__kind=InvoiceLine.BROUGHT_FORWARD))
+            up_to=Case(
+                When(_earlier_terms_q(term, inclusive=True), then=Value(True)),
+                default=Value(False),
+                output_field=BooleanField(),
+            )
         )
+        .order_by("term__session__start_date", "term__number", "pk")
     )
-    for invoice in later:
-        owed += max(0, min(invoice.balance_kobo, invoice.carried_in or 0))
-    return owed
+    outstanding = 0
+    latest: Invoice | None = None
+    later: list[Invoice] = []
+    for invoice in invoices:
+        if invoice.up_to:  # type: ignore[attr-defined]
+            if invoice.status != Invoice.CARRIED:
+                outstanding += invoice.balance_kobo
+            latest = invoice
+        else:
+            later.append(invoice)
+    left = latest.balance_kobo if latest is not None and latest.status == Invoice.CARRIED else 0
+    for newer in later:
+        if left <= 0:
+            break
+        left = max(0, left - newer.paid_kobo)
+    return outstanding + max(0, left)
 
 
 def results_withheld(student: Student, term: Term) -> bool:
