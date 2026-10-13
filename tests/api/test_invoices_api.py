@@ -69,9 +69,13 @@ def test_student_lists_own_and_sibling_invoices(w, client_a):
         }
     ]
     sib = by_id[w.sib_inv.pk]
-    assert "lines" not in sib
-    assert sib["student"]["first_name"] == "Chibuzo"
-    assert "last_name" not in sib["student"]
+    # Ruling N: a sibling's invoice is exactly {id, student: {id, first_name}, term, balance}.
+    assert set(sib) == {"id", "student", "term", "balance"}
+    for key in ("admission_number", "status", "total", "paid", "lines"):
+        assert key not in sib and key not in sib["student"]
+    assert sib["student"] == {"id": w.sibling.pk, "first_name": "Chibuzo"}
+    assert set(sib["term"]) == {"id", "name", "session"}
+    assert set(sib["balance"]) == {"amount_kobo", "amount_display"}
 
 
 def test_student_filters_self_and_sibling(w, client_a):
@@ -178,8 +182,10 @@ def test_serializer_lines_fail_closed(w):
 
     with schema_context("school_a"):
         inv = Invoice.objects.select_related("student__user", "term__session").get(pk=w.inv1.pk)
-        assert "lines" not in InvoiceSerializer(inv, context={}).data
-        assert "lines" not in InvoiceSerializer(inv, context={"all_lines": "yes"}).data
+        for ctx in ({}, {"all_lines": "yes"}):
+            narrow = InvoiceSerializer(inv, context=ctx).data
+            assert set(narrow) == {"id", "student", "term", "balance"}
+            assert set(narrow["student"]) == {"id", "first_name"}
         shown = InvoiceSerializer(inv, context={"lines_for": frozenset({w.student.pk})}).data
         assert shown["lines"][0]["description"] == "Tuition"
         assert "lines" in InvoiceSerializer(inv, context={"all_lines": True}).data

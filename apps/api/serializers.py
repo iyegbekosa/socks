@@ -71,14 +71,30 @@ def sheet_data_json(data: Any) -> dict[str, Any]:
 class InvoiceSerializer(serializers.Serializer):  # type: ignore[type-arg]
     """An invoice with money in ``money_fields`` shape.
 
-    Lines fail closed: they are shown only when ``context["all_lines"]`` is true (fee staff)
-    or the invoice's student pk is in ``context["lines_for"]`` (a student caller themself).
-    Other invoices (a student's siblings') omit ``lines`` entirely.
+    The full shape is shown only when ``context["all_lines"]`` is true (fee staff) or the
+    invoice's student pk is in ``context["lines_for"]`` (a student caller themself). Every other
+    invoice (a student's siblings') fails closed to the narrow shape of Ruling N:
+    ``{id, student: {id, first_name}, term, balance}``.
     """
 
     def to_representation(self, invoice: Any) -> dict[str, Any]:
         student = invoice.student
         term = invoice.term
+        term_data = {
+            "id": term.pk,
+            "name": term.get_number_display(),
+            "session": term.session.name,
+        }
+        full = self.context.get("all_lines") is True or student.pk in self.context.get(
+            "lines_for", frozenset()
+        )
+        if not full:
+            return {
+                "id": invoice.pk,
+                "student": {"id": student.pk, "first_name": student.first_name},
+                "term": term_data,
+                "balance": money_fields(invoice.balance_kobo),
+            }
         data: dict[str, Any] = {
             "id": invoice.pk,
             "student": {
@@ -86,26 +102,18 @@ class InvoiceSerializer(serializers.Serializer):  # type: ignore[type-arg]
                 "admission_number": student.user.admission_number,
                 "first_name": student.first_name,
             },
-            "term": {
-                "id": term.pk,
-                "name": term.get_number_display(),
-                "session": term.session.name,
-            },
+            "term": term_data,
             "status": invoice.status,
             "total": money_fields(invoice.total_kobo),
             "paid": money_fields(invoice.paid_kobo),
             "balance": money_fields(invoice.balance_kobo),
         }
-        show_lines = self.context.get("all_lines") is True or student.pk in self.context.get(
-            "lines_for", frozenset()
-        )
-        if show_lines:
-            data["lines"] = [
-                {
-                    "kind": line.kind,
-                    "description": line.description,
-                    "amount": money_fields(line.amount_kobo),
-                }
-                for line in invoice.lines.all()
-            ]
+        data["lines"] = [
+            {
+                "kind": line.kind,
+                "description": line.description,
+                "amount": money_fields(line.amount_kobo),
+            }
+            for line in invoice.lines.all()
+        ]
         return data
