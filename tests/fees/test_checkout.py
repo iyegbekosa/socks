@@ -485,13 +485,6 @@ def test_manual_payment_accepts_sibling_invoice(w):
         )
 
 
-def test_siblings_stub_returns_empty_list(school_a):
-    from apps.fees.siblings import siblings_of
-
-    with schema_context("school_a"):
-        assert siblings_of(StudentProfileFactory()) == []
-
-
 def test_portal_home_shows_pay_link_only_with_a_balance(w, client_a):
     client_a.force_login(w.student.user)
     pay_url = reverse("fees:pay")

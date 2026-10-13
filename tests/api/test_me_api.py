@@ -27,6 +27,7 @@ def test_student_me(client_a):
         "admission_number": s.admission_number,
         "school": {"name": "School A"},
         "current_class": None,
+        "balance": None,  # no student profile, so no invoices to sum
     }
 
 

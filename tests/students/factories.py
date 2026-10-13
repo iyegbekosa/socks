@@ -43,7 +43,8 @@ class StudentProfileFactory(factory.django.DjangoModelFactory):
     status = Student.Status.ACTIVE
     guardian_name = factory.Faker("name")
     guardian_relationship = "mother"
-    guardian_phone = "+2348031234567"
+    # Unique per student: a shared phone would make every factory student a sibling (§7.1).
+    guardian_phone = factory.Sequence(lambda n: f"+23480{n % 10**8:08d}")
     guardian_email = ""
     consent_method = "paper_form"
 

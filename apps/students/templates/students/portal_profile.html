@@ -1,4 +1,5 @@
 {% extends "core/base.html" %}
+{% load fees_money %}
 {% block content %}
 <div class="card">
   <h1>Welcome, {{ request.user.first_name|default:"there" }}</h1>
@@ -6,9 +7,11 @@
     <dt>Name</dt><dd>{{ student.full_name|default:request.user.get_full_name }}</dd>
     <dt>Admission number</dt><dd>{{ request.user.admission_number }}</dd>
     <dt>Class</dt><dd>{{ enrolment.arm.display_name|default:"—" }}</dd>
+    {% if balance is not None %}<dt>Fees balance</dt><dd>{{ balance|naira }}</dd>{% endif %}
     <dt>Term</dt><dd>{% if term %}{{ term.get_number_display }} ({{ term.session.name }}){% else %}—{% endif %}</dd>
   </dl>
   <p><a href="{{ results_url }}">My results</a></p>
+  {% if fees_url %}<p><a href="{{ fees_url }}">Fees</a></p>{% endif %}
   {% if pay_url %}<p><a href="{{ pay_url }}">Pay online</a></p>{% endif %}
   <p><a href="{% url 'accounts:password_change' %}">Change password</a></p>
 </div>

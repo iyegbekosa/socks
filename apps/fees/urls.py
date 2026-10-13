@@ -1,6 +1,16 @@
 from django.urls import path
 
-from apps.fees.views import fake_checkout, invoices, manual, pay, payout, receipts, reconcile, setup
+from apps.fees.views import (
+    fake_checkout,
+    invoices,
+    manual,
+    pay,
+    payout,
+    portal,
+    receipts,
+    reconcile,
+    setup,
+)
 
 app_name = "fees"
 
@@ -37,6 +47,7 @@ urlpatterns = [
         name="attempt_recheck",
     ),
     path("payout/", payout.payout, name="payout"),
+    path("my/", portal.my_fees, name="my_fees"),
     path("pay/", pay.pay, name="pay"),
     path("pay/return/", pay.pay_return, name="pay_return"),
     path("pay/test/<str:reference>/", fake_checkout.fake_checkout, name="fake_checkout"),

@@ -30,17 +30,19 @@ from apps.accounts.roles import (
 from apps.api.serializers import (
     ImportJobSerializer,
     ImportUploadSerializer,
+    InvoiceSerializer,
     StudentListSerializer,
     sheet_data_json,
 )
 from apps.core.errors import ApiError
 from apps.core.money import money_fields
 from apps.core.parsing import parse_id
-from apps.fees import checkout, manual
+from apps.fees import checkout, manual, siblings
 from apps.fees.gateways import GatewayUnavailable
+from apps.fees.invoicing import outstanding_for
 from apps.fees.ledger import PlannedLine
 from apps.fees.models import Invoice, ManualPayment
-from apps.fees.scope import can_manage_fees
+from apps.fees.scope import can_manage_fees, can_view_fees
 from apps.imports.models import ImportJob
 from apps.imports.services import ImportNotReady, create_import_job
 from apps.results.cards import downloadable_card
@@ -93,6 +95,9 @@ class MeView(APIView):
             data["current_class"] = (
                 current_class(student, current_session()) if student is not None else None
             )
+            data["balance"] = (
+                money_fields(outstanding_for(student)) if student is not None else None
+            )
         return Response(data)
 
 
@@ -136,6 +141,75 @@ class StudentListView(ListAPIView):  # type: ignore[type-arg]
             session=session, status=Enrolment.Status.ACTIVE
         ).select_related("arm__level")
         return qs.prefetch_related(Prefetch("enrolments", enrolments, to_attr="current_enrolments"))
+
+
+def _not_found(what: str) -> ApiError:
+    return ApiError("NOT_FOUND", f"{what} not found.", 404)
+
+
+class InvoiceListView(ListAPIView):  # type: ignore[type-arg]
+    """GET ``?student=&term=``: invoices, paginated like the student list (§6.2).
+
+    Students: their own and their siblings' invoices; ``student`` must be self or a sibling
+    (else 404), and sibling invoices omit ``lines``. Fee viewers (bursar, school admin,
+    proprietor): any student's, with ``student`` required (else 400). Other staff: 403.
+    Carried invoices are included with their status.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = InvoiceSerializer
+    pagination_class = StudentPagination
+    http_method_names = ["get", "head", "options"]
+
+    def get_serializer_context(self) -> dict[str, Any]:
+        context = super().get_serializer_context()
+        context["lines_for"] = getattr(self, "_lines_for", None)
+        return context
+
+    def _owners(self) -> set[int]:
+        user = self.request.user
+        raw_student = self.request.query_params.get("student")
+        if getattr(user, "kind", None) == "student":
+            me = Student.objects.filter(user=user).first()
+            if me is None:
+                raise _not_found("Student")
+            self._lines_for: set[int] | None = {me.pk}
+            owners = {me.pk, *(s.pk for s in siblings.siblings_of(me))}
+            if raw_student is None:
+                return owners
+            pk = parse_id(raw_student)
+            if pk is None or pk not in owners:
+                raise _not_found("Student")
+            return {pk}
+        if not can_view_fees(user):
+            raise ApiError("FORBIDDEN", "Only fee staff can view invoices.", 403)
+        self._lines_for = None
+        if raw_student is None or raw_student == "":
+            raise _bad("student", "Choose a student.")
+        pk = parse_id(raw_student)
+        if pk is None or not Student.objects.filter(pk=pk).exists():
+            raise _not_found("Student")
+        return {pk}
+
+    def get_queryset(self) -> QuerySet[Invoice]:
+        owners = self._owners()
+        qs = Invoice.objects.filter(student_id__in=owners)
+        raw_term = self.request.query_params.get("term")
+        if raw_term is not None:
+            term_id = parse_id(raw_term)
+            if term_id is None or not Term.objects.filter(pk=term_id).exists():
+                raise _not_found("Term")
+            qs = qs.filter(term_id=term_id)
+        return (
+            qs.select_related("student__user", "term__session")
+            .prefetch_related("lines")
+            .order_by(
+                "-term__session__start_date",
+                "-term__number",
+                "student__user__admission_number",
+                "pk",
+            )
+        )
 
 
 class StudentImportView(APIView):

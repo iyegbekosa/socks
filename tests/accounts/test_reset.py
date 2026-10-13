@@ -45,7 +45,7 @@ def _login(client, ident, pw):
 
 def test_student_full_flow(client_a, sms_outbox):
     with schema_context("school_a"):
-        s = StudentProfileFactory().user
+        s = StudentProfileFactory(guardian_phone="+2348031234567").user
     r = _request(client_a, s.admission_number)
     assert r.status_code == 302 and r["Location"] == reverse("accounts:reset_verify")
     assert len(sms_outbox) == 1 and sms_outbox[0].to == "+2348031234567"

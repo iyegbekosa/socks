@@ -2,6 +2,7 @@ from typing import Any
 
 from rest_framework import serializers
 
+from apps.core.money import money_fields
 from apps.imports.models import ImportJob
 from apps.imports.services import ERRORS_SHOWN
 from apps.students.models import Student
@@ -65,3 +66,44 @@ def sheet_data_json(data: Any) -> dict[str, Any]:
         ],
         "rows": data.rows,
     }
+
+
+class InvoiceSerializer(serializers.Serializer):  # type: ignore[type-arg]
+    """An invoice with money in ``money_fields`` shape.
+
+    ``context["lines_for"]`` is the set of student pks whose invoice lines may be shown (the
+    caller themself, or every student for fee staff). Other invoices (a student's siblings')
+    omit ``lines`` entirely.
+    """
+
+    def to_representation(self, invoice: Any) -> dict[str, Any]:
+        student = invoice.student
+        term = invoice.term
+        data: dict[str, Any] = {
+            "id": invoice.pk,
+            "student": {
+                "id": student.pk,
+                "admission_number": student.user.admission_number,
+                "first_name": student.first_name,
+            },
+            "term": {
+                "id": term.pk,
+                "name": term.get_number_display(),
+                "session": term.session.name,
+            },
+            "status": invoice.status,
+            "total": money_fields(invoice.total_kobo),
+            "paid": money_fields(invoice.paid_kobo),
+            "balance": money_fields(invoice.balance_kobo),
+        }
+        lines_for = self.context.get("lines_for")
+        if lines_for is None or student.pk in lines_for:
+            data["lines"] = [
+                {
+                    "kind": line.kind,
+                    "description": line.description,
+                    "amount": money_fields(line.amount_kobo),
+                }
+                for line in invoice.lines.all()
+            ]
+        return data

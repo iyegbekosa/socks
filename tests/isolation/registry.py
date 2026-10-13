@@ -224,6 +224,41 @@ def _attempt_count() -> int:
     return PaymentAttempt.objects.count()
 
 
+INVOICE_MARKER_DESCRIPTION = "ZQX-SCHOOL-B-ONLY-INVOICE-LINE-7731"
+
+
+def _marked_invoice_in_active_schema():
+    """An invoice whose line description cannot appear anywhere by accident.
+
+    Its student shares the guardian phone that ``student_actor`` gets in school A, so a
+    sibling lookup that crossed schemas would surface it.
+    """
+    from apps.fees import invoicing
+    from apps.fees.models import InvoiceLine
+
+    invoice = _invoice_in_active_schema()
+    invoice.student.guardian_phone = SHARED_PHONE
+    invoice.student.save(update_fields=["guardian_phone"])
+    InvoiceLine.objects.create(
+        invoice=invoice,
+        kind=InvoiceLine.OPTIONAL,
+        description=INVOICE_MARKER_DESCRIPTION,
+        amount_kobo=1,
+    )
+    invoicing.recompute(invoice)
+    return invoice
+
+
+SHARED_PHONE = "+2348037770001"
+
+
+def student_sibling_actor():
+    """A school A student with the same guardian phone as school B's marked invoice."""
+    from tests.students.factories import StudentProfileFactory
+
+    return StudentProfileFactory.create(guardian_phone=SHARED_PHONE).user
+
+
 def _tiny_csv() -> dict:
     from django.core.files.uploadedfile import SimpleUploadedFile
 
@@ -352,6 +387,35 @@ ISOLATION_CASES: list[IsolationCase] = [
         body_for=_initialize_body,
         actor=None,
         count_model=_attempt_count,
+        label="anonymous",
+    ),
+    # A school A student lists invoices (own and siblings'): school B's invoice must be
+    # absent, even though B's student shares the caller's guardian phone.
+    IsolationCase(
+        "api:invoices",
+        "GET",
+        url=lambda i: "/api/v1/invoices",
+        make_obj=_marked_invoice_in_active_schema,
+        actor=student_sibling_actor,
+        expect="absent",
+        marker=lambda i: INVOICE_MARKER_DESCRIPTION,
+        label="student",
+    ),
+    # Asking for school B's student id is a 404 (unknown in A).
+    IsolationCase(
+        "api:invoices",
+        "GET",
+        url=lambda i: f"/api/v1/invoices?student={i.student_id}",
+        make_obj=_marked_invoice_in_active_schema,
+        actor=bursar_actor,
+        label="bursar",
+    ),
+    IsolationCase(
+        "api:invoices",
+        "GET",
+        url=lambda i: "/api/v1/invoices",
+        make_obj=_marked_invoice_in_active_schema,
+        actor=None,
         label="anonymous",
     ),
     # Staff never start online payments: 403.

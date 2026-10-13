@@ -33,6 +33,23 @@ def _student(request) -> Student:
     return student
 
 
+MAX_PRESELECT = 50
+
+
+def _preselected(student: Student, get: Any) -> set[int]:
+    """``?with=<student id>`` (repeatable): students whose invoices start ticked, plus the
+    student's own. Only preselects: rows still come from ``payable_invoices`` and ownership
+    is enforced again on POST. A malformed id is a 404."""
+    raw_ids = get.getlist("with")[:MAX_PRESELECT]
+    ids = set()
+    for raw in raw_ids:
+        pk = parse_id(raw)
+        if pk is None:
+            raise Http404
+        ids.add(pk)
+    return {student.pk, *ids} if ids else set()
+
+
 def _lines(post: Any) -> list[PlannedLine]:
     """``invoice`` ids (a bad id is a 404) with their ``amount_<id>`` naira values."""
     lines = []
@@ -59,6 +76,7 @@ def pay(request):
     error = ""
     unavailable = ""
     selected: dict[int, str] = {}
+    preselect = _preselected(student, request.GET) if request.method == "GET" else set()
 
     if request.method == "POST" and ready:
         try:
@@ -87,7 +105,7 @@ def pay(request):
                     "invoice": inv,
                     "own": inv.student_id == student.pk,
                     "first_name": inv.student.first_name,
-                    "checked": inv.pk in selected,
+                    "checked": inv.pk in selected or inv.student_id in preselect,
                     "amount": selected.get(inv.pk) or naira_input(inv.balance_kobo),
                     "balance_input": naira_input(inv.balance_kobo),
                 }

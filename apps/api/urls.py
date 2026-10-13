@@ -20,6 +20,7 @@ urlpatterns = [
         views.PaymentsInitializeView.as_view(),
         name="payments_initialize",
     ),
+    path("invoices", views.InvoiceListView.as_view(), name="invoices"),
     path("payments/manual", views.ManualPaymentView.as_view(), name="payments_manual"),
     path(
         "results/<str:student>/<str:term>/report-card",

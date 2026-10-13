@@ -1,0 +1,58 @@
+{% extends "core/base.html" %}
+{% load fees_money %}
+{% block title %}My fees{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>My fees</h1>
+  <p>Outstanding balance: <strong>{{ balance|naira }}</strong></p>
+  {% if pay_url %}<p><a href="{{ pay_url }}">Pay now</a></p>{% endif %}
+
+  <h2>Invoices</h2>
+  {% for invoice in invoices %}
+  <section class="invoice">
+    <h3>{{ invoice.term }}</h3>
+    <table>
+      <thead><tr><th>Item</th><th>Amount</th></tr></thead>
+      <tbody>
+      {% for line in invoice.lines.all %}
+      <tr><td>{{ line.description }}</td><td>{{ line.amount_kobo|naira }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <dl class="facts">
+      <dt>Total</dt><dd>{{ invoice.total_kobo|naira }}</dd>
+      <dt>Paid</dt><dd>{{ invoice.paid_kobo|naira }}</dd>
+      <dt>Balance</dt><dd>{{ invoice.balance_kobo|naira }}</dd>
+      <dt>Status</dt><dd>{{ invoice.get_status_display }}</dd>
+    </dl>
+  </section>
+  {% empty %}
+  <p>You have no invoices yet.</p>
+  {% endfor %}
+
+  {% if siblings %}
+  <h2>Siblings</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Class</th><th>Outstanding</th></tr></thead>
+    <tbody>
+    {% for sib in siblings %}
+    <tr><td>{{ sib.first_name }}</td><td>{{ sib.class_name }}</td><td>{{ sib.balance|naira }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if siblings_pay_url %}<p><a href="{{ siblings_pay_url }}">Pay for siblings too</a></p>{% endif %}
+  {% endif %}
+
+  <h2>Receipts</h2>
+  {% if receipts %}
+  <ul>
+    {% for receipt in receipts %}
+    <li><a href="{% url 'fees:receipt_download' receipt.pk %}">{{ receipt.number }}</a> — {{ receipt.payment.amount_kobo|naira }}</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p>No receipts yet.</p>
+  {% endif %}
+  <p><a href="{% url 'home' %}">Back</a></p>
+</div>
+{% endblock %}
