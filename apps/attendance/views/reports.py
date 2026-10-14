@@ -39,12 +39,14 @@ SCHOOL_ROLES = (PRINCIPAL, SCHOOL_ADMIN, PROPRIETOR)
 CSV_TOTALS = ["Present", "Opened", "Late", "Absent", "Excused"]
 
 
-def _class_access(user, arm: ClassArm, term: Term | None) -> None:
-    """Form teacher of the arm for the term's session, principal, admin or proprietor."""
+def _class_access(user, arm: ClassArm, term: Term | None) -> bool:
+    """Form teacher of the arm for the term's session, principal, admin or proprietor.
+
+    Returns whether the user may take the arm's registers (the proprietor only reads)."""
     if reg.access(user, arm, term) is not None:
-        return
+        return True
     if user.is_active and getattr(user, "kind", None) == "staff" and user.has_role(PROPRIETOR):
-        return
+        return False
     raise PermissionDenied
 
 
@@ -95,7 +97,8 @@ def class_page(request, arm_id):
         add_never_cache_headers(response)
         return response
     term, terms = _pick_term(request, cur)
-    _class_access(request.user, arm, term)
+    # Registers can be taken only in the current term, so only its days link to them.
+    can_take = _class_access(request.user, arm, term) and term.pk == cur.pk
 
     until = min(timezone.localdate(), term.end_date)
     days = school_days(term, until=until)
@@ -146,6 +149,7 @@ def class_page(request, arm_id):
         "missing": missing,
         "missing_set": set(missing),
         "rows": rows,
+        "can_take": can_take,
     }
     response = render(request, "attendance/class.html", ctx)
     add_never_cache_headers(response)
@@ -191,6 +195,9 @@ def school_page(request):
         else:
             day = parsed
     ctx: dict[str, Any] = {"day": day, "error": error, "rows": []}
+    if day > today:
+        ctx["future"] = True
+        return render(request, "attendance/school.html", ctx)
     term = Term.objects.filter(start_date__lte=day, end_date__gte=day).first()
     if term is None or not is_school_day(term, day):
         ctx["not_school_day"] = True

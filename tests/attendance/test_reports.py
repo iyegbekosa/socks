@@ -355,3 +355,43 @@ def test_home_links(client_a, w):
     with today():
         reg = client_a.get(reverse("attendance:register", args=[w.arm.pk, "2026-01-12"]))
     assert reverse("attendance:class", args=[w.arm.pk]) in reg.content.decode()
+
+
+def _reg_url(arm, d):
+    return reverse("attendance:register", args=[arm.pk, d])
+
+
+def test_class_missing_days_and_headers_link_to_register(client_a, w):
+    with schema_context("school_a"):
+        add_records(w.students[0], w.arm, START, ["present", "present"])
+        client_a.force_login(w.teacher)
+    with today():
+        html = client_a.get(_class_url(w.arm)).content.decode()
+    for d in ("2026-01-05", "2026-01-07", "2026-01-12"):
+        assert f'href="{_reg_url(w.arm, d)}"' in html, d
+    # The missing-days banner links each day too (one for the header, one for the banner).
+    assert html.count(f'href="{_reg_url(w.arm, "2026-01-07")}"') == 2
+
+
+def test_class_register_links_hidden_from_proprietor_and_past_terms(client_a, w):
+    _staff_login(client_a, "proprietor")
+    with today():
+        html = client_a.get(_class_url(w.arm)).content.decode()
+    assert "/attendance/register/" not in html
+    with schema_context("school_a"):
+        past = Term.objects.filter(session=w.session).exclude(pk=w.term.pk).order_by("pk").first()
+    _staff_login(client_a, "principal")
+    with today():
+        html = client_a.get(_class_url(w.arm, f"?term={past.pk}")).content.decode()
+        assert "/attendance/register/" not in html
+        html = client_a.get(_class_url(w.arm)).content.decode()
+    assert f'href="{_reg_url(w.arm, "2026-01-05")}"' in html
+
+
+def test_school_page_future_date(client_a, w):
+    _staff_login(client_a, "principal")
+    with today():
+        r = client_a.get(reverse("attendance:school") + "?date=2026-01-13")
+    assert r.status_code == 200
+    assert r.context["rows"] == []
+    assert "is in the future" in r.content.decode()

@@ -481,3 +481,107 @@ def test_past_term_date_refused(client_a, w):
     assert r.status_code == 400
     assert "That date is not a school day." in r.content.decode()
     assert _records() == {}
+
+
+# --- Navigating dates (Ruling X) ---------------------------------------------------------
+
+
+def _today_url(arm, query=""):
+    return reverse("attendance:today", args=[arm.pk]) + query
+
+
+def test_register_page_has_date_picker_and_school_day_links(client_a, w):
+    with schema_context("school_a"):
+        Holiday.objects.create(date=date(2026, 1, 8), name="Break")
+    _login(client_a, w.teacher)
+    with today():
+        html = client_a.get(_url(w.arm, "2026-01-09")).content.decode()
+    assert 'type="date"' in html
+    assert 'min="2026-01-05"' in html and 'max="2026-01-12"' in html
+    assert 'value="2026-01-09"' in html
+    assert f'action="{_today_url(w.arm)}"' in html
+    # Previous skips the holiday; next skips the weekend.
+    assert f'href="{_url(w.arm, "2026-01-07")}"' in html
+    assert f'href="{_url(w.arm, "2026-01-12")}"' in html
+    assert "previous school day" in html and "next school day" in html
+
+
+def test_next_link_hidden_on_today(client_a, w):
+    _login(client_a, w.teacher)
+    with today():
+        html = client_a.get(_url(w.arm)).content.decode()
+    assert f'href="{_url(w.arm, "2026-01-09")}"' in html
+    assert "next school day" not in html
+
+
+def test_first_day_of_term_has_no_previous_link(client_a, w):
+    _login(client_a, w.teacher)
+    with today():
+        html = client_a.get(_url(w.arm, "2026-01-05")).content.decode()
+    assert "previous school day" not in html
+    assert f'href="{_url(w.arm, "2026-01-06")}"' in html
+
+
+def test_date_picker_opens_chosen_date(client_a, w):
+    _login(client_a, w.teacher)
+    with today():
+        r = client_a.get(_today_url(w.arm, "?date=2026-01-07"))
+        assert r.status_code == 302
+        assert r["Location"] == _url(w.arm, "2026-01-07")
+        # A garbled date falls back to today.
+        r = client_a.get(_today_url(w.arm, "?date=7/1/2026"))
+        assert r["Location"] == _url(w.arm)
+
+
+def test_non_school_day_page_keeps_navigation(client_a, w):
+    _login(client_a, w.teacher)
+    with today():
+        r = client_a.get(_url(w.arm, "2026-01-10"))  # Saturday
+    assert r.status_code == 400
+    html = r.content.decode()
+    assert "That date is not a school day." in html
+    assert 'type="date"' in html
+    assert f'href="{_url(w.arm, "2026-01-09")}"' in html
+    assert f'href="{_url(w.arm, "2026-01-12")}"' in html
+
+
+def test_today_on_weekend_redirects_to_last_school_day(client_a, w):
+    with schema_context("school_a"):
+        Holiday.objects.create(date=date(2026, 1, 9), name="Break")
+    _login(client_a, w.teacher)
+    with today(date(2026, 1, 10)):  # Saturday; Friday is a holiday
+        r = client_a.get(_today_url(w.arm))
+        assert r.status_code == 302
+        assert r["Location"] == _url(w.arm, "2026-01-08")
+        html = client_a.get(r["Location"]).content.decode()
+    assert "Today is not a school day — showing 8 January 2026." in html
+
+
+def test_today_with_no_school_day_yet_is_friendly(client_a, w):
+    _login(client_a, w.teacher)
+    with today(date(2026, 1, 4)):  # Sunday before the term's first day
+        r = client_a.get(_today_url(w.arm))
+    assert r.status_code == 200
+    assert "There has been no school day yet this term." in r.content.decode()
+
+
+def test_today_with_no_current_term_is_friendly(client_a, w):
+    with schema_context("school_a"):
+        from apps.academics.models import Term
+
+        Term.objects.update(is_current=False)
+        principal = make_staff("principal")
+    login_verified(client_a, principal)
+    with today():
+        r = client_a.get(_today_url(w.arm))
+    assert r.status_code == 200
+    assert "There is no current term." in r.content.decode()
+
+
+def test_unsaved_register_says_not_yet_taken(client_a, w):
+    _login(client_a, w.teacher)
+    banner = "Not yet taken — everyone defaults to present"
+    with today():
+        assert banner in client_a.get(_url(w.arm)).content.decode()
+        client_a.post(_url(w.arm), _post_data(w.students))
+        assert banner not in client_a.get(_url(w.arm)).content.decode()

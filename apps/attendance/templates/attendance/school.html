@@ -7,7 +7,8 @@
 <form method="get"><label>Date <input type="date" name="date" value="{{ day|date:'Y-m-d' }}"></label> <button type="submit">Show</button></form>
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 <p class="muted">{{ day|date:"l j F Y" }}</p>
-{% if not_school_day %}<p>{{ day|date:"j F Y" }} is not a school day.</p>
+{% if future %}<p>{{ day|date:"j F Y" }} is in the future.</p>
+{% elif not_school_day %}<p>{{ day|date:"j F Y" }} is not a school day.</p>
 {% elif rows %}
 <table>
 <thead><tr><th scope="col">Class</th><th scope="col">Registered</th><th scope="col">Present</th><th scope="col">Absent</th><th scope="col">Late</th><th scope="col">Term to date %</th></tr></thead>

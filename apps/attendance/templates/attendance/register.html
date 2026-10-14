@@ -7,10 +7,15 @@
 <h1>{{ arm.display_name }} register</h1>
 <p class="muted">{{ day|date:"l j F Y" }} · <a href="{% url 'attendance:class' arm.pk %}">Term attendance</a></p>
 {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
-{% if date_error %}<p class="error" role="alert">{{ date_error }}</p>
+{% if nav %}<nav class="days no-print" aria-label="Register date">{% if nav.prev %}<a href="{% url 'attendance:register' arm.pk nav.prev|date:'Y-m-d' %}">← previous school day</a>{% endif %}
+<form method="get" action="{% url 'attendance:today' arm.pk %}"><label>Date <input type="date" name="date" value="{{ day|date:'Y-m-d' }}" min="{{ nav.min|date:'Y-m-d' }}" max="{{ nav.max|date:'Y-m-d' }}"></label> <button type="submit">Go</button></form>
+{% if nav.next %}<a href="{% url 'attendance:register' arm.pk nav.next|date:'Y-m-d' %}">next school day →</a>{% endif %}</nav>{% endif %}
+{% if no_day %}<p class="muted" role="status">{{ no_day }}</p>
+{% elif date_error %}<p class="error" role="alert">{{ date_error }}</p>
 {% else %}
 {% if locked %}<p class="error" role="alert">This register is locked because the class's results have left draft.</p>{% elif not editable %}<p class="muted">This register can no longer be changed by you.</p>{% endif %}
 {% for e in errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+{% if rows and not taken %}<p class="notice" role="status">{% if editable %}Not yet taken — everyone defaults to present. Tap Save to record it.{% else %}No register was taken on this day.{% endif %}</p>{% endif %}
 {% if rows %}
 <form method="post" id="reg">{% csrf_token %}
 <div class="bar"><span aria-live="polite">Present <b id="c-present">{{ counts.present }}</b> · Absent <b id="c-absent">{{ counts.absent }}</b> · Late <b id="c-late">{{ counts.late }}</b> · Excused <b id="c-excused">{{ counts.excused }}</b></span>{% if editable %}<button type="submit">Save</button>{% endif %}</div>

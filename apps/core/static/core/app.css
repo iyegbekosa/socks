@@ -59,5 +59,9 @@ button.danger { background:var(--danger); }
 .reg .g { display:flex; gap:.3rem; }
 .reg .g label { display:flex; align-items:center; justify-content:center; gap:.2rem; min-width:48px; min-height:44px; margin:0; padding:0 .3rem; border:1px solid var(--line); border-radius:6px; cursor:pointer; }
 .reg .g input { margin:0; width:1.1rem; height:1.1rem; }
+.reg .days { display:flex; flex-wrap:wrap; gap:.5rem 1rem; align-items:center; margin:.5rem 0; }
+.reg .days form { display:flex; gap:.4rem; align-items:center; margin:0; }
+.reg .days a, .reg .days button { min-height:44px; display:inline-flex; align-items:center; margin:0; }
+.reg .notice { font-weight:600; }
 .reg .g label:has(:checked) { background:var(--accent); border-color:var(--accent); color:#fff; }
 .reg .ro { color:var(--muted); font-size:.9rem; }
