@@ -8,6 +8,7 @@ from apps.audit.services import record
 from apps.core.locks import school_lock
 
 FIELDS = ("late_threshold", "edit_window_days", "absence_email")
+DUPLICATE = "A holiday is already set on this date."
 
 
 def save_settings(values: dict[str, Any], *, by: Any, request: Any = None) -> AttendanceSettings:
@@ -38,8 +39,13 @@ def save_holiday(form: HolidayForm, *, by: Any, request: Any = None) -> Holiday 
     with transaction.atomic():
         school_lock("attendance:holidays")
         # Re-check under the lock so a register saved meanwhile cannot slip past the form.
-        if AttendanceRecord.objects.filter(date=form.cleaned_data["date"]).exists():
+        d = form.cleaned_data["date"]
+        if AttendanceRecord.objects.filter(date=d).exists():
             form.add_error("date", CONFLICT)
+            return None
+        # Another admin may have added the same date since this form was validated.
+        if Holiday.objects.filter(date=d).exists():
+            form.add_error("date", DUPLICATE)
             return None
         holiday = form.save()
         record(
@@ -50,3 +56,18 @@ def save_holiday(form: HolidayForm, *, by: Any, request: Any = None) -> Holiday 
             after={"holiday_id": holiday.pk, "date": holiday.date.isoformat()},
         )
     return holiday
+
+
+def delete_holiday(pk: int, *, by: Any, request: Any = None) -> bool:
+    """Delete holiday ``pk``; False if it no longer exists. Always safe for card totals: no
+    register can exist on a holiday's date (a holiday is refused on a date with records, and
+    a register is refused on a holiday)."""
+    with transaction.atomic():
+        school_lock("attendance:holidays")
+        holiday = Holiday.objects.filter(pk=pk).first()
+        if holiday is None:
+            return False
+        after = {"holiday_id": holiday.pk, "date": holiday.date.isoformat()}
+        record("attendance.holiday_deleted", request=request, actor=by, obj=holiday, after=after)
+        holiday.delete()
+    return True

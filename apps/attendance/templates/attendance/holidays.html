@@ -7,8 +7,8 @@
   {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
   {% if holidays %}
   <table>
-    <thead><tr><th>Date</th><th>Name</th></tr></thead>
-    <tbody>{% for h in holidays %}<tr><td>{{ h.date|date:"j F Y" }}</td><td>{{ h.name }}</td></tr>{% endfor %}</tbody>
+    <thead><tr><th>Date</th><th>Name</th>{% if can_edit %}<th>Action</th>{% endif %}</tr></thead>
+    <tbody>{% for h in holidays %}<tr><td>{{ h.date|date:"j F Y" }}</td><td>{{ h.name }}</td>{% if can_edit %}<td><form method="post" action="{% url 'attendance:holiday_delete' h.pk %}">{% csrf_token %}<button type="submit" aria-label="Delete {{ h.name }} ({{ h.date|date:'j F Y' }})">Delete</button></form></td>{% endif %}</tr>{% endfor %}</tbody>
   </table>
   {% else %}<p>No holidays yet.</p>{% endif %}
   {% if can_edit %}

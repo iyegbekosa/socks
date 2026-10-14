@@ -3,6 +3,7 @@
 {% block content %}
 <div class="card">
 <h1>Attendance</h1>
+<p class="no-print"><a href="{% url 'attendance:holidays' %}">Holidays</a></p>
 <form method="get"><label>Date <input type="date" name="date" value="{{ day|date:'Y-m-d' }}"></label> <button type="submit">Show</button></form>
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 <p class="muted">{{ day|date:"l j F Y" }}</p>

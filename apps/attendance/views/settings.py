@@ -1,12 +1,15 @@
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
+from django.http import Http404
 from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_POST
 
 from apps.accounts.roles import PRINCIPAL, PROPRIETOR, SCHOOL_ADMIN, require_roles
 from apps.attendance import services
 from apps.attendance.forms import AttendanceSettingsForm, HolidayForm
 from apps.attendance.models import AttendanceSettings, Holiday
+from apps.core.parsing import parse_id
 
 VIEW_ROLES = (SCHOOL_ADMIN, PRINCIPAL, PROPRIETOR)
 
@@ -56,3 +59,15 @@ def holidays(request):
         "attendance/holidays.html",
         {"form": form, "can_edit": can_edit, "holidays": Holiday.objects.all()},
     )
+
+
+@require_POST
+@require_roles(SCHOOL_ADMIN)
+def holiday_delete(request, pk):
+    holiday_id = parse_id(pk)
+    if holiday_id is None or not services.delete_holiday(
+        holiday_id, by=request.user, request=request
+    ):
+        raise Http404
+    messages.success(request, "Holiday deleted.")
+    return redirect("attendance:holidays")
