@@ -35,10 +35,10 @@ Affects design §1.3, UC-09/12/14/17, FR-15, §5.1, §5.2, §6.2, §7.1, Q5.
 | Concern | Decision |
 |---|---|
 | Accounts | Every student gets one login. Parents/guardians do **not** get accounts; they use their child's student login (for younger children the parent holds the login). This settles **Q5**: all students have logins. |
-| Login | Admission number + password (young students have no phone or email). Admission generates a one-time password the student must change at first login. **Forgot password emails a reset link to the main guardian's email** (decided 11 Oct 2026); an SMS code to the guardian's phone is added once an SMS provider exists (P5). Login rate limits apply per admission number and IP. |
+| Login | Admission number + password (young students have no phone or email). Admission generates a one-time password the student must change at first login. **Forgot password emails a reset link to the main guardian's email** (decided 11 Oct 2026); an SMS code to the guardian's phone is added once SMS exists (after the pilot; see *Later*). Login rate limits apply per admission number and IP. |
 | Guardians | Become contact records, not users: stored as fields on the student — a main guardian (name, relationship, phone, email) and an optional second guardian (decided 11 Oct 2026, replacing a separate guardian table). Used for SMS/email (results ready, receipts, balances, absences), payment receipts and consent. Drop `guardian_link.user_id` and `can_pay`. |
 | Student portal scope | Own results and report cards, own invoices, balances, **pay fees online**, receipts, attendance summary, assignments and materials, announcements. The "R self (if allowed)" restriction on report cards (§7.1) becomes a per-school setting that defaults to on. |
-| Keeping parents informed | Because a teenager could hide results from a parent, key events go directly to guardian contacts by SMS/email: results published, receipt issued, balance reminders, absences. Parents stay informed without logging in. |
+| Keeping parents informed | Because a teenager could hide results from a parent, key events go directly to guardian contacts by email (SMS after the pilot): results published, receipt issued, balance reminders, absences. Parents stay informed without logging in. |
 | Siblings (FR-15) | No stored family record (dropped 11 Oct 2026 as unneeded complexity). P4 finds siblings by matching guardian phone/email. A student's fee page shows a "pay for siblings too" option listing each sibling's outstanding balance, so one checkout still covers several invoices. Delivered in Phase 4 as a *Should*; per-student checkout is the minimum. |
 | Consent (NDPA §7.7) | Guardian consent is recorded by the school at admission (form + checkbox in the admission screen), not at first login, because the person logging in may be the child. |
 | Gateway customer | Paystack/Flutterwave require an email: use the primary guardian's email, or a school-generated placeholder when none exists. Receipt goes to guardian phone/email. |
@@ -54,12 +54,13 @@ Order is driven by dependencies: everything sits on tenancy; results and fees bo
 
 ```
 P0 Foundations ─► P1 Tenancy & accounts ─► P2 Academics & students ─┬─► P3 Results & report cards ─┐
-                                                                     └─► P4 Fees & payments ─────────┤
-                                                       P5 Communication (after P1; used by P3/P4) ───┤
+                                                                     ├─► P4 Fees & payments ─────────┤
+                                                                     └─► P5 Attendance ──────────────┤
+                                            P6 Communication: email + in-app (after P1) ─────────────┤
                                                                                                      ▼
                                                                                          ★ MVP — pilot 3–5 schools
                                                                                                      │
-                     P6 Attendance · P7 Learning · P8 Lifecycle & billing · P9 Launch hardening ◄────┘
+                                  P7 Learning · P8 Lifecycle & billing · P9 Launch hardening ◄───────┘
                                                                                                      ▼
                                                                                          ★ Version 1 — general launch
 ```
@@ -115,7 +116,7 @@ P0 Foundations ─► P1 Tenancy & accounts ─► P2 Academics & students ─�
 - Workflow Draft → Submitted → Reviewed → Approved → Published (locked); admin unlock audited (FR-08).
 - Comments, affective/psychomotor ratings; broadsheet.
 - WeasyPrint report-card PDFs in the `reports` queue → Cloudinary `raw` private; 50 cards < 2 min (FR-09). Student downloads via signed link.
-- "Results published" SMS/email to guardians (uses P5).
+- "Results published" email to guardians (SMS after the pilot).
 - Results-accuracy check against a pilot school's hand-calculated broadsheet — exact match required.
 
 **Exit:** one real past class reproduces the school's broadsheet exactly; students download report cards.
@@ -135,25 +136,33 @@ P0 Foundations ─► P1 Tenancy & accounts ─► P2 Academics & students ─�
 
 **Exit:** ₦100 test payment settles to a pilot school's account; duplicate webhooks cannot double-credit.
 
-### P5 — Communication
+> **Re-planned 14 Oct 2026:** SMS is a per-message cost and is not needed for the pilot, so it moves out of the MVP (see *Later*). Attendance moves up from P6 into the MVP. Communication keeps the spec's Must items (UC-14 reminders, UC-15 announcements) using email and in-app messages only.
 
-Can start any time after P1; P3 and P4 call it.
+### P5 — Attendance
 
-- `notify(audience, channels, template, context)` service; queued, batched, delivery-logged (FR-16: 1,000 SMS queued < 10 s).
-- SMS provider adapter (Termii or Africa's Talking) with fallback; email (SES/Postmark); in-app notifications.
-- Templates with placeholders, quiet hours 9 pm–7 am, SMS credits per plan.
-- Announcements to school/level/arm/debtors/individual (UC-15); fee reminders (UC-14).
-- Audiences resolve to **guardian contacts** for family messages and to student accounts for in-app (§1.2).
+Daily register per arm, taken in under a minute for 40 students on a phone (UC-06).
+- Form teacher marks present / absent / late per school day; school days come from the term dates minus school-set holidays.
+- Term totals (days present / days school opened) feed the P3 report card, replacing the numbers typed in by hand on the comments page.
+- Absence alerts to guardians by **email** (same pattern as P3/P4 guardian messages), switchable per school.
+- Attendance summary on the student portal; class and school attendance views for admin and principal.
 
-**Exit:** a results-published notice reaches every guardian in a test class; delivery status visible.
+**Exit:** a form teacher marks a 40-student class on a phone in under a minute; that term's report cards show the computed attendance.
+
+### P6 — Communication (email and in-app)
+
+Can start any time after P1; P3, P4 and P5 call it.
+- `notify(audience, channels, template, context)` service with channels **email and in-app** only; queued, batched, delivery-logged.
+- Email through SES or Postmark; in-app notifications on the student portal and staff home.
+- Templates with placeholders; quiet hours 9 pm–7 am for email.
+- Announcements to school / level / arm / debtors / individual (UC-15); fee reminders by email on school-set days (UC-14).
+- Audiences resolve to **guardian emails** for family messages and to student accounts for in-app (§1.2).
+- Existing P3/P4 guardian messages move onto `notify`.
+
+**Exit:** a results-published notice reaches every guardian email in a test class and appears in-app; delivery status visible.
 
 ### ★ MVP milestone — pilot with 3–5 schools
 
-P0–P5 done. Run the review checklist items that apply (results accuracy, payment webhook tests, isolation suite, backup restore to staging). Start pilots at a **term start**, since schools set up fees and classes then. The next one is 2nd term, January 2027.
-
-### P6 — Attendance
-
-Daily register per arm in under a minute for 40 students on a phone (UC-06); optional absence SMS to guardians; term totals on the report card.
+P0–P6 done. Run the review checklist items that apply (results accuracy, payment webhook tests, isolation suite, backup restore to staging). Start pilots at a **term start**, since schools set up fees and classes then. The next one is 2nd term, January 2027.
 
 ### P7 — Learning (Canvas-style)
 
@@ -182,6 +191,7 @@ All review-checklist items in the design document are ticked, and open questions
 
 ### Later (unchanged from design §12.3)
 
+- **SMS (after the pilot):** provider adapter (Termii or Africa's Talking) with fallback, SMS credits per plan, an `sms` channel on `notify`, SMS password-reset codes, absence and receipt SMS; FR-16 (1,000 SMS queued < 10 s). Offer it as a paid, per-school option.
 - **Version 2:** Android app on the existing API, WhatsApp notifications, CBT exams, timetable, lesson-notes approval.
 - **Version 3:** payroll and staff attendance, transport and hostel, cross-term analytics, teacher–family messaging (through the student portal).
 
@@ -195,8 +205,8 @@ All review-checklist items in the design document are ticked, and open questions
 | P2 | UC-03, UC-04, UC-05 | FR-03, FR-04, FR-05 |
 | P3 | UC-07, UC-08, UC-09 | FR-06, FR-07, FR-08, FR-09 |
 | P4 | UC-11, UC-12, UC-13, UC-14 (list), UC-17 | FR-10, FR-11, FR-12, FR-13, FR-14, FR-15 (revised) |
-| P5 | UC-14 (reminders), UC-15 | FR-16 |
-| P6 | UC-06 | — |
+| P5 | UC-06 | — |
+| P6 | UC-14 (reminders), UC-15 | — (FR-16 moves to SMS, after the pilot) |
 | P7 | UC-10 | — |
 | P8 | UC-02, UC-16, UC-18, UC-19 | FR-17, FR-18 |
 | P9 | — | Non-functional requirements (§2.3) |
