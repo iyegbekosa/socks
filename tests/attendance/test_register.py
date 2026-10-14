@@ -7,6 +7,8 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django_tenants.utils import schema_context
 
+from apps.academics.models import AcademicSession, FormTeacher
+from apps.accounts.roles import set_roles
 from apps.attendance import register
 from apps.attendance.models import AttendanceRecord, AttendanceSettings, Holiday
 from apps.audit.models import AuditEvent
@@ -100,24 +102,35 @@ def test_form_teacher_saves_40_student_register(client_a, w40):
         assert 'register.js" defer' in html
         r, n = _view_queries(client_a, "post", _url(w.arm), _post_data(w.students, overrides))
         assert n <= 12, n
+        # The edit path (UPDATE instead of INSERT) stays within budget too.
+        edit, n = _view_queries(
+            client_a,
+            "post",
+            _url(w.arm),
+            _post_data(w.students, {**overrides, w.students[0].pk: "late"}),
+        )
+        assert edit.status_code == 302
+        assert n <= 12, n
     assert r.status_code == 302
     assert r["Location"] == _url(w.arm)
     recs = _records(date=TODAY)
     assert len(recs) == 40
+    assert recs.pop(w.students[0].pk).status == "late"  # edited above
     assert {r.arm_id for r in recs.values()} == {w.arm.pk}
     assert {r.recorded_by_id for r in recs.values()} == {w.teacher.pk}
-    assert sum(r.status == "absent" for r in recs.values()) == 3
+    assert sum(r.status == "absent" for r in recs.values()) == 2
     (ev,) = _audit("attendance.register_saved")
     assert ev.after == {
         "arm_id": w.arm.pk,
         "date": D,
         "counts": {"present": 35, "absent": 3, "late": 2, "excused": 0},
     }
-    assert _audit("attendance.register_changed") == []
+    (changed,) = _audit("attendance.register_changed")
+    assert changed.after == {"date": D, str(w.students[0].pk): "late"}
     with today():
         page = client_a.get(_url(w.arm)).content.decode()
     assert "Register saved for 12 January 2026" in page
-    assert page.count('value="absent" checked') == 3
+    assert page.count('value="absent" checked') == 2
 
 
 def test_resave_with_one_change_audits_only_that_student(client_a, w):
@@ -129,7 +142,7 @@ def test_resave_with_one_change_audits_only_that_student(client_a, w):
     assert r.status_code == 302
     (ev,) = _audit("attendance.register_changed")
     assert ev.before == {str(s1.pk): "present"}
-    assert ev.after == {str(s1.pk): "late"}
+    assert ev.after == {"date": D, str(s1.pk): "late"}
     assert len(_audit("attendance.register_saved")) == 1
     assert _records(date=TODAY)[s1.pk].status == "late"
 
@@ -419,4 +432,52 @@ def test_locked_beats_edit_window(client_a, w):
     with today(date(2026, 1, 16)):
         r = client_a.post(_url(w.arm, "2026-01-05"), _post_data(w.students))
     assert r.status_code == 409
+    assert _records() == {}
+
+
+def test_former_teacher_keeps_no_access(client_a, w):
+    """A FormTeacher row outlives a removed teacher role; access must not."""
+    with schema_context("school_a"):
+        set_roles(w.teacher, [], by=None)
+    _login(client_a, w.teacher)
+    with today():
+        assert client_a.get(_url(w.arm)).status_code == 403
+        assert client_a.post(_url(w.arm), _post_data(w.students)).status_code == 403
+    assert _records() == {}
+
+
+def test_previous_session_form_teacher_forbidden(client_a, w):
+    with schema_context("school_a"):
+        old = AcademicSession.objects.create(
+            name="2024/2025", start_date=date(2024, 9, 1), end_date=date(2025, 7, 31)
+        )
+        former = make_staff("teacher")
+        FormTeacher.objects.create(arm=w.arm_b, session=old, teacher=former)
+        FormTeacher.objects.filter(arm=w.arm, session=w.session).update(teacher=w.teacher_b)
+        FormTeacher.objects.create(arm=w.arm, session=old, teacher=former)
+    _login(client_a, former)
+    with today():
+        assert client_a.get(_url(w.arm)).status_code == 403
+
+
+@pytest.mark.parametrize("role", ["principal", "school_admin"])
+def test_locked_for_principal_and_admin_too(client_a, w, role):
+    with schema_context("school_a"):
+        ClassResult.objects.create(arm=w.arm, term=w.term, status="approved")
+        user = make_staff(role)
+    login_verified(client_a, user)
+    with today():
+        assert client_a.post(_url(w.arm), _post_data(w.students)).status_code == 409
+        assert 'type="radio"' not in client_a.get(_url(w.arm)).content.decode()
+    assert _records() == {}
+
+
+def test_past_term_date_refused(client_a, w):
+    with schema_context("school_a"):
+        principal = make_staff("principal")
+    login_verified(client_a, principal)
+    with today():
+        r = client_a.post(_url(w.arm, "2025-12-01"), _post_data(w.students))
+    assert r.status_code == 400
+    assert "That date is not a school day." in r.content.decode()
     assert _records() == {}

@@ -4,6 +4,7 @@ from datetime import date
 import pytest
 from django_tenants.utils import schema_context
 
+from apps.accounts.roles import set_roles
 from apps.attendance.models import AttendanceRecord, AttendanceSettings, Holiday
 from apps.results.models import ClassResult
 from apps.students.models import Enrolment
@@ -200,3 +201,27 @@ def test_moved_student_shown_recorded_elsewhere(client_a, w):
     with schema_context("school_a"):
         rec = AttendanceRecord.objects.get(student=mover, date=TODAY)
         assert (rec.arm_id, rec.status) == (w.arm.pk, "excused")
+
+
+def test_former_teacher_forbidden(client_a, w):
+    with schema_context("school_a"):
+        set_roles(w.teacher, [], by=None)
+    login(client_a, w.teacher)
+    with today():
+        assert client_a.get(url(w.arm)).status_code == 403
+        assert post(client_a, url(w.arm), body(w.students)).status_code == 403
+    assert count() == 0
+
+
+@pytest.mark.parametrize("role", ["principal", "school_admin"])
+def test_locked_for_principal_and_admin_too(client_a, w, role):
+    with schema_context("school_a"):
+        ClassResult.objects.create(arm=w.arm, term=w.term, status="reviewed")
+        user = make_staff(role)
+    login_verified(client_a, user)
+    with today():
+        assert client_a.get(url(w.arm)).json()["editable"] is False
+        r = post(client_a, url(w.arm), body(w.students))
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "ATTENDANCE_LOCKED"
+    assert count() == 0

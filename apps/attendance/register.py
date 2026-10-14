@@ -11,7 +11,8 @@ from django.db.models import F, FilteredRelation, Q, QuerySet
 from django.utils import timezone
 
 from apps.academics.models import ClassArm, FormTeacher, Term
-from apps.accounts.roles import PRINCIPAL, SCHOOL_ADMIN
+from apps.academics.services import current_term
+from apps.accounts.roles import PRINCIPAL, SCHOOL_ADMIN, TEACHER
 from apps.attendance import hooks
 from apps.attendance.days import RegisterDateError, check_register_date
 from apps.attendance.models import AttendanceRecord, AttendanceSettings
@@ -138,15 +139,21 @@ def _listed_with_records(arm: ClassArm, d: date, term: Term) -> list[_Listed]:
 
 
 def access(user: Any, arm: ClassArm, term: Term | None) -> str | None:
-    """``FULL``, ``FORM_TEACHER`` or None (may not take this arm's register)."""
-    if not user.is_authenticated or user.is_student:
+    """``FULL``, ``FORM_TEACHER`` or None (may not take this arm's register).
+
+    Like ``results.scope.can_open_comments``: active staff only; the form teacher must still
+    hold the teacher role (a removed role does not delete their ``FormTeacher`` rows).
+    """
+    if not getattr(user, "is_authenticated", False) or not user.is_active:
         return None
-    if user.roles & {PRINCIPAL, SCHOOL_ADMIN}:
+    if getattr(user, "kind", None) != "staff":
+        return None
+    roles = user.roles
+    if roles & {PRINCIPAL, SCHOOL_ADMIN}:
         return FULL
-    if (
-        term is not None
-        and FormTeacher.objects.filter(arm=arm, session_id=term.session_id, teacher=user).exists()
-    ):
+    if TEACHER not in roles or term is None:
+        return None
+    if FormTeacher.objects.filter(arm=arm, session_id=term.session_id, teacher=user).exists():
         return FORM_TEACHER
     return None
 
@@ -181,7 +188,7 @@ def editable_by(level: str | None, d: date, term: Term | None) -> bool:
 
 def can_edit(user: Any, arm: ClassArm, d: date, *, term: Term | None = None) -> bool:
     if term is None:
-        term = Term.objects.filter(is_current=True).select_related("session").first()
+        term = current_term()
     return editable_by(access(user, arm, term), d, term)
 
 
@@ -197,7 +204,10 @@ def is_locked(arm: ClassArm, term: Term) -> bool:
 def _locked_for_save(arm: ClassArm, term: Term) -> bool:
     """``is_locked``, reading the class row ``FOR SHARE``: a results transition (which takes
     the row ``FOR UPDATE``) waits for this save to commit, so no record changes as the class
-    moves on. Django has no FOR SHARE option, hence raw."""
+    moves on. Django has no FOR SHARE option, hence raw.
+
+    With no class row yet there is nothing to lock; a row is created once any score is saved,
+    long before review, so a results transition cannot race a save in practice."""
     table = ClassResult._meta.db_table
     with connection.cursor() as cur:
         cur.execute(
@@ -311,7 +321,11 @@ def save_register(
                 actor=by,
                 obj=arm,
                 before={str(sid): old for sid, (old, _) in result.changed.items()},
-                after={str(sid): new for sid, (_, new) in result.changed.items()},
+                # "date" sits beside the {student_id: status} map; ids never collide with it.
+                after={
+                    "date": d.isoformat(),
+                    **{str(sid): new for sid, (_, new) in result.changed.items()},
+                },
             )
 
         if result.newly_absent:
