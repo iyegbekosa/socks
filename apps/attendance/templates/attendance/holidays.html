@@ -1,0 +1,24 @@
+{% extends "core/base.html" %}
+{% block title %}Holidays{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Holidays</h1>
+  {% include "attendance/_nav.html" %}
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if holidays %}
+  <table>
+    <thead><tr><th>Date</th><th>Name</th></tr></thead>
+    <tbody>{% for h in holidays %}<tr><td>{{ h.date|date:"j F Y" }}</td><td>{{ h.name }}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% else %}<p>No holidays yet.</p>{% endif %}
+  {% if can_edit %}
+  <h2>Add a holiday</h2>
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    {% for field in form %}{% include "attendance/_field.html" %}{% endfor %}
+    <button type="submit">Add holiday</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

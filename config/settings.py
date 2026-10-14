@@ -50,6 +50,7 @@ TENANT_APPS = [
     "apps.imports",
     "apps.results",
     "apps.fees",
+    "apps.attendance",
     "django_otp",
     "django_otp.plugins.otp_totp",
 ]

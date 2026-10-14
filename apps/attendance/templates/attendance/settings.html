@@ -1,0 +1,17 @@
+{% extends "core/base.html" %}
+{% block title %}Attendance settings{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Attendance settings</h1>
+  {% include "attendance/_nav.html" %}
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  <form method="post">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    <fieldset{% if not can_edit %} disabled{% endif %}>
+    {% for field in form %}{% include "attendance/_field.html" %}{% endfor %}
+    </fieldset>
+    {% if can_edit %}<button type="submit">Save</button>{% endif %}
+  </form>
+</div>
+{% endblock %}
