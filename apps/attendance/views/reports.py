@@ -20,10 +20,10 @@ from apps.accounts.roles import PRINCIPAL, PROPRIETOR, SCHOOL_ADMIN, require_rol
 from apps.attendance import register as reg
 from apps.attendance.days import is_school_day, school_days
 from apps.attendance.models import AttendanceRecord
-from apps.attendance.totals import term_totals
+from apps.attendance.totals import Totals, term_totals
 from apps.core.parsing import parse_id
 from apps.results.csvsheet import safe_cell
-from apps.students.models import Student
+from apps.students.models import Enrolment, Student
 
 Status = AttendanceRecord.Status
 LETTERS = {
@@ -56,18 +56,29 @@ def _pick_term(request, current: Term) -> tuple[Term, list[Term]]:
     return chosen, terms
 
 
+def _totals(recs) -> Totals:
+    """``term_totals`` for one student from their already-fetched records (one per date, all
+    arms, none dated after today), saving a query."""
+    statuses = [r["status"] for r in recs]
+    return Totals(
+        days_opened=len(statuses),
+        days_present=sum(x in (Status.PRESENT, Status.LATE) for x in statuses),
+        times_late=statuses.count(Status.LATE),
+        times_absent=statuses.count(Status.ABSENT),
+        times_excused=statuses.count(Status.EXCUSED),
+    )
+
+
 def _cells(days, by_date, arm_pk):
     cells = []
     for d in days:
         rec = by_date.get(d)
         if rec is None:
-            cells.append({"date": d, "letter": NONE, "title": "", "missing": False})
+            cells.append({"date": d, "letter": NONE, "title": ""})
         elif rec["arm_id"] == arm_pk:
-            cells.append(
-                {"date": d, "letter": LETTERS[rec["status"]], "title": "", "missing": False}
-            )
+            cells.append({"date": d, "letter": LETTERS[rec["status"]], "title": ""})
         else:
-            cells.append({"date": d, "letter": MOVED, "title": rec["arm_name"], "missing": False})
+            cells.append({"date": d, "letter": MOVED, "title": rec["arm_name"]})
     return cells
 
 
@@ -109,12 +120,13 @@ def class_page(request, arm_id):
         by_student.setdefault(r["student_id"], {})[r["date"]] = r
         if r["arm_id"] == arm.pk:
             arm_dates.add(r["date"])
-    extra_ids = [sid for sid in by_student if sid not in set(listed_ids)]
+    listed_set = set(listed_ids)
+    extra_ids = [sid for sid in by_student if sid not in listed_set]
     students = listed
     if extra_ids:
         extra = Student.objects.filter(pk__in=extra_ids).select_related("user")
         students = sorted([*listed, *extra], key=lambda s: (s.last_name, s.first_name, s.pk))
-    totals = term_totals([s.pk for s in students], term)
+    totals = {sid: _totals(by_date.values()) for sid, by_date in by_student.items()}
     rows = [
         {
             "student": s,
@@ -204,7 +216,11 @@ def school_page(request):
         .order_by()
     }
     arms = (
-        ClassArm.objects.filter(enrolments__session_id=term.session_id)
+        ClassArm.objects.filter(
+            enrolments__session_id=term.session_id,
+            enrolments__status=Enrolment.Status.ACTIVE,
+            enrolments__student__status=Student.Status.ACTIVE,
+        )
         .select_related("level")
         .distinct()
     )

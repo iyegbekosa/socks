@@ -8,7 +8,9 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django_tenants.utils import schema_context
 
+from apps.academics.models import AcademicSession, ClassArm, Term
 from apps.attendance.models import AttendanceRecord, Holiday
+from apps.students.models import Enrolment
 from tests.accounts.helpers import login_verified
 from tests.attendance.factories import (
     TODAY,
@@ -121,14 +123,45 @@ def test_class_access(client_a, w):
 
 
 def test_class_other_school_arm_404(client_a, school_b, w):
+    with schema_context("school_a"):
+        top = ClassArm.objects.order_by("-pk").first().pk
     with schema_context("school_b"):
         arm_b = make_register_world().arm
+        level = arm_b.level
+        i = 0
+        while arm_b.pk <= top:  # pad so the id cannot exist in school A
+            i += 1
+            arm_b = ClassArm.objects.create(level=level, suffix=f"Pad{i}")
     _staff_login(client_a, "principal")
     with today():
-        # The id may exist in school A too (separate sequences), so use one that cannot.
-        assert (
-            client_a.get(_class_url(arm_b).replace(f"/{arm_b.pk}/", "/9999999/")).status_code == 404
+        assert client_a.get(_class_url(arm_b)).status_code == 404
+
+
+def test_class_term_other_session_falls_back(client_a, w):
+    with schema_context("school_a"):
+        other = AcademicSession.objects.create(
+            name="2030/2031", start_date=date(2030, 9, 1), end_date=date(2031, 7, 1)
         )
+        foreign = Term.objects.create(
+            session=other, number=1, start_date=date(2030, 9, 1), end_date=date(2030, 12, 15)
+        )
+        client_a.force_login(w.teacher)
+    with today():
+        r = client_a.get(_class_url(w.arm, f"?term={foreign.pk}"))
+    assert r.status_code == 200
+    assert r.context["term"].pk == w.term.pk
+
+
+def test_school_page_omits_arm_with_only_withdrawn_students(client_a, w):
+    with schema_context("school_a"):
+        from apps.students.models import Enrolment
+
+        StudentProfileFactory(enrolment__arm=w.arm_b)
+        Enrolment.objects.filter(arm=w.arm_b).update(status=Enrolment.Status.WITHDRAWN)
+    _staff_login(client_a, "principal")
+    with today():
+        r = client_a.get(reverse("attendance:school"))
+    assert [x["arm"].pk for x in r.context["rows"]] == [w.arm.pk]
 
 
 def test_class_term_param_falls_back(client_a, w):
@@ -153,14 +186,12 @@ def test_class_moved_student_listed_with_arrow(client_a, w):
         client_a.force_login(w.teacher)
     with today():
         r = client_a.get(_class_url(w.arm))
-        rb = None
     rows = {row["student"].pk: row for row in r.context["rows"]}
     assert s0.pk in rows  # still listed: has records in this arm
     cells = rows[s0.pk]["cells"]
     assert [c["letter"] for c in cells[:3]] == ["P", "P", "↗"]
     assert w.arm_b.display_name in cells[2]["title"]
     assert "↗" in r.content.decode()
-    del rb
 
 
 def test_class_csv_guards_formulas(client_a, w):
@@ -190,7 +221,6 @@ def test_class_query_count_bounded(client_a, school_a):
         by = make_staff("teacher")
         from apps.attendance.days import school_days
 
-        days = school_days(w.term)
         # 60 days: stretch the term so 60 weekdays have passed.
         w.term.__class__.objects.filter(pk=w.term.pk).update(
             start_date=date(2025, 10, 6), end_date=date(2026, 3, 31)
@@ -203,8 +233,12 @@ def test_class_query_count_bounded(client_a, school_a):
             for s in w.students
             for d in days
         )
+        # A student who moved out but has records here: the extra-student path.
+        mover = w.students[0]
+        Enrolment.objects.filter(student=mover).update(arm=w.arm_b)
+        AttendanceRecord.objects.filter(student=mover, date=days[-1]).update(arm=w.arm_b)
         client_a.force_login(w.teacher)
-    url = _class_url(w.arm)
+    url = _class_url(w.arm, f"?term={w.term.pk}")
     with today():
         client_a.get(reverse("home"))
         with CaptureQueriesContext(connection) as base:

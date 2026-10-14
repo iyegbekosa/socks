@@ -59,9 +59,7 @@ def _student_home(request):
         )
     attendance = None
     if student is not None and term is not None:
-        totals = term_totals([student.pk], term).get(student.pk)
-        if totals is not None:
-            attendance = totals
+        attendance = term_totals([student.pk], term).get(student.pk)
     return render(
         request,
         "students/portal_profile.html",
