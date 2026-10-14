@@ -71,7 +71,7 @@
   <tr>
     <td class="label">Term</td><td class="value">{{ term_label }}</td>
     <td class="label">Attendance</td>
-    <td class="value">{% if attendance.source %}{{ attendance.days_present }} / {{ attendance.days_opened }} days present{% if attendance.times_late_shown %}<br>Late {{ attendance.times_late_shown }} times{% endif %}{% else %}—{% endif %}</td>
+    <td class="value">{% if attendance.source %}{{ attendance.days_present }} / {{ attendance.days_opened }} days present{% if attendance.times_late_shown %}<br>Late {{ attendance.times_late_shown }} time{{ attendance.times_late_shown|pluralize }}{% endif %}{% else %}—{% endif %}</td>
   </tr>
 </table>
 

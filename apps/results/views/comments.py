@@ -72,10 +72,11 @@ def parse_post(
     *,
     ft: bool,
     pr: bool,
-    register_ids: frozenset[int] | set[int] = frozenset(),
+    register_ids: frozenset[int] | set[int],
 ) -> Parsed:
-    """``register_ids``: students whose attendance comes from the register. Their days present
-    is dropped silently, and days open is read only while some student has no records."""
+    """``register_ids`` (required, so a caller cannot forget it and re-accept forged days
+    present): students whose attendance comes from the register. Their days present is
+    dropped silently, and days open is read only while some student has no records."""
     out = Parsed()
     days_open_used = bool(student_ids - set(register_ids))
     if ft and days_open_used and "days_open" in post:

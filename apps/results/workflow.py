@@ -23,6 +23,7 @@ from django.utils import timezone
 
 from apps.academics.models import ClassArm, FormTeacher, SubjectOffering, Term
 from apps.accounts.roles import PRINCIPAL, SCHOOL_ADMIN
+from apps.attendance.models import AttendanceSettings
 from apps.audit.services import record
 from apps.core.locks import school_lock
 from apps.core.logging import log_exception_redacted
@@ -342,7 +343,17 @@ def approve_class(arm: ClassArm, term: Term, *, by: Any, request: Any = None) ->
         klass.approved_at = Now()
         klass.approved_by = by
         klass.compute_error = ""
-        klass.save(update_fields=["status", "approved_at", "approved_by", "compute_error"])
+        # Freeze the card's "Late n times" rule with the class (Ruling AA).
+        klass.late_threshold = AttendanceSettings.current_late_threshold()
+        klass.save(
+            update_fields=[
+                "status",
+                "approved_at",
+                "approved_by",
+                "compute_error",
+                "late_threshold",
+            ]
+        )
         klass.refresh_from_db(fields=["approved_at"])
         record(
             "results.class_approved", request=request, actor=by, obj=klass, after=_ids(arm, term)
@@ -511,7 +522,8 @@ def unlock_class(
             raise ResultsStateError("This class is already open for changes.")
         klass.status = ClassResult.Status.DRAFT
         klass.compute_error = ""
-        klass.save(update_fields=["status", "compute_error"])
+        klass.late_threshold = None  # re-snapshotted at the next approval
+        klass.save(update_fields=["status", "compute_error", "late_threshold"])
         ScoreSheet.objects.filter(pk__in=[s.pk for s in locked]).update(
             status=ScoreSheet.Status.DRAFT
         )

@@ -278,12 +278,11 @@ def test_single_card_context_uses_attendance_for_card(acc):
 
 def test_batch_reads_totals_and_settings_once(acc, uploads):
     from apps.attendance import totals
-    from apps.attendance.models import AttendanceSettings
 
     _publish(acc)
     with (
         mock.patch.object(cards, "term_totals", wraps=totals.term_totals) as tt,
-        mock.patch.object(AttendanceSettings, "load", wraps=AttendanceSettings.load) as load,
+        mock.patch.object(cards, "late_threshold_for", wraps=totals.late_threshold_for) as load,
         mock.patch.object(cards, "attendance_for_card") as single,
     ):
         assert generate_report_cards(acc.arm, acc.term) == 6
@@ -836,3 +835,60 @@ def test_fifty_students_under_two_minutes(school_a, logo_open, uploads):
     print(f"\n50 report cards rendered and stored in {elapsed:.1f} s")
     assert count == 50 and len(uploads.files) == 50
     assert elapsed < 120
+
+
+def test_late_threshold_is_snapshotted_at_approval(acc, uploads):
+    """Ruling AA: changing the setting after approval leaves the card's late line alone;
+    an unlock clears the snapshot so the next approval takes the setting again."""
+    from apps.attendance.totals import attendance_for_card
+    from apps.results.workflow import approve_class
+    from tests.attendance.factories import TEN_DAYS, add_records
+
+    b = acc.students["B"]
+    add_records(b, acc.arm, acc.term.start_date, TEN_DAYS)  # late twice
+    _late_threshold(2)
+    principal = StaffFactory()
+    set_roles(principal, ["principal"], by=None)
+    ClassResult.objects.update_or_create(
+        arm=acc.arm, term=acc.term, defaults={"status": ClassResult.Status.REVIEWED}
+    )
+    approve_class(acc.arm, acc.term, by=principal)
+    assert ClassResult.objects.get(arm=acc.arm, term=acc.term).late_threshold == 2
+    _late_threshold(0)  # "never show" after approval
+
+    assert attendance_for_card(b, acc.term).times_late_shown == 2
+    assert card_context(b, acc.term, logo=None)["attendance"].times_late_shown == 2
+    ClassResult.objects.filter(arm=acc.arm, term=acc.term).update(
+        status=ClassResult.Status.PUBLISHED
+    )
+    assert generate_report_cards(acc.arm, acc.term) == 6
+    assert "Late 2 times" in pdf_text(uploads.pdf_for(b, acc.term))
+
+    admin = StaffFactory()
+    set_roles(admin, ["school_admin"], by=None)
+    admin.is_verified = lambda: True
+    unlock_class(acc.arm, acc.term, sheets=[], reason="fix", by=admin)
+    assert ClassResult.objects.get(arm=acc.arm, term=acc.term).late_threshold is None
+    assert attendance_for_card(b, acc.term).times_late_shown is None  # live setting: 0
+
+
+def test_late_line_singular(acc, uploads):
+    from tests.attendance.factories import add_records
+
+    b = acc.students["B"]
+    add_records(b, acc.arm, acc.term.start_date, ["present", "late", "present"])
+    _late_threshold(1)
+    text = pdf_text(render_card(b, acc.term, logo=None))
+    assert "Late 1 time" in text and "Late 1 times" not in text
+
+
+def test_single_card_reads_comment_once(acc):
+    from tests.attendance.factories import TEN_DAYS, add_records
+
+    b = acc.students["B"]
+    add_records(b, acc.arm, acc.term.start_date, TEN_DAYS)
+    with mock.patch.object(
+        ReportComment.objects, "filter", wraps=ReportComment.objects.filter
+    ) as f:
+        card_context(b, acc.term, logo=None)
+    assert f.call_count == 1

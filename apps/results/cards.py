@@ -25,8 +25,13 @@ from django.utils import timezone
 
 from apps.academics.models import ClassArm, Term
 from apps.academics.scope import students_visible_to
-from apps.attendance.models import AttendanceSettings
-from apps.attendance.totals import Totals, attendance_for_card, card_attendance, term_totals
+from apps.attendance.totals import (
+    Totals,
+    attendance_for_card,
+    card_attendance,
+    late_threshold_for,
+    term_totals,
+)
 from apps.audit.services import record
 from apps.branding.models import LOGO_WIDTH, get_branding
 from apps.core.locks import school_lock
@@ -66,8 +71,9 @@ class AttendanceBatch:
     late_threshold: int
 
     @classmethod
-    def load(cls, student_ids: list[int], term: Term) -> "AttendanceBatch":
-        return cls(term_totals(student_ids, term), AttendanceSettings.load().late_threshold)
+    def load(cls, student_ids: list[int], term: Term, arm: ClassArm) -> "AttendanceBatch":
+        """The threshold is the one snapshotted at approval (Ruling AA), else the live one."""
+        return cls(term_totals(student_ids, term), late_threshold_for(arm.pk, term))
 
 
 def card_name(student: Student, term: Term) -> str:
@@ -225,7 +231,7 @@ def card_context(
         rows.append(row)
     comment = ReportComment.objects.filter(student=student, term=term).first()
     if attendance is None:
-        att = attendance_for_card(student, term)
+        att = attendance_for_card(student, term, arm_id=arm.pk, comment=comment)
     else:
         att = card_attendance(attendance.totals.get(student.pk), comment, attendance.late_threshold)
     branding = get_branding()
@@ -386,7 +392,7 @@ def _generate(arm: ClassArm, term: Term) -> int:
         .values_list("student_id", flat=True)
     )
     logo = load_logo()
-    attendance = AttendanceBatch.load(student_ids, term)
+    attendance = AttendanceBatch.load(student_ids, term, arm)
     written: list[tuple[int, str]] = []
     failed = 0
     for student_id in student_ids:

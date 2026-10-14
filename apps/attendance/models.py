@@ -6,12 +6,14 @@ from django.db.models import Q
 from apps.academics.models import ClassArm
 from apps.students.models import Student
 
+DEFAULT_LATE_THRESHOLD = 3
+
 
 class AttendanceSettings(models.Model):
     """Per-school singleton (pk=1). Use AttendanceSettings.load()."""
 
     late_threshold = models.PositiveSmallIntegerField(
-        default=3,
+        default=DEFAULT_LATE_THRESHOLD,
         validators=[MaxValueValidator(60)],
         help_text="Show 'Late n times' on the report card at this many lates. 0 means never.",
     )
@@ -42,6 +44,12 @@ class AttendanceSettings(models.Model):
     def load(cls) -> "AttendanceSettings":
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+    @classmethod
+    def current_late_threshold(cls) -> int:
+        """The live late threshold, without creating the settings row."""
+        value = cls.objects.filter(pk=1).values_list("late_threshold", flat=True).first()
+        return DEFAULT_LATE_THRESHOLD if value is None else int(value)
 
 
 class Holiday(models.Model):

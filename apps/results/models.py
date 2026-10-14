@@ -217,6 +217,9 @@ class ClassResult(models.Model):
     compute_error = models.CharField(max_length=300, blank=True, default="")
     # Why the last report-card run stopped early (e.g. "Storage limit reached"); empty when none.
     cards_error = models.CharField(max_length=100, blank=True, default="")
+    # The attendance late threshold when the class was approved (Ruling AA), so a later
+    # settings change cannot alter an approved class's cards; None while not approved.
+    late_threshold = models.PositiveSmallIntegerField(null=True, blank=True)
 
     # Generic errors shown on the class page (never exception text).
     START_ERROR = "Could not start — please retry"

@@ -6,13 +6,13 @@ register was taken for them do not count as opened.
 """
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 from django.db.models import Count, Q
 
 from apps.academics.models import Term
 from apps.attendance.models import AttendanceRecord, AttendanceSettings
-from apps.results.models import ReportComment
+from apps.results.models import ClassResult, ReportComment, ResultSummary
 from apps.students.models import Student
 
 Status = AttendanceRecord.Status
@@ -41,7 +41,12 @@ NO_ATTENDANCE = CardAttendance(None, None, None, None)
 
 def term_totals(student_ids: list[int], term: Term) -> dict[int, Totals]:
     """Totals per student id, in one aggregate query. Students with no records in the term
-    are absent from the dict."""
+    are absent from the dict.
+
+    Totals are per student across arms (Ruling AB, accepted): a student who moved from an
+    approved arm into one still in draft can gain records there, so a later regeneration of
+    the old arm's card may differ. Published cards are stored files; regenerating is an
+    explicit admin action."""
     if not student_ids:
         return {}
     rows = (
@@ -78,11 +83,46 @@ def card_attendance(
     return NO_ATTENDANCE
 
 
-def attendance_for_card(student: Student, term: Term) -> CardAttendance:
+def late_threshold_for(arm_id: int | None, term: Term) -> int:
+    """The late threshold for an arm's cards: the one snapshotted when its results were
+    approved (Ruling AA), else the live setting."""
+    if arm_id is not None:
+        snap = (
+            ClassResult.objects.filter(arm_id=arm_id, term=term)
+            .values_list("late_threshold", flat=True)
+            .first()
+        )
+        if snap is not None:
+            return int(snap)
+    return AttendanceSettings.current_late_threshold()
+
+
+_LOAD = object()
+
+
+def attendance_for_card(
+    student: Student,
+    term: Term,
+    *,
+    arm_id: int | None = None,
+    comment: ReportComment | None | object = _LOAD,
+) -> CardAttendance:
     """One card's attendance line (a single card, e.g. a preview). Batches use
-    ``term_totals`` and ``card_attendance`` directly."""
+    ``term_totals`` and ``card_attendance`` directly. ``arm_id``: the card's class (default:
+    the student's results class for the term); ``comment``: pass it when already loaded."""
+    if arm_id is None:
+        arm_id = (
+            ResultSummary.objects.filter(student=student, term=term)
+            .values_list("arm_id", flat=True)
+            .first()
+        )
+    loaded = (
+        ReportComment.objects.filter(student=student, term=term).first()
+        if comment is _LOAD
+        else cast(ReportComment | None, comment)
+    )
     return card_attendance(
         term_totals([student.pk], term).get(student.pk),
-        ReportComment.objects.filter(student=student, term=term).first(),
-        AttendanceSettings.load().late_threshold,
+        loaded,
+        late_threshold_for(arm_id, term),
     )
