@@ -224,3 +224,35 @@ def test_school_page_links_to_holidays(client_a, role):
     _login(client_a, _user(role), mfa=role == "principal")
     page = client_a.get(reverse("attendance:school")).content.decode()
     assert reverse("attendance:holidays") in page
+
+
+def test_holiday_save_rechecks_records_under_the_lock(school_a):
+    """A register saved after the form validated is caught at save time."""
+    from apps.attendance import services
+    from apps.attendance.forms import CONFLICT, HolidayForm
+
+    with schema_context("school_a"):
+        w = make_terms()
+        admin = make_staff("school_admin")
+        form = HolidayForm({"date": "2026-01-06", "name": "Oops"})
+        assert form.is_valid()
+        AttendanceRecord.objects.create(
+            student=StudentProfileFactory(),
+            date=date(2026, 1, 6),
+            arm=w.level.arms.first(),
+            status="present",
+            recorded_by=admin,
+        )
+        assert services.save_holiday(form, by=admin) is None
+        assert form.errors["date"] == [CONFLICT]
+        assert not Holiday.objects.exists()
+
+
+@pytest.mark.parametrize("field", ["late_threshold", "edit_window_days"])
+def test_settings_db_check_constraints(school_a, field):
+    from django.db import IntegrityError, transaction
+
+    with schema_context("school_a"):
+        AttendanceSettings.load()
+        with pytest.raises(IntegrityError), transaction.atomic():
+            AttendanceSettings.objects.filter(pk=1).update(**{field: 61})

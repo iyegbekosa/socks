@@ -160,3 +160,46 @@ def test_task_is_redacted_and_on_notifications_queue():
 
     assert "apps.attendance.tasks.send_absence_emails_task" in SECRET_ARG_TASKS
     assert tasks.send_absence_emails_task.queue == "notifications"
+
+
+def test_broker_failure_keeps_the_saved_register(
+    client_a, w, caplog, django_capture_on_commit_callbacks
+):
+    """End to end: the save still redirects and persists when the broker is down."""
+    a = w.students[0]
+    with (
+        mock.patch.object(
+            tasks.send_absence_emails_task, "apply_async", side_effect=ConnectionError("down")
+        ),
+        caplog.at_level(logging.WARNING, logger="apps.attendance"),
+        schema_context("school_a"),
+    ):
+        with django_capture_on_commit_callbacks(execute=True):
+            _save(client_a, w, {a.pk: "absent"})  # asserts the 302
+        assert AttendanceRecord.objects.get(student=a).status == "absent"
+    assert "ConnectionError" in " ".join(r.getMessage() for r in caplog.records)
+
+
+def test_setting_off_hook_does_not_enqueue(client_a, w, django_capture_on_commit_callbacks):
+    with schema_context("school_a"):
+        conf = AttendanceSettings.load()
+        conf.absence_email = False
+        conf.save()
+        with mock.patch.object(tasks.send_absence_emails_task, "apply_async") as enqueue:
+            with django_capture_on_commit_callbacks(execute=True):
+                _save(client_a, w, {w.students[0].pk: "absent"})
+    enqueue.assert_not_called()
+
+
+def test_sending_twice_emails_once(client_a, w):
+    """The claim guards a duplicate delivery of the task (or two workers)."""
+    from apps.attendance.notify import send_absence_emails
+
+    a = w.students[0]
+    _save(client_a, w, {a.pk: "absent"})  # on_commit hooks do not run: nothing sent yet
+    mail.outbox.clear()
+    with schema_context("school_a"):
+        rid = AttendanceRecord.objects.get(student=a).pk
+        assert send_absence_emails([rid]) == 1
+        assert send_absence_emails([rid]) == 0
+    assert len(mail.outbox) == 1

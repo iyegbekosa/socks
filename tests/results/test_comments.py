@@ -331,3 +331,16 @@ def test_days_open_hidden_when_every_student_has_records(client_a, w):
     assert r.status_code == 302
     c0 = ReportComment.objects.get(student=s0)
     assert (c0.class_teacher_comment, c0.days_present, c0.days_open) == ("ok", None, None)
+
+
+def test_400_rerender_keeps_register_students_read_only(client_a, w):
+    s0, s1 = w.students[0], w.students[1]
+    _register(w, s0)
+    client_a.force_login(w.ft)
+    r = client_a.post(url(w), post_data(w, days_open="zz", **{f"dp_{s0.pk}": "3"}))
+    assert r.status_code == 400
+    html = r.content.decode()
+    assert "From register: 9 / 10" in html
+    assert f'name="dp_{s0.pk}"' not in html
+    assert f'name="dp_{s1.pk}"' in html
+    assert not ReportComment.objects.exists()
