@@ -1,12 +1,13 @@
 """Taking and editing a class arm's daily register."""
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from django.core.exceptions import ValidationError
-from django.db import connection, transaction
+from django.db import IntegrityError, connection, transaction
 from django.db.models import F, FilteredRelation, Q, QuerySet
 from django.utils import timezone
 
@@ -25,6 +26,7 @@ __all__ = [
     "LOCKED_MESSAGE",
     "STATUSES",
     "RegisterDateError",
+    "RegisterConflict",
     "RegisterLocked",
     "Row",
     "SaveResult",
@@ -34,6 +36,7 @@ __all__ = [
     "editable_by",
     "is_locked",
     "parse_iso_date",
+    "register_version",
     "rows_for",
     "save_register",
     "students_for",
@@ -52,8 +55,23 @@ LOCKED_MESSAGE = "This register is locked because the class's results have left 
 ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
+NEW = "new"  # the version of a register with no records yet
+STALE_MESSAGE = "This register was changed by someone else — reload to see the latest."
+RACE_MESSAGE = "Someone else saved this register at the same time — reload."
+
+
 class RegisterLocked(Exception):
     message = LOCKED_MESSAGE
+
+
+class RegisterConflict(Exception):
+    """The register changed since the form was loaded (``stale``), or a concurrent save in
+    another arm recorded the same student and date first (a moved student; not stale)."""
+
+    def __init__(self, message: str = STALE_MESSAGE, *, stale: bool = True) -> None:
+        super().__init__(message)
+        self.message = message
+        self.stale = stale
 
 
 @dataclass
@@ -71,6 +89,7 @@ class Row:
     # The arm this date's record was taken in, when it is not this register's arm (the student
     # moved): the row is read-only here and never overwritten from here.
     elsewhere: ClassArm | None = None
+    updated_at: datetime | None = None  # of this date's record, when there is one
 
     @property
     def label(self) -> str:
@@ -119,10 +138,23 @@ class _Listed:
     rec_id: int | None
     rec_status: str | None
     rec_arm_id: int | None
+    rec_updated_at: datetime | None = None
 
     @property
     def pk(self) -> int:
         return int(self.student.pk)
+
+
+def _version(updated: Iterable[datetime | None]) -> str:
+    """``NEW`` with no records, else the ISO time of the latest change to one."""
+    stamps = [u for u in updated if u is not None]
+    return max(stamps).isoformat() if stamps else NEW
+
+
+def register_version(rows: list[Row]) -> str:
+    """The version token of a register as loaded by ``rows_for``: this arm's records only
+    (a moved student's record in another arm is never written from here)."""
+    return _version(r.updated_at for r in rows if r.elsewhere is None)
 
 
 def _listed_with_records(arm: ClassArm, d: date, term: Term) -> list[_Listed]:
@@ -133,9 +165,19 @@ def _listed_with_records(arm: ClassArm, d: date, term: Term) -> list[_Listed]:
         rec_id=F("day__id"),
         rec_status=F("day__status"),
         rec_arm_id=F("day__arm_id"),
+        rec_updated_at=F("day__updated_at"),
     )
     # The annotations are not declared on Student, so read them from the instance dict.
-    return [_Listed(s, vars(s)["rec_id"], vars(s)["rec_status"], vars(s)["rec_arm_id"]) for s in qs]
+    return [
+        _Listed(
+            s,
+            vars(s)["rec_id"],
+            vars(s)["rec_status"],
+            vars(s)["rec_arm_id"],
+            vars(s)["rec_updated_at"],
+        )
+        for s in qs
+    ]
 
 
 def access(user: Any, arm: ClassArm, term: Term | None) -> str | None:
@@ -231,6 +273,7 @@ def rows_for(arm: ClassArm, d: date, *, term: Term) -> list[Row]:
             s.student,
             s.rec_status,
             others.get(s.rec_arm_id) if s.rec_id and s.rec_arm_id != arm.pk else None,
+            s.rec_updated_at,
         )
         for s in students
     ]
@@ -256,6 +299,7 @@ def save_register(
     by: Any,
     request: Any = None,
     term: Term | None = None,
+    version: str | None = None,
 ) -> SaveResult:
     """Save ``arm``'s register for ``d`` from ``statuses`` (``{student_id: status}``).
 
@@ -264,7 +308,30 @@ def save_register(
     overwritten. Raises ``RegisterDateError``, ``RegisterLocked`` or ``ValidationError``.
     Permission (``can_take``/``can_edit``) is the caller's job. ``term`` is the current term
     when the caller already has it (the date is still re-checked under the locks).
+
+    ``version``: the token the form or client loaded (``register_version``). When given, it
+    must match the register's version under the locks, else ``RegisterConflict``: a stale
+    form never silently overwrites someone else's save. An empty token is accepted only for
+    a register with no records yet. None skips the check (internal callers).
     """
+    try:
+        return _save(arm, d, statuses, by=by, request=request, term=term, version=version)
+    except IntegrityError as exc:
+        # A moved student: another arm's register (a different lock) recorded the same
+        # student and date between our read and our insert. Nothing was saved here.
+        raise RegisterConflict(RACE_MESSAGE, stale=False) from exc
+
+
+def _save(
+    arm: ClassArm,
+    d: date,
+    statuses: dict[int, str],
+    *,
+    by: Any,
+    request: Any,
+    term: Term | None,
+    version: str | None,
+) -> SaveResult:
     with transaction.atomic():
         # The holiday save takes the holidays lock too, so holidays first, then this register.
         school_lock("attendance:holidays")
@@ -276,6 +343,10 @@ def save_register(
 
         listed = _listed_with_records(arm, d, term)
         mine = [s for s in listed if s.rec_id is None or s.rec_arm_id == arm.pk]
+        if version is not None:
+            current = _version(s.rec_updated_at for s in mine)
+            if version != current and not (current == NEW and version == ""):
+                raise RegisterConflict()
         mine_ids = {s.pk for s in mine}
         elsewhere = {s.pk for s in listed} - mine_ids
         given = {k: v for k, v in statuses.items() if k not in elsewhere}

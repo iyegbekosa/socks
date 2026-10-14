@@ -225,3 +225,59 @@ def test_locked_for_principal_and_admin_too(client_a, w, role):
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "ATTENDANCE_LOCKED"
     assert count() == 0
+
+
+# --- Version token (Ruling Z) --------------------------------------------------------------
+
+
+def test_get_returns_version_and_post_checks_it(school_a, client_a, w):
+    from django_tenants.test.client import TenantClient
+
+    teacher = TenantClient(school_a)
+    login(teacher, w.teacher)
+    with schema_context("school_a"):
+        principal = make_staff("principal")
+    login_verified(client_a, principal)
+    s0 = w.students[0]
+    with today():
+        assert client_a.get(url(w.arm)).json()["version"] == "new"
+        # The teacher's first save needs no version (nothing to overwrite).
+        saved = post(teacher, url(w.arm), body(w.students, {s0.pk: "absent"}))
+        assert saved.status_code == 200, saved.content
+        v1 = saved.json()["version"]
+        assert v1 != "new"
+        # The principal's stale "new" form.
+        r = post(client_a, url(w.arm), {**body(w.students), "version": "new"})
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "VERSION_CONFLICT"
+        assert "changed by someone else" in r.json()["error"]["message"]
+        # An existing register needs the version.
+        r = post(client_a, url(w.arm), body(w.students))
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "VERSION_CONFLICT"
+        r = post(client_a, url(w.arm), {**body(w.students), "version": v1})
+        assert r.status_code == 200, r.content
+        assert r.json()["version"] not in ("new", v1)
+    with schema_context("school_a"):
+        assert AttendanceRecord.objects.get(student=s0, date=TODAY).status == "present"
+
+
+@pytest.mark.parametrize("version", [1, None, ["x"]])
+def test_version_must_be_a_string(client_a, w, version):
+    login(client_a, w.teacher)
+    with today():
+        r = post(client_a, url(w.arm), {**body(w.students), "version": version})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert count() == 0
+
+
+def test_concurrent_arm_move_is_409_conflict(client_a, w):
+    from tests.attendance.test_register import RACE, _race_with_arm_b
+
+    login(client_a, w.teacher)
+    with today(), _race_with_arm_b(w):
+        r = post(client_a, url(w.arm), body(w.students))
+    assert r.status_code == 409
+    assert r.json()["error"] == {**r.json()["error"], "code": "CONFLICT", "message": RACE}
+    assert count() == 0

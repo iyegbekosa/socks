@@ -15,7 +15,7 @@ from apps.audit.models import AuditEvent
 from apps.results.models import ClassResult
 from apps.students.models import Enrolment
 from tests.accounts.helpers import login_verified
-from tests.attendance.factories import TODAY, make_register_world, today
+from tests.attendance.factories import TODAY, make_register_world, today, version_of
 from tests.fees.factories import make_staff
 from tests.students.factories import StudentProfileFactory
 
@@ -40,9 +40,13 @@ def _url(arm, d=D):
     return reverse("attendance:register", args=[arm.pk, d])
 
 
-def _post_data(students, overrides=None):
+def _post_data(students, overrides=None, *, version=None):
+    """The register form. ``version``: the hidden token (none: the form of a new register)."""
     overrides = overrides or {}
-    return {f"s_{s.pk}": overrides.get(s.pk, "present") for s in students}
+    data = {f"s_{s.pk}": overrides.get(s.pk, "present") for s in students}
+    if version is not None:
+        data["version"] = version
+    return data
 
 
 def _audit(action):
@@ -107,7 +111,9 @@ def test_form_teacher_saves_40_student_register(client_a, w40):
             client_a,
             "post",
             _url(w.arm),
-            _post_data(w.students, {**overrides, w.students[0].pk: "late"}),
+            _post_data(
+                w.students, {**overrides, w.students[0].pk: "late"}, version=version_of(w.arm)
+            ),
         )
         assert edit.status_code == 302
         assert n <= 12, n
@@ -138,7 +144,9 @@ def test_resave_with_one_change_audits_only_that_student(client_a, w):
     s0, s1, _ = w.students
     with today():
         client_a.post(_url(w.arm), _post_data(w.students))
-        r = client_a.post(_url(w.arm), _post_data(w.students, {s1.pk: "late"}))
+        r = client_a.post(
+            _url(w.arm), _post_data(w.students, {s1.pk: "late"}, version=version_of(w.arm))
+        )
     assert r.status_code == 302
     (ev,) = _audit("attendance.register_changed")
     assert ev.before == {str(s1.pk): "present"}
@@ -151,7 +159,8 @@ def test_resave_without_changes_writes_no_audit(client_a, w):
     _login(client_a, w.teacher)
     with today():
         client_a.post(_url(w.arm), _post_data(w.students))
-        client_a.post(_url(w.arm), _post_data(w.students))
+        r = client_a.post(_url(w.arm), _post_data(w.students, version=version_of(w.arm)))
+    assert r.status_code == 302
     assert len(_audit("attendance.register_saved")) == 1
     assert _audit("attendance.register_changed") == []
 
@@ -231,7 +240,10 @@ def test_register_locked_once_results_leave_draft(client_a, w):
         ClassResult.objects.filter(pk=cr.pk).update(status="draft")
         assert not register.is_locked(w.arm, w.term)
     with today():
-        r = client_a.post(_url(w.arm), _post_data(w.students, {w.students[0].pk: "absent"}))
+        r = client_a.post(
+            _url(w.arm),
+            _post_data(w.students, {w.students[0].pk: "absent"}, version=version_of(w.arm)),
+        )
     assert r.status_code == 302
 
 
@@ -585,3 +597,106 @@ def test_unsaved_register_says_not_yet_taken(client_a, w):
         assert banner in client_a.get(_url(w.arm)).content.decode()
         client_a.post(_url(w.arm), _post_data(w.students))
         assert banner not in client_a.get(_url(w.arm)).content.decode()
+
+
+# --- Stale forms and concurrent saves (Ruling Z) ------------------------------------------
+
+STALE = "This register was changed by someone else — reload to see the latest."
+RACE = "Someone else saved this register at the same time — reload."
+
+
+def _principal(client):
+    with schema_context("school_a"):
+        user = make_staff("principal")
+    login_verified(client, user)
+    return user
+
+
+def test_form_carries_version(client_a, w):
+    _login(client_a, w.teacher)
+    with today():
+        r = client_a.get(_url(w.arm))
+        assert '<input type="hidden" name="version" value="new">' in r.content.decode()
+        client_a.post(_url(w.arm), _post_data(w.students))
+        v = version_of(w.arm)
+        assert v != "new"
+        assert f'name="version" value="{v}"' in client_a.get(_url(w.arm)).content.decode()
+
+
+def test_stale_principal_post_after_teacher_save_is_409(school_a, client_a, w):
+    """The principal opened the new register before the teacher saved it; the principal's
+    all-present form must not overwrite the teacher's absence."""
+    from django_tenants.test.client import TenantClient
+
+    teacher = TenantClient(school_a)
+    _login(teacher, w.teacher)
+    _principal(client_a)
+    s0 = w.students[0]
+    with today():
+        assert 'name="version" value="new"' in client_a.get(_url(w.arm)).content.decode()
+        assert (
+            teacher.post(_url(w.arm), _post_data(w.students, {s0.pk: "absent"})).status_code == 302
+        )
+        r = client_a.post(_url(w.arm), _post_data(w.students, version="new"))
+    assert r.status_code == 409
+    html = r.content.decode()
+    assert STALE in html
+    # The latest register is shown, with its fresh version, not the stale form.
+    assert html.count('value="absent" checked') == 1
+    assert f'name="version" value="{version_of(w.arm)}"' in html
+    assert _records(date=TODAY)[s0.pk].status == "absent"
+    assert _audit("attendance.register_changed") == []
+
+    # Stale after an edit too: the principal reloads, the teacher edits, the principal saves.
+    with today():
+        loaded = version_of(w.arm)
+        assert (
+            teacher.post(
+                _url(w.arm), _post_data(w.students, {s0.pk: "late"}, version=loaded)
+            ).status_code
+            == 302
+        )
+        r = client_a.post(_url(w.arm), _post_data(w.students, version=loaded))
+        assert r.status_code == 409
+        # A form without a version cannot edit an existing register either.
+        assert client_a.post(_url(w.arm), _post_data(w.students)).status_code == 409
+        ok = client_a.post(_url(w.arm), _post_data(w.students, version=version_of(w.arm)))
+    assert ok.status_code == 302
+    assert _records(date=TODAY)[s0.pk].status == "present"
+
+
+def _race_with_arm_b(w):
+    """Patch the register read so that, once, another arm records students[0] for the date
+    between this save's read and its insert (a moved student on two registers)."""
+    real = register._listed_with_records
+    done = []
+
+    def racing(arm, d, term):
+        out = real(arm, d, term)
+        if not done:
+            done.append(1)
+            AttendanceRecord.objects.create(
+                student=w.students[0], date=d, arm=w.arm_b, status="absent", recorded_by=w.teacher_b
+            )
+        return out
+
+    return mock.patch.object(register, "_listed_with_records", side_effect=racing)
+
+
+def test_concurrent_arm_move_save_is_conflict_not_500(w):
+    with schema_context("school_a"), today(), _race_with_arm_b(w):
+        with pytest.raises(register.RegisterConflict) as exc:
+            register.save_register(
+                w.arm, TODAY, {s.pk: "present" for s in w.students}, by=w.teacher
+            )
+        assert exc.value.message == RACE and exc.value.stale is False
+        assert not AttendanceRecord.objects.filter(arm=w.arm).exists()
+
+
+def test_concurrent_arm_move_save_is_409_on_html(client_a, w):
+    _login(client_a, w.teacher)
+    with today(), _race_with_arm_b(w):
+        r = client_a.post(_url(w.arm), _post_data(w.students))
+    assert r.status_code == 409
+    assert RACE in r.content.decode()
+    assert _records(arm=w.arm) == {}

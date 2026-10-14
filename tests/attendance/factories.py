@@ -70,3 +70,14 @@ def add_records(student, arm, start: date, statuses, *, by=None) -> list:
         )
         d += timedelta(days=1)
     return out
+
+
+def version_of(arm, d: date = TODAY) -> str:
+    """The register's current version token, as the page's hidden field carries it."""
+    from django_tenants.utils import schema_context
+
+    from apps.attendance import register
+
+    with schema_context("school_a"):
+        term = Term.objects.get(is_current=True)
+        return register.register_version(register.rows_for(arm, d, term=term))

@@ -141,12 +141,20 @@ def _save(request: Any, ctx: dict[str, Any], term: Term | None, level: str) -> H
                 raise reg.RegisterLocked()
             raise PermissionDenied
         posted = _statuses(request.POST)
-        reg.save_register(arm, d, posted, by=request.user, request=request, term=term)
+        version = request.POST.get("version", "")
+        reg.save_register(
+            arm, d, posted, by=request.user, request=request, term=term, version=version
+        )
     except RegisterDateError as exc:
         return _date_error(request, ctx, exc, term)
     except reg.RegisterLocked:
         assert term is not None
         return _page(request, ctx, term, editable=False, locked=True, status=409)
+    except reg.RegisterConflict as exc:
+        # Show the latest register (not the stale posted form) with a fresh version.
+        assert term is not None
+        ctx["conflict"] = exc.message
+        return _page(request, ctx, term, editable=True, locked=False, status=409)
     except ValidationError as exc:
         assert term is not None
         ctx["errors"] = exc.messages
@@ -174,6 +182,7 @@ def _page(
     counts = dict.fromkeys(reg.STATUSES, 0)
     # Default-present makes an untaken register look like a saved all-present one: say so.
     ctx["taken"] = any(r.status is not None for r in rows if r.elsewhere is None)
+    ctx["version"] = reg.register_version(rows)
     if "nav" not in ctx:
         _nav(ctx, term)
     for row in rows:

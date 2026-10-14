@@ -611,13 +611,21 @@ def _register_json(arm: ClassArm, d: date, editable: bool, rows: list[Any]) -> d
         "arm": {"id": arm.pk, "name": arm.display_name},
         "date": d.isoformat(),
         "editable": editable,
+        # Send it back with a POST: a register saved by someone else since gives 409.
+        "version": attendance.register_version(rows),
         "records": records,
     }
 
 
-def _parse_register_body(data: Any) -> dict[int, str]:
-    if not isinstance(data, dict) or set(data) != {"records"}:
-        raise _validation([{"field": "non_field_errors", "message": 'Send only "records".'}])
+def _parse_register_body(data: Any) -> tuple[dict[int, str], str]:
+    """``({student_id: status}, version)``; version is "" when not sent."""
+    if not isinstance(data, dict) or "records" not in data or set(data) - {"records", "version"}:
+        raise _validation(
+            [{"field": "non_field_errors", "message": 'Send only "records" and "version".'}]
+        )
+    version = data.get("version", "")
+    if not isinstance(version, str):
+        raise _validation([{"field": "version", "message": "Must be a string."}])
     items = data["records"]
     if not isinstance(items, list):
         raise _validation([{"field": "records", "message": "Must be a list."}])
@@ -643,7 +651,7 @@ def _parse_register_body(data: Any) -> dict[int, str]:
             out[sid] = item["status"]
     if details:
         raise _validation(details)
-    return out
+    return out, version
 
 
 def _register_date_error(exc: RegisterDateError) -> ApiError:
@@ -689,17 +697,20 @@ class AttendanceRegisterView(APIView):
 
     def post(self, request: Request, arm: str, date: str) -> Response:
         klass, d, term, level = self._setup(request, arm, date)
-        statuses = _parse_register_body(request.data)
+        statuses, version = _parse_register_body(request.data)
         if attendance.is_locked(klass, term):
             raise ApiError("ATTENDANCE_LOCKED", attendance.LOCKED_MESSAGE, 409)
         if not attendance.editable_by(level, d, term):
             raise ApiError("FORBIDDEN", "This register can no longer be changed by you.", 403)
         try:
             attendance.save_register(
-                klass, d, statuses, by=request.user, request=request, term=term
+                klass, d, statuses, by=request.user, request=request, term=term, version=version
             )
         except attendance.RegisterLocked as exc:
             raise ApiError("ATTENDANCE_LOCKED", exc.message, 409) from exc
+        except attendance.RegisterConflict as exc:
+            code = "VERSION_CONFLICT" if exc.stale else "CONFLICT"
+            raise ApiError(code, exc.message, 409) from exc
         except RegisterDateError as exc:
             raise _register_date_error(exc) from exc
         except DjangoValidationError as exc:

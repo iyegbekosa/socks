@@ -8,7 +8,7 @@ from django_tenants.utils import schema_context
 
 from apps.attendance import hooks, tasks
 from apps.attendance.models import AttendanceRecord, AttendanceSettings
-from tests.attendance.factories import make_register_world, today
+from tests.attendance.factories import make_register_world, today, version_of
 
 pytestmark = pytest.mark.django_db
 
@@ -38,6 +38,7 @@ def w(school_a):
 def _save(client, w, overrides):
     client.force_login(w.teacher)
     data = {f"s_{s.pk}": overrides.get(s.pk, "present") for s in w.students}
+    data["version"] = version_of(w.arm)
     with today():
         r = client.post(reverse("attendance:register", args=[w.arm.pk, D]), data)
     assert r.status_code == 302
