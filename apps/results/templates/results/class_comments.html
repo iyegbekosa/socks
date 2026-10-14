@@ -13,7 +13,7 @@
   {% if not edit_ft and not edit_pr %}<p class="muted">This class has moved on, so nothing can be changed here.</p>{% endif %}
   <form method="post">
     {% csrf_token %}
-    {% if is_ft %}
+    {% if is_ft and show_days_open %}
     <p>
       <label for="days_open">Days school opened</label>
       <input type="number" name="days_open" id="days_open" min="0" max="200" value="{{ days_open }}"{% if not edit_ft %} disabled{% endif %}>
@@ -36,7 +36,7 @@
               {% for e in row.errors %}<br><span role="alert" class="error">{{ e }}</span>{% endfor %}</td>
             {% if is_ft %}
             <td><textarea name="ct_{{ row.student.pk }}" rows="2" maxlength="500" aria-label="Class teacher comment for {{ row.student.last_name }}"{% if not edit_ft %} disabled{% endif %}>{{ row.ct }}</textarea></td>
-            <td><input type="number" name="dp_{{ row.student.pk }}" min="0" max="200" value="{{ row.dp }}" aria-label="Days present for {{ row.student.last_name }}"{% if not edit_ft %} disabled{% endif %}></td>
+            <td>{% if row.register %}From register: {{ row.register.days_present }} / {{ row.register.days_opened }}{% else %}<input type="number" name="dp_{{ row.student.pk }}" min="0" max="200" value="{{ row.dp }}" aria-label="Days present for {{ row.student.last_name }}"{% if not edit_ft %} disabled{% endif %}>{% endif %}</td>
             {% for r in row.ratings %}
             <td><select name="rt_{{ row.student.pk }}_{{ r.trait.pk }}" aria-label="{{ r.trait.name }} for {{ row.student.last_name }}"{% if not edit_ft %} disabled{% endif %}>
               <option value=""{% if not r.value %} selected{% endif %}>-</option>

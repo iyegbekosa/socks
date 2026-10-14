@@ -11,6 +11,7 @@ from django.views.decorators.http import require_http_methods
 from apps.academics.models import ClassArm, FormTeacher, Term
 from apps.academics.services import current_term
 from apps.accounts.roles import PRINCIPAL, TEACHER, require_roles
+from apps.attendance.totals import Totals, term_totals
 from apps.audit.services import record
 from apps.core.locks import school_lock
 from apps.core.parsing import parse_id
@@ -64,9 +65,20 @@ def _comment(raw: str, label: str, sid: int, out: Parsed) -> str | None:
     return text
 
 
-def parse_post(post, student_ids: set[int], trait_ids: set[int], *, ft: bool, pr: bool) -> Parsed:
+def parse_post(
+    post,
+    student_ids: set[int],
+    trait_ids: set[int],
+    *,
+    ft: bool,
+    pr: bool,
+    register_ids: frozenset[int] | set[int] = frozenset(),
+) -> Parsed:
+    """``register_ids``: students whose attendance comes from the register. Their days present
+    is dropped silently, and days open is read only while some student has no records."""
     out = Parsed()
-    if ft and "days_open" in post:
+    days_open_used = bool(student_ids - set(register_ids))
+    if ft and days_open_used and "days_open" in post:
         out.days_open_posted = True
         opened = _days(post.get("days_open", ""))
         if opened is False:
@@ -107,7 +119,7 @@ def parse_post(post, student_ids: set[int], trait_ids: set[int], *, ft: bool, pr
             text = _comment(raw, "The principal comment", sid, out)
             if text is not None:
                 out.principal[sid] = text
-        elif prefix == "dp" and ft:
+        elif prefix == "dp" and ft and sid not in register_ids:
             days = _days(raw)
             if days is False:
                 out.row_error(sid, f"Days present must be a whole number from 0 to {MAX_DAYS}.")
@@ -146,7 +158,9 @@ def _students(arm: ClassArm, term: Term) -> list[Student]:
     )
 
 
-def _rows(students, traits, term, parsed_post=None, errors=None) -> list[dict[str, Any]]:
+def _rows(
+    students, traits, term, totals: dict[int, Totals], parsed_post=None, errors=None
+) -> list[dict[str, Any]]:
     comments = {c.student_id: c for c in ReportComment.objects.filter(term=term)}
     ratings = {(r.student_id, r.trait_id): r.value for r in Rating.objects.filter(term=term)}
     rows = []
@@ -177,6 +191,7 @@ def _rows(students, traits, term, parsed_post=None, errors=None) -> list[dict[st
                 "ct": ct,
                 "pc": pc,
                 "dp": dp,
+                "register": totals.get(s.pk),
                 "ratings": rts,
                 "errors": (errors or {}).get(s.pk, []),
             }
@@ -187,12 +202,14 @@ def _rows(students, traits, term, parsed_post=None, errors=None) -> list[dict[st
 def _page(request, arm, term, is_ft, is_pr, status, *, post=None, parsed=None, code=200):
     students = _students(arm, term)
     traits = list(Trait.objects.all())
-    rows = _rows(students, traits, term, post, parsed.row_errors if parsed else None)
+    totals = term_totals([s.pk for s in students], term)
+    rows = _rows(students, traits, term, totals, post, parsed.row_errors if parsed else None)
+    manual = [s for s in students if s.pk not in totals]
     if post is not None and "days_open" in post:
         days_open = post.get("days_open", "")
     else:
         opened = (
-            ReportComment.objects.filter(term=term, student__in=students, days_open__isnull=False)
+            ReportComment.objects.filter(term=term, student__in=manual, days_open__isnull=False)
             .values_list("days_open", flat=True)
             .first()
         )
@@ -208,6 +225,7 @@ def _page(request, arm, term, is_ft, is_pr, status, *, post=None, parsed=None, c
             "rows": rows,
             "traits": traits,
             "days_open": days_open,
+            "show_days_open": bool(manual),
             "is_ft": is_ft,
             "is_pr": is_pr,
             "edit_ft": edit_ft,
@@ -231,20 +249,22 @@ def _save(request, arm: ClassArm, term: Term, is_ft: bool, is_pr: bool):
                 code=409,
             )  # fmt: skip
         students = _students(arm, term)
+        register_ids = set(term_totals([s.pk for s in students], term))
         parsed = parse_post(
             request.POST,
             {s.pk for s in students},
             {t.pk for t in Trait.objects.all()},
             ft=edit_ft,
             pr=edit_pr,
+            register_ids=register_ids,
         )
-        _check_attendance(parsed, term, [s.pk for s in students])
+        _check_attendance(parsed, term, [s.pk for s in students if s.pk not in register_ids])
         if not parsed.ok:
             return _page(
                 request, arm, term, is_ft, is_pr, cr.status, post=request.POST, parsed=parsed,
                 code=400,
             )  # fmt: skip
-        comment_ids, rating_ids = _write(request, students, term, parsed)
+        comment_ids, rating_ids = _write(request, students, term, parsed, register_ids)
         if comment_ids:
             record(
                 "results.comment_changed",
@@ -264,6 +284,8 @@ def _save(request, arm: ClassArm, term: Term, is_ft: bool, is_pr: bool):
 
 
 def _check_attendance(parsed: Parsed, term: Term, student_ids: list[int]) -> None:
+    """P3's present <= open rule, for ``student_ids``: the students without register records
+    (the only ones whose typed numbers can change)."""
     stored = {
         sid: (dp, do)
         for sid, dp, do in ReportComment.objects.filter(
@@ -284,7 +306,9 @@ def _check_attendance(parsed: Parsed, term: Term, student_ids: list[int]) -> Non
             parsed.row_error(sid, "Days present cannot be more than days school opened.")
 
 
-def _write(request, students, term, parsed: Parsed) -> tuple[list[int], list[int]]:
+def _write(
+    request, students, term, parsed: Parsed, register_ids: set[int]
+) -> tuple[list[int], list[int]]:
     existing = {c.student_id: c for c in ReportComment.objects.filter(term=term)}
     old_ratings = {(r.student_id, r.trait_id): r for r in Rating.objects.filter(term=term)}
     comment_ids: list[int] = []
@@ -305,7 +329,7 @@ def _write(request, students, term, parsed: Parsed) -> tuple[list[int], list[int
             new["principal_comment"] = parsed.principal[sid]
         if sid in parsed.present:
             new["days_present"] = parsed.present[sid]
-        if parsed.days_open_posted:
+        if parsed.days_open_posted and sid not in register_ids:
             new["days_open"] = parsed.days_open
         if new != before:
             if (

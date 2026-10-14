@@ -221,6 +221,78 @@ def test_card_text_for_accuracy_student(acc, uploads):
     assert "70 – 100" in text and "Very good" in text  # grading key
 
 
+def _late_threshold(n: int) -> None:
+    from apps.attendance.models import AttendanceSettings
+
+    s = AttendanceSettings.load()
+    s.late_threshold = n
+    s.save()
+
+
+def test_card_uses_computed_totals_or_falls_back(acc, uploads):
+    """Review Focus 4: a school starts registers mid-term. B has records (computed totals),
+    C has none (typed numbers), D has neither (a dash, never a blank)."""
+    from tests.attendance.factories import TEN_DAYS, add_records
+
+    b, c, d = acc.students["B"], acc.students["C"], acc.students["D"]
+    add_records(b, acc.arm, acc.term.start_date, TEN_DAYS)
+    ReportComment.objects.filter(student=d, term=acc.term).update(days_present=None, days_open=None)
+    _late_threshold(2)
+    _publish(acc)
+    assert generate_report_cards(acc.arm, acc.term) == 6
+
+    b_text = pdf_text(uploads.pdf_for(b, acc.term))
+    assert "9 / 10 days present" in b_text and "Late 2 times" in b_text
+    assert "58 / 60" not in b_text
+    c_text = pdf_text(uploads.pdf_for(c, acc.term))
+    assert "58 / 60 days present" in c_text and "Late" not in c_text
+    d_text = pdf_text(uploads.pdf_for(d, acc.term))
+    assert "Attendance —" in d_text and "days present" not in d_text
+
+
+@pytest.mark.parametrize("threshold", [3, 0])
+def test_card_hides_late_line_below_threshold_or_when_off(acc, uploads, threshold):
+    from tests.attendance.factories import TEN_DAYS, add_records
+
+    b = acc.students["B"]
+    add_records(b, acc.arm, acc.term.start_date, TEN_DAYS)
+    _late_threshold(threshold)
+    text = pdf_text(render_card(b, acc.term, logo=None))
+    assert "9 / 10 days present" in text and "Late" not in text
+
+
+def test_single_card_context_uses_attendance_for_card(acc):
+    from tests.attendance.factories import TEN_DAYS, add_records
+
+    b = acc.students["B"]
+    add_records(b, acc.arm, acc.term.start_date, TEN_DAYS)
+    _late_threshold(2)
+    ctx = card_context(b, acc.term, logo=None)
+    att = ctx["attendance"]
+    assert (att.days_present, att.days_opened, att.times_late_shown, att.source) == (
+        9, 10, 2, "register",
+    )  # fmt: skip
+    ctx = card_context(acc.students["C"], acc.term, logo=None)
+    assert ctx["attendance"].source == "manual" and ctx["attendance"].days_present == 58
+
+
+def test_batch_reads_totals_and_settings_once(acc, uploads):
+    from apps.attendance import totals
+    from apps.attendance.models import AttendanceSettings
+
+    _publish(acc)
+    with (
+        mock.patch.object(cards, "term_totals", wraps=totals.term_totals) as tt,
+        mock.patch.object(AttendanceSettings, "load", wraps=AttendanceSettings.load) as load,
+        mock.patch.object(cards, "attendance_for_card") as single,
+    ):
+        assert generate_report_cards(acc.arm, acc.term) == 6
+    tt.assert_called_once()
+    assert sorted(tt.call_args.args[0]) == sorted(s.pk for s in acc.students.values())
+    assert load.call_count == 1
+    single.assert_not_called()
+
+
 def test_each_grade_on_the_card(acc, uploads):
     _publish(acc)
     generate_report_cards(acc.arm, acc.term)

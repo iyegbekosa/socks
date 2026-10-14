@@ -261,3 +261,73 @@ def test_back_link_opens_for_each_role(client_a, w):
     html = client_a.get(url(w)).content.decode()
     assert f'href="{arm_page}">Back' in html
     assert client_a.get(arm_page).status_code == 200
+
+
+# --- P5: computed attendance from the register -------------------------------------------
+
+
+def _register(w, student, statuses=None):
+    from tests.attendance.factories import TEN_DAYS, add_records
+
+    add_records(student, w.arm, w.term.start_date, statuses or TEN_DAYS, by=w.ft)
+
+
+def test_register_totals_shown_read_only(client_a, w):
+    s0, s1 = w.students[0], w.students[1]
+    _register(w, s0)
+    client_a.force_login(w.ft)
+    html = client_a.get(url(w)).content.decode()
+    assert "From register: 9 / 10" in html
+    assert f'name="dp_{s0.pk}"' not in html
+    assert f'name="dp_{s1.pk}"' in html
+    assert 'name="days_open"' in html  # still needed for the students without records
+
+
+def test_forged_days_present_for_register_student_changes_nothing(client_a, w):
+    s0, s1 = w.students[0], w.students[1]
+    _register(w, s0)
+    ReportComment.objects.create(student=s0, term=w.term, days_present=None, days_open=None)
+    client_a.force_login(w.ft)
+    data = post_data(w, **{f"dp_{s0.pk}": "3"})
+    assert client_a.post(url(w), data).status_code == 302
+    c0 = ReportComment.objects.get(student=s0, term=w.term)
+    assert (c0.class_teacher_comment, c0.days_present, c0.days_open) == ("Good work 0", None, None)
+    c1 = ReportComment.objects.get(student=s1, term=w.term)
+    assert (c1.days_present, c1.days_open) == (91, 100)
+    # Out-of-range or junk for a register student is dropped silently, not a 400.
+    data = post_data(w, **{f"dp_{s0.pk}": "abc"})
+    assert client_a.post(url(w), data).status_code == 302
+    data = post_data(w, **{f"dp_{s0.pk}": "150"})
+    assert client_a.post(url(w), data).status_code == 302
+    c0.refresh_from_db()
+    assert (c0.days_present, c0.days_open) == (None, None)
+
+
+def test_days_open_checked_only_against_manual_students(client_a, w):
+    """A register student's stored typed numbers never block the manual students' days open."""
+    s0, s1, s2 = w.students
+    ReportComment.objects.create(student=s0, term=w.term, days_present=90, days_open=100)
+    _register(w, s0)
+    client_a.force_login(w.ft)
+    r = client_a.post(url(w), {"days_open": "50", f"dp_{s1.pk}": "40", f"dp_{s2.pk}": "45"})
+    assert r.status_code == 302
+    c0 = ReportComment.objects.get(student=s0, term=w.term)
+    assert (c0.days_present, c0.days_open) == (90, 100)
+    assert ReportComment.objects.get(student=s1).days_open == 50
+    # The P3 rule still holds for the manual students.
+    r = client_a.post(url(w), {"days_open": "50", f"dp_{s1.pk}": "51"})
+    assert r.status_code == 400 and "cannot be more than" in r.content.decode()
+
+
+def test_days_open_hidden_when_every_student_has_records(client_a, w):
+    for s in w.students:
+        _register(w, s, ["present", "absent"])
+    client_a.force_login(w.ft)
+    html = client_a.get(url(w)).content.decode()
+    assert 'name="days_open"' not in html and 'name="dp_' not in html
+    assert html.count("From register: 1 / 2") == 3
+    s0 = w.students[0]
+    r = client_a.post(url(w), {"days_open": "zz", f"dp_{s0.pk}": "7", f"ct_{s0.pk}": "ok"})
+    assert r.status_code == 302
+    c0 = ReportComment.objects.get(student=s0)
+    assert (c0.class_teacher_comment, c0.days_present, c0.days_open) == ("ok", None, None)

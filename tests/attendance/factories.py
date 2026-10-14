@@ -46,3 +46,27 @@ def make_register_world(n: int = 3) -> SimpleNamespace:
         teacher_b=teacher_b,
         students=students,
     )
+
+
+TEN_DAYS = ["present"] * 7 + ["late"] * 2 + ["absent"]  # 9 present of 10, late twice
+
+
+def add_records(student, arm, start: date, statuses, *, by=None) -> list:
+    """One record per status on consecutive weekdays from ``start`` (no school-day checks)."""
+    from datetime import timedelta
+
+    from apps.attendance.models import AttendanceRecord
+
+    if by is None:
+        by = make_staff("teacher")
+    d, out = start, []
+    for status in statuses:
+        while d.weekday() >= 5:
+            d += timedelta(days=1)
+        out.append(
+            AttendanceRecord.objects.create(
+                student=student, date=d, arm=arm, status=status, recorded_by=by
+            )
+        )
+        d += timedelta(days=1)
+    return out

@@ -12,6 +12,7 @@ import base64
 import io
 import logging
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any
 
 from django.core.exceptions import ObjectDoesNotExist
@@ -24,6 +25,8 @@ from django.utils import timezone
 
 from apps.academics.models import ClassArm, Term
 from apps.academics.scope import students_visible_to
+from apps.attendance.models import AttendanceSettings
+from apps.attendance.totals import Totals, attendance_for_card, card_attendance, term_totals
 from apps.audit.services import record
 from apps.branding.models import LOGO_WIDTH, get_branding
 from apps.core.locks import school_lock
@@ -53,6 +56,18 @@ _LOAD = object()  # card_context(logo=...) default: read the school logo now
 
 class _NotPublished(Exception):
     """The class was unlocked while its cards were being generated."""
+
+
+@dataclass(frozen=True)
+class AttendanceBatch:
+    """Register totals and the late threshold, read once for a batch of cards."""
+
+    totals: dict[int, Totals]
+    late_threshold: int
+
+    @classmethod
+    def load(cls, student_ids: list[int], term: Term) -> "AttendanceBatch":
+        return cls(term_totals(student_ids, term), AttendanceSettings.load().late_threshold)
 
 
 def card_name(student: Student, term: Term) -> str:
@@ -157,9 +172,16 @@ def _ratings(student: Student, term: Term) -> dict[str, list[dict[str, Any]]]:
     return out
 
 
-def card_context(student: Student, term: Term, *, logo: Any = _LOAD) -> dict[str, Any]:
+def card_context(
+    student: Student,
+    term: Term,
+    *,
+    logo: Any = _LOAD,
+    attendance: AttendanceBatch | None = None,
+) -> dict[str, Any]:
     """Everything a report card shows (FR-09). ``logo`` is a ``data:`` URI or None; by default
-    the school logo is read now (pass it in to read it once per batch)."""
+    the school logo is read now (pass it in to read it once per batch). ``attendance``: the
+    batch's register totals; without it this card's attendance is read on its own."""
     if logo is _LOAD:
         logo = load_logo()
     term = Term.objects.select_related("session").get(pk=term.pk)
@@ -202,6 +224,10 @@ def card_context(student: Student, term: Term, *, logo: Any = _LOAD) -> dict[str
             row["term_totals"] = [by_number.get(1), by_number.get(2), r.total]
         rows.append(row)
     comment = ReportComment.objects.filter(student=student, term=term).first()
+    if attendance is None:
+        att = attendance_for_card(student, term)
+    else:
+        att = card_attendance(attendance.totals.get(student.pk), comment, attendance.late_threshold)
     branding = get_branding()
     nxt = _next_term(term)
     return {
@@ -216,8 +242,7 @@ def card_context(student: Student, term: Term, *, logo: Any = _LOAD) -> dict[str
         "class_name": arm.display_name,
         "session_name": term.session.name,
         "term_label": term.get_number_display(),
-        "days_present": comment.days_present if comment else None,
-        "days_open": comment.days_open if comment else None,
+        "attendance": att,
         "components": headers,
         "rows": rows,
         "third_term": third_term,
@@ -235,10 +260,17 @@ def card_context(student: Student, term: Term, *, logo: Any = _LOAD) -> dict[str
     }
 
 
-def render_card(student: Student, term: Term, *, logo: Any = _LOAD) -> bytes:
+def render_card(
+    student: Student,
+    term: Term,
+    *,
+    logo: Any = _LOAD,
+    attendance: AttendanceBatch | None = None,
+) -> bytes:
     """The student's report card for ``term`` as PDF bytes. Nothing outside the page is
     fetched: the logo is inlined and ``allowed_urls`` is empty."""
-    html = render_to_string("results/report_card.html", card_context(student, term, logo=logo))
+    context = card_context(student, term, logo=logo, attendance=attendance)
+    html = render_to_string("results/report_card.html", context)
     return render_pdf(html)
 
 
@@ -354,6 +386,7 @@ def _generate(arm: ClassArm, term: Term) -> int:
         .values_list("student_id", flat=True)
     )
     logo = load_logo()
+    attendance = AttendanceBatch.load(student_ids, term)
     written: list[tuple[int, str]] = []
     failed = 0
     for student_id in student_ids:
@@ -361,7 +394,8 @@ def _generate(arm: ClassArm, term: Term) -> int:
         if student is None:
             continue
         try:
-            pdf = render_card(student, term, logo=logo)  # slow: outside any lock
+            # slow: outside any lock
+            pdf = render_card(student, term, logo=logo, attendance=attendance)
         except ObjectDoesNotExist:
             # unlock_class deletes the class's summaries and subject results together with the
             # status change, so missing data usually means the class was unlocked mid-run.
