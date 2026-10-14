@@ -1,0 +1,26 @@
+{% extends "core/base.html" %}
+{% load static %}
+{% block title %}{{ arm.display_name }} register{% endblock %}
+{% block head %}{% if editable %}<script src="{% static 'attendance/register.js' %}" defer></script>{% endif %}{% endblock %}
+{% block content %}
+<div class="card reg">
+<h1>{{ arm.display_name }} register</h1>
+<p class="muted">{{ day|date:"l j F Y" }}</p>
+{% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+{% if date_error %}<p class="error" role="alert">{{ date_error }}</p>
+{% else %}
+{% if locked %}<p class="error" role="alert">This register is locked because the class's results have left draft.</p>{% elif not editable %}<p class="muted">This register can no longer be changed by you.</p>{% endif %}
+{% for e in errors %}<p class="error" role="alert">{{ e }}</p>{% endfor %}
+{% if rows %}
+<form method="post" id="reg">{% csrf_token %}
+<div class="bar"><span aria-live="polite">Present <b id="c-present">{{ counts.present }}</b> · Absent <b id="c-absent">{{ counts.absent }}</b> · Late <b id="c-late">{{ counts.late }}</b> · Excused <b id="c-excused">{{ counts.excused }}</b></span>{% if editable %}<button type="submit">Save</button>{% endif %}</div>
+{% if editable %}<p class="muted key">P present, A absent, L late, E excused. Tap a name to cycle.</p>{% endif %}
+<ul>
+{% for r in rows %}{% with s=r.student %}<li><span class="n" id="n{{ s.pk }}">{{ s.last_name }}, {{ s.first_name }}</span>{% if r.elsewhere %}<span class="ro">Recorded in {{ r.elsewhere.display_name }}: {{ r.label }}</span>{% elif editable %}<span class="g" role="radiogroup" aria-labelledby="n{{ s.pk }}">{% for st in statuses %}<label><input type="radio" name="s_{{ s.pk }}" value="{{ st }}"{% if st == r.status %} checked{% endif %} aria-label="{{ st|capfirst }}">{{ st|first|upper }}</label>{% endfor %}</span>{% else %}<span>{{ r.label }}</span>{% endif %}</li>{% endwith %}
+{% endfor %}
+</ul>
+</form>
+{% else %}<p class="muted">No students are enrolled in this class.</p>{% endif %}
+{% endif %}
+</div>
+{% endblock %}

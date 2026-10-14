@@ -258,6 +258,50 @@ def _tiny_csv() -> dict:
     return {"file": SimpleUploadedFile("s.csv", b"first_name,last_name\n", "text/csv")}
 
 
+def form_teacher_actor():
+    """A teacher in school A who is form teacher of an arm in A's current session."""
+    from tests.attendance.factories import make_register_world
+
+    return make_register_world(1).teacher
+
+
+# School B's arm id: far above any arm school A creates, so the id is unknown in A.
+SCHOOL_B_ARM_PK = 7_000_001
+
+
+def _attendance_record_in_active_schema():
+    """A register record (its arm with a form teacher, its student) in the active schema."""
+    from datetime import date
+
+    from apps.academics.models import ClassArm, FormTeacher
+    from apps.attendance.models import AttendanceRecord
+    from tests.fees.factories import make_staff, make_terms
+    from tests.students.factories import StudentProfileFactory
+
+    w = make_terms()
+    arm = ClassArm.objects.create(pk=SCHOOL_B_ARM_PK, level=w.level, suffix="Iso")
+    teacher = make_staff("teacher")
+    FormTeacher.objects.create(arm=arm, session=w.session, teacher=teacher)
+    student = StudentProfileFactory(enrolment__arm=arm)
+    return AttendanceRecord.objects.create(
+        student=student, date=date(2026, 1, 12), arm=arm, status="present", recorded_by=teacher
+    )
+
+
+def _attendance_url(rec) -> str:
+    return f"/api/v1/attendance/{rec.arm_id}/{rec.date.isoformat()}"
+
+
+def _attendance_body(rec) -> dict:
+    return {"records": [{"student": rec.student_id, "status": "absent"}]}
+
+
+def _attendance_count() -> int:
+    from apps.attendance.models import AttendanceRecord
+
+    return AttendanceRecord.objects.count()
+
+
 # Several cases may share a route and method (the guard only needs one); give them labels.
 # Per-schema session storage is covered by
 # tests/accounts/test_me_api.py::test_school_b_session_cookie_rejected_on_school_a.
@@ -421,6 +465,44 @@ ISOLATION_CASES: list[IsolationCase] = [
         count_model=_attempt_count,
         setup_a=_school_a_online_ready,
         label="staff",
+    ),
+    # A school A form teacher asks for school B's arm id: unknown in A, so 404, and no
+    # record is written in either school. tests/api/test_attendance_api.py covers roles.
+    IsolationCase(
+        "api:attendance_register",
+        "GET",
+        url=_attendance_url,
+        make_obj=_attendance_record_in_active_schema,
+        actor=form_teacher_actor,
+        label="form_teacher",
+    ),
+    IsolationCase(
+        "api:attendance_register",
+        "GET",
+        url=_attendance_url,
+        make_obj=_attendance_record_in_active_schema,
+        actor=None,
+        label="anonymous",
+    ),
+    IsolationCase(
+        "api:attendance_register",
+        "POST",
+        url=_attendance_url,
+        make_obj=_attendance_record_in_active_schema,
+        body_for=_attendance_body,
+        actor=form_teacher_actor,
+        count_model=_attendance_count,
+        label="form_teacher",
+    ),
+    IsolationCase(
+        "api:attendance_register",
+        "POST",
+        url=_attendance_url,
+        make_obj=_attendance_record_in_active_schema,
+        body_for=_attendance_body,
+        actor=None,
+        count_model=_attendance_count,
+        label="anonymous",
     ),
 ]
 

@@ -226,6 +226,7 @@ def arm_detail(request, arm_id):
         "can_edit": can_edit,
         "session": session,
         "can_comments": can_open_comments(request.user, arm, current_term()),
+        "can_register": request.user.has_role(PRINCIPAL, SCHOOL_ADMIN),
     }
     if session is None:
         return render(request, "academics/arm_detail.html", ctx)

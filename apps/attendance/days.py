@@ -44,9 +44,13 @@ def school_days(term: Term, *, until: date | None = None) -> list[date]:
     return out
 
 
-def check_register_date(d: date) -> Term:
-    """Return the current term if a register may be taken on ``d``, else raise."""
-    term = current_term()
+def check_register_date(d: date, *, term: Term | None = None) -> Term:
+    """Return the current term if a register may be taken on ``d``, else raise.
+
+    ``term``: the current term, when the caller has just loaded it (saves a query).
+    """
+    if term is None:
+        term = current_term()
     if term is None:
         raise RegisterDateError(RegisterDateError.NO_CURRENT_TERM, "There is no current term.")
     if d > timezone.localdate():

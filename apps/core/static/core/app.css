@@ -48,3 +48,16 @@ button.danger { background:var(--danger); }
 .scoregrid th.sticky, .scoregrid td.sticky { position:sticky; left:0; background:var(--card); }
 .banner { background:#fef3f2; border:1px solid #fecdca; color:var(--danger); border-radius:6px; padding:.6rem .75rem; margin-bottom:.75rem; }
 .banner[hidden] { display:none; }
+/* Attendance register: mobile first, large tap targets, sticky counts and Save */
+.reg .bar { position:sticky; top:0; z-index:1; display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; justify-content:space-between; background:var(--card); padding:.5rem 0; border-bottom:1px solid var(--line); }
+.reg .bar button { margin:0; min-height:44px; }
+.reg .key { font-size:.85rem; }
+.reg ul { list-style:none; margin:0; padding:0; }
+.reg li { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.25rem .5rem; padding:.35rem 0; border-bottom:1px solid var(--line); }
+.reg .n { flex:1 1 8rem; min-height:44px; display:flex; align-items:center; overflow-wrap:anywhere; user-select:none; }
+.reg .n[role=button] { cursor:pointer; }
+.reg .g { display:flex; gap:.3rem; }
+.reg .g label { display:flex; align-items:center; justify-content:center; gap:.2rem; min-width:48px; min-height:44px; margin:0; padding:0 .3rem; border:1px solid var(--line); border-radius:6px; cursor:pointer; }
+.reg .g input { margin:0; width:1.1rem; height:1.1rem; }
+.reg .g label:has(:checked) { background:var(--accent); border-color:var(--accent); color:#fff; }
+.reg .ro { color:var(--muted); font-size:.9rem; }

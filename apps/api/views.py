@@ -34,6 +34,8 @@ from apps.api.serializers import (
     StudentListSerializer,
     sheet_data_json,
 )
+from apps.attendance import register as attendance
+from apps.attendance.days import RegisterDateError, check_register_date
 from apps.core.errors import ApiError
 from apps.core.money import money_fields
 from apps.core.parsing import parse_id
@@ -589,3 +591,122 @@ class PaymentsInitializeView(APIView):
             {"reference": attempt.reference, "authorization_url": attempt.authorization_url},
             status=status.HTTP_201_CREATED,
         )
+
+
+ATTENDANCE_ITEM_KEYS = {"student", "status"}
+
+
+def _register_json(arm: ClassArm, d: date, editable: bool, rows: list[Any]) -> dict[str, Any]:
+    records = []
+    for row in rows:
+        s = row.student
+        item: dict[str, Any] = {
+            "student": {"id": s.pk, "admission_number": s.admission_number, "name": s.full_name},
+            "status": row.status,
+        }
+        if row.elsewhere is not None:
+            item["recorded_elsewhere"] = True
+        records.append(item)
+    return {
+        "arm": {"id": arm.pk, "name": arm.display_name},
+        "date": d.isoformat(),
+        "editable": editable,
+        "records": records,
+    }
+
+
+def _parse_register_body(data: Any) -> dict[int, str]:
+    if not isinstance(data, dict) or set(data) != {"records"}:
+        raise _validation([{"field": "non_field_errors", "message": 'Send only "records".'}])
+    items = data["records"]
+    if not isinstance(items, list):
+        raise _validation([{"field": "records", "message": "Must be a list."}])
+    out: dict[int, str] = {}
+    details: list[dict] = []
+    for i, item in enumerate(items):
+        if not isinstance(item, dict) or set(item) != ATTENDANCE_ITEM_KEYS:
+            details.append({"field": f"records.{i}", "message": "Give student and status."})
+            continue
+        sid = _json_id(item["student"])
+        if sid is None:
+            details.append({"field": f"records.{i}.student", "message": "Must be a student id."})
+        elif sid in out:
+            details.append({"field": f"records.{i}.student", "message": "Listed twice."})
+        if item["status"] not in attendance.STATUSES:
+            details.append(
+                {
+                    "field": f"records.{i}.status",
+                    "message": "Use present, absent, late or excused.",
+                }
+            )
+        if sid is not None and sid not in out:
+            out[sid] = item["status"]
+    if details:
+        raise _validation(details)
+    return out
+
+
+def _register_date_error(exc: RegisterDateError) -> ApiError:
+    """NOT_A_SCHOOL_DAY and FUTURE_DATE keep their codes; no current term is a 400 too."""
+    code = "VALIDATION_ERROR" if exc.code == exc.NO_CURRENT_TERM else exc.code
+    return ApiError(code, exc.message, 400)
+
+
+class AttendanceRegisterView(APIView):
+    """GET/POST one class arm's register for a date (``YYYY-MM-DD``).
+
+    The arm's form teacher for the session, the principal and the school admin only.
+    """
+
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["get", "post", "head", "options"]
+
+    def _setup(self, request: Request, arm: str, date_str: str) -> tuple[Any, date, Any, str]:
+        arm_id = parse_id(arm)
+        d = attendance.parse_iso_date(date_str)
+        if arm_id is None or d is None:
+            raise _not_found("Register")
+        klass = ClassArm.objects.select_related("level").filter(pk=arm_id).first()
+        if klass is None:
+            raise _not_found("Class")
+        term = current_term()
+        level = attendance.access(request.user, klass, term)
+        if level is None:
+            raise ApiError("FORBIDDEN", "Only the class's form teacher can take its register.", 403)
+        try:
+            term = check_register_date(d, term=term)
+        except RegisterDateError as exc:
+            raise _register_date_error(exc) from exc
+        return klass, d, term, level
+
+    def _respond(self, klass: Any, d: date, term: Any, level: str) -> Response:
+        editable = attendance.editable_by(level, d, term) and not attendance.is_locked(klass, term)
+        rows = attendance.rows_for(klass, d, term=term)
+        return Response(_register_json(klass, d, editable, rows))
+
+    def get(self, request: Request, arm: str, date: str) -> Response:
+        return self._respond(*self._setup(request, arm, date))
+
+    def post(self, request: Request, arm: str, date: str) -> Response:
+        klass, d, term, level = self._setup(request, arm, date)
+        statuses = _parse_register_body(request.data)
+        if attendance.is_locked(klass, term):
+            raise ApiError("ATTENDANCE_LOCKED", attendance.LOCKED_MESSAGE, 409)
+        if not attendance.editable_by(level, d, term):
+            raise ApiError("FORBIDDEN", "This register can no longer be changed by you.", 403)
+        try:
+            attendance.save_register(
+                klass, d, statuses, by=request.user, request=request, term=term
+            )
+        except attendance.RegisterLocked as exc:
+            raise ApiError("ATTENDANCE_LOCKED", exc.message, 409) from exc
+        except RegisterDateError as exc:
+            raise _register_date_error(exc) from exc
+        except DjangoValidationError as exc:
+            details = [
+                {"field": key, "message": message}
+                for key, messages in exc.message_dict.items()
+                for message in messages
+            ]
+            raise _validation(details) from exc
+        return self._respond(klass, d, term, level)

@@ -23,6 +23,11 @@ urlpatterns = [
     path("invoices", views.InvoiceListView.as_view(), name="invoices"),
     path("payments/manual", views.ManualPaymentView.as_view(), name="payments_manual"),
     path(
+        "attendance/<str:arm>/<str:date>",
+        views.AttendanceRegisterView.as_view(),
+        name="attendance_register",
+    ),
+    path(
         "results/<str:student>/<str:term>/report-card",
         views.ReportCardView.as_view(),
         name="report_card",

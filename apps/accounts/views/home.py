@@ -12,7 +12,28 @@ def home(request):
     can_see_students = request.user.kind == "staff" and request.user.has_role(
         SCHOOL_ADMIN, PROPRIETOR, PRINCIPAL, BURSAR, TEACHER
     )
-    return render(request, "accounts/home.html", {"can_see_students": can_see_students})
+    return render(
+        request,
+        "accounts/home.html",
+        {"can_see_students": can_see_students, "register_arms": _form_teacher_arms(request.user)},
+    )
+
+
+def _form_teacher_arms(user):
+    """Arms the user form-teaches in the current session (for "Take today's register")."""
+    if user.kind != "staff" or not user.has_role(TEACHER):
+        return []
+    from apps.academics.models import ClassArm
+    from apps.academics.services import current_term
+
+    term = current_term()
+    if term is None:
+        return []
+    return list(
+        ClassArm.objects.filter(
+            form_teachers__teacher=user, form_teachers__session_id=term.session_id
+        ).select_related("level")
+    )
 
 
 def _student_home(request):
