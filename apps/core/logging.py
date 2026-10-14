@@ -19,6 +19,7 @@ SECRET_ARG_TASKS = frozenset(
         "apps.fees.tasks.generate_receipt_task",
         "apps.fees.tasks.send_receipt_task",
         "apps.fees.tasks.process_attempt_task",
+        "apps.attendance.tasks.send_absence_emails_task",
     }
 )
 _TASK_ARG_KEYS = ("args", "kwargs", "argsrepr", "kwargsrepr")
