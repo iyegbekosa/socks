@@ -1,0 +1,20 @@
+{% extends "core/base.html" %}
+{% block title %}Attendance{% endblock %}
+{% block content %}
+<div class="card">
+<h1>Attendance</h1>
+<form method="get"><label>Date <input type="date" name="date" value="{{ day|date:'Y-m-d' }}"></label> <button type="submit">Show</button></form>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<p class="muted">{{ day|date:"l j F Y" }}</p>
+{% if not_school_day %}<p>{{ day|date:"j F Y" }} is not a school day.</p>
+{% elif rows %}
+<table>
+<thead><tr><th scope="col">Class</th><th scope="col">Registered</th><th scope="col">Present</th><th scope="col">Absent</th><th scope="col">Late</th><th scope="col">Term to date %</th></tr></thead>
+<tbody>
+{% for r in rows %}<tr><th scope="row"><a href="{% url 'attendance:class' r.arm.pk %}">{{ r.arm.display_name }}</a></th><td>{% if r.registered %}{{ r.registered }}{% else %}<span class="error">No register</span>{% endif %}</td><td>{{ r.present }}</td><td>{{ r.absent }}</td><td>{{ r.late }}</td><td>{{ r.percent }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% else %}<p class="muted">No classes have students this session.</p>{% endif %}
+</div>
+{% endblock %}

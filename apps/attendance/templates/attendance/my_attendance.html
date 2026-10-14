@@ -1,0 +1,21 @@
+{% extends "core/base.html" %}
+{% block title %}My attendance{% endblock %}
+{% block content %}
+<div class="card">
+<h1>My attendance</h1>
+{% if not term %}<p class="muted">No current term.</p>
+{% else %}
+<p class="muted">{{ term.get_number_display }} ({{ term.session.name }})</p>
+{% if totals %}
+<dl class="facts">
+<dt>Present</dt><dd>{{ totals.days_present }} of {{ totals.days_opened }} days</dd>
+<dt>Late</dt><dd>{{ totals.times_late }}</dd>
+<dt>Absent</dt><dd>{{ totals.times_absent }}</dd>
+<dt>Excused</dt><dd>{{ totals.times_excused }}</dd>
+</dl>
+{% if absent_dates %}<h2>Days absent</h2><ul>{% for d in absent_dates %}<li>{{ d|date:"j F Y" }}</li>{% endfor %}</ul>{% endif %}
+{% if late_dates %}<h2>Days late</h2><ul>{% for d in late_dates %}<li>{{ d|date:"j F Y" }}</li>{% endfor %}</ul>{% endif %}
+{% else %}<p class="muted">No attendance has been recorded yet this term.</p>{% endif %}
+{% endif %}
+</div>
+{% endblock %}

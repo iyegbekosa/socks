@@ -5,7 +5,7 @@
 {% block content %}
 <div class="card reg">
 <h1>{{ arm.display_name }} register</h1>
-<p class="muted">{{ day|date:"l j F Y" }}</p>
+<p class="muted">{{ day|date:"l j F Y" }} · <a href="{% url 'attendance:class' arm.pk %}">Term attendance</a></p>
 {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
 {% if date_error %}<p class="error" role="alert">{{ date_error }}</p>
 {% else %}

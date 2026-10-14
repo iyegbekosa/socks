@@ -1,0 +1,24 @@
+{% extends "core/base.html" %}
+{% block title %}{{ arm.display_name }} attendance{% endblock %}
+{% block content %}
+<div class="card">
+<h1>{{ arm.display_name }} attendance</h1>
+{% if not term %}<p class="muted">No current term.</p>{% else %}
+<p class="muted">{{ term.get_number_display }} ({{ term.session.name }})</p>
+<p class="no-print">{% for t in terms %}{% if t.pk == term.pk %}<b>{{ t.get_number_display }}</b>{% else %}<a href="?term={{ t.pk }}">{{ t.get_number_display }}</a>{% endif %}{% if not forloop.last %} · {% endif %}{% endfor %} · <a href="?term={{ term.pk }}&amp;format=csv">Download CSV</a></p>
+{% if missing %}<p class="error" role="status">No register taken on {{ missing|length }} school day{{ missing|length|pluralize }}: {% for d in missing %}{{ d|date:"j M" }}{% if not forloop.last %}, {% endif %}{% endfor %}.</p>{% endif %}
+{% if rows %}
+<div style="overflow-x:auto">
+<table>
+<caption class="muted">P present, A absent, L late, E excused, · no register, ↗ recorded in another class.</caption>
+<thead><tr><th scope="col">Name</th>{% for d in days %}<th scope="col"{% if d in missing_set %} class="missing"{% endif %}>{{ d|date:"j/n" }}</th>{% endfor %}<th scope="col">Present / opened</th><th scope="col">Late</th><th scope="col">Absent</th><th scope="col">Excused</th></tr></thead>
+<tbody>
+{% for row in rows %}<tr><th scope="row">{{ row.student.last_name }}, {{ row.student.first_name }}</th>{% for c in row.cells %}<td{% if c.date in missing_set %} class="missing"{% endif %}{% if c.title %} title="{{ c.title }}"{% endif %} data-cell="{{ c.letter }}">{{ c.letter }}</td>{% endfor %}<td>{{ row.totals.days_present|default:0 }} / {{ row.totals.days_opened|default:0 }}</td><td>{{ row.totals.times_late|default:0 }}</td><td>{{ row.totals.times_absent|default:0 }}</td><td>{{ row.totals.times_excused|default:0 }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{% else %}<p class="muted">No students in this class.</p>{% endif %}
+{% endif %}
+</div>
+{% endblock %}

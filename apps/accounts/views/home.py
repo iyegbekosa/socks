@@ -41,6 +41,7 @@ def _student_home(request):
     # Imported here, not at module level: apps.students and apps.academics import from
     # apps.accounts, so a top-level import would be circular.
     from apps.academics.services import current_term
+    from apps.attendance.totals import term_totals
     from apps.fees.checkout import payable_invoices
     from apps.fees.invoicing import outstanding_for
     from apps.students.models import Enrolment, Student
@@ -56,10 +57,16 @@ def _student_home(request):
             .select_related("arm__level", "session")
             .first()
         )
+    attendance = None
+    if student is not None and term is not None:
+        totals = term_totals([student.pk], term).get(student.pk)
+        if totals is not None:
+            attendance = totals
     return render(
         request,
         "students/portal_profile.html",
         {
+            "attendance": attendance,
             "student": student,
             "enrolment": enrolment,
             "term": term,
