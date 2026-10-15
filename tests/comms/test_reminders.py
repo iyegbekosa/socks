@@ -226,6 +226,29 @@ def test_delete_date_post_only_and_audited(client_a, w):
     assert ev.after == {"id": row.pk, "date": w.monday.isoformat()}
 
 
+@pytest.mark.parametrize("after_eight", [True, False])
+def test_today_added_after_eight_suggests_send_now(client_a, w, after_eight):
+    from apps.attendance.days import is_school_day
+
+    with schema_context("school_a"):
+        if not is_school_day(w.term, w.today):
+            pytest.skip("today is not a school day")
+    login_verified(client_a, w.bursar)
+    with mock.patch("apps.comms.views.reminders._past_reminder_hour", return_value=after_eight):
+        r = client_a.post(URL, {"action": "add_date", "date": w.today.isoformat()}, follow=True)
+    html = r.content.decode()
+    assert "Reminder date added." in html
+    assert ("Use Send now." in html) is after_eight
+
+
+def test_delete_unknown_or_bad_id_says_so(client_a, w):
+    login_verified(client_a, w.bursar)
+    for raw in ("999999", "abc"):
+        r = client_a.post(f"/messages/reminders/dates/{raw}/delete/", follow=True)
+        assert r.redirect_chain[-1][0] == URL
+        assert "That reminder date no longer exists." in r.content.decode()
+
+
 def test_past_date_cannot_be_deleted(client_a, w):
     with schema_context("school_a"):
         row = FeeReminderDate.objects.create(term=w.term, date=w.today - timedelta(days=3))
@@ -355,6 +378,7 @@ def test_beat_schedule(settings):
     entry = settings.CELERY_BEAT_SCHEDULE["comms-fee-reminders"]
     assert entry["task"] == "apps.comms.tasks.send_reminders_all_schools"
     assert entry["schedule"] == crontab(hour=8, minute=0)
+    assert settings.CELERY_TIMEZONE == "Africa/Lagos"  # 08:00 is Lagos time
     assert entry["options"] == {"queue": "notifications"}
 
 

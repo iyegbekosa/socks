@@ -120,6 +120,13 @@ def reminders_page(request):
     return redirect("comms:reminders")
 
 
+REMINDER_HOUR = 8  # the daily Beat run (config/settings.py, "comms-fee-reminders")
+
+
+def _past_reminder_hour() -> bool:
+    return timezone.localtime().hour >= REMINDER_HOUR
+
+
 def _add_date(request):
     term = current_term()
     if term is None:
@@ -139,6 +146,12 @@ def _add_date(request):
                 after={"id": row.pk, "date": row.date.isoformat()},
             )
             messages.success(request, "Reminder date added.")
+            if row.date == timezone.localdate() and _past_reminder_hour():
+                messages.info(
+                    request,
+                    "Today's date was added after 08:00, so the scheduled reminder will not "
+                    "run today. Use Send now.",
+                )
             return redirect("comms:reminders")
     return _page(request, date_form=form)
 
@@ -184,6 +197,7 @@ def reminder_date_delete(request, pk):
     row_id = parse_id(pk)
     row = FeeReminderDate.objects.filter(pk=row_id).first() if row_id is not None else None
     if row is None:
+        messages.error(request, "That reminder date no longer exists.")
         return redirect("comms:reminders")
     if row.date < timezone.localdate():
         messages.error(request, "A past reminder date cannot be removed.")
