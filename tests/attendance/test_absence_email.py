@@ -117,18 +117,26 @@ def test_student_without_guardian_email_is_skipped_silently(
 def test_smtp_failure_is_logged_by_type_and_save_unaffected(
     client_a, w, caplog, django_capture_on_commit_callbacks
 ):
+    """Email goes out in ``comms`` batches (P6): the failure is logged there by type and
+    delivery id, and the delivery is marked failed."""
+    from django.core.mail.backends.locmem import EmailBackend
+
+    from apps.comms.models import Delivery
+
     a = w.students[0]
     mail.outbox.clear()
-    with mock.patch("apps.attendance.notify.send_mail", side_effect=OSError("boom Ada")):
-        with caplog.at_level(logging.WARNING, logger="apps.attendance"):
+    with mock.patch.object(EmailBackend, "send_messages", side_effect=OSError("boom Ada")):
+        with caplog.at_level(logging.WARNING, logger="apps"):
             with schema_context("school_a"):
                 with django_capture_on_commit_callbacks(execute=True):
                     _save(client_a, w, {a.pk: "absent"})
                 rec = AttendanceRecord.objects.get(student=a)
+                failed = Delivery.objects.get(channel="email")
     assert rec.status == "absent"
     assert rec.absence_emailed_at is not None  # no retry storm
+    assert (failed.status, failed.error_type) == ("failed", "OSError")
     text = " ".join(r.getMessage() for r in caplog.records)
-    assert "OSError" in text and str(rec.pk) in text
+    assert "OSError" in text and str(failed.pk) in text
     assert "boom" not in text and "Ada" not in text and "example.com" not in text
 
 
@@ -191,7 +199,7 @@ def test_setting_off_hook_does_not_enqueue(client_a, w, django_capture_on_commit
     enqueue.assert_not_called()
 
 
-def test_sending_twice_emails_once(client_a, w):
+def test_sending_twice_emails_once(client_a, w, django_capture_on_commit_callbacks):
     """The claim guards a duplicate delivery of the task (or two workers)."""
     from apps.attendance.notify import send_absence_emails
 
@@ -200,6 +208,8 @@ def test_sending_twice_emails_once(client_a, w):
     mail.outbox.clear()
     with schema_context("school_a"):
         rid = AttendanceRecord.objects.get(student=a).pk
-        assert send_absence_emails([rid]) == 1
-        assert send_absence_emails([rid]) == 0
+        # Email goes out on commit through ``comms.notify`` (P6).
+        with django_capture_on_commit_callbacks(execute=True):
+            assert send_absence_emails([rid]) == 1
+            assert send_absence_emails([rid]) == 0
     assert len(mail.outbox) == 1

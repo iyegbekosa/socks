@@ -25,6 +25,12 @@ class AttendanceSettings(models.Model):
     absence_email = models.BooleanField(
         default=True, help_text="Email guardians when a student is marked absent."
     )
+    # Minutes to wait before emailing, so a mark corrected meanwhile sends nothing (P6).
+    absence_email_delay_minutes = models.PositiveSmallIntegerField(
+        default=10,
+        validators=[MaxValueValidator(120)],
+        help_text="Minutes to wait before emailing, so a corrected mark sends nothing. 0 to 120.",
+    )
 
     class Meta:
         verbose_name_plural = "attendance settings"
@@ -34,6 +40,10 @@ class AttendanceSettings(models.Model):
             ),
             models.CheckConstraint(
                 condition=Q(edit_window_days__lte=60), name="attendance_settings_window_lte60"
+            ),
+            models.CheckConstraint(
+                condition=Q(absence_email_delay_minutes__lte=120),
+                name="attendance_settings_delay_lte120",
             ),
         ]
 

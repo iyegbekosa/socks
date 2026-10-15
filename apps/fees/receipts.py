@@ -7,14 +7,15 @@ and overwritten on regeneration. Logs carry ids and exception types only.
 import logging
 from typing import Any
 
-from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
-from django.core.mail import send_mail
+from django.db import transaction
 from django.db.models import Q, QuerySet
 from django.template.loader import render_to_string
 
 from apps.branding.models import get_branding
+from apps.comms.models import Message
+from apps.comms.service import notify
 from apps.core.logging import log_exception_redacted
 from apps.core.money import naira_display
 from apps.core.parsing import parse_id
@@ -137,40 +138,61 @@ def _unique(values: list[str | None]) -> list[str]:
     return out
 
 
+def _escape(value: str) -> str:
+    """Make a value safe to place in a ``notify`` body as literal text."""
+    return value.replace("{", "{{").replace("}", "}}")
+
+
 def send_receipt(payment_id: int) -> dict[str, int]:
-    """Email (and, when configured, text) the student's guardians that a payment was received.
-    No PDF and no balances; recipients are de-duplicated case-insensitively. Failures are
-    logged by type and never raised."""
-    counts = {"emails_sent": 0, "sms_queued": 0, "failures": 0}
+    """Tell the student's family (email) and the student (in-app) that a payment was received,
+    through ``comms.notify``; and text the guardians when SMS is configured. No PDF and no
+    balances; email recipients are de-duplicated case-insensitively. Receipts ignore quiet
+    hours. Sends once per receipt: a second run (a redelivered task) finds the message and
+    stops. Failures are logged by type and never raised."""
+    counts = {"emails_queued": 0, "inapp": 0, "sms_queued": 0, "failures": 0}
     receipt = _receipt_for_payment(payment_id)
     if receipt is None:
         return counts
     student = receipt.payment.student
-    body = MESSAGE.format(
-        amount=naira_display(receipt.payment.amount_kobo),
-        first_name=student.first_name,
-        number=receipt.number,
+    # ``{amount}`` and ``{number}`` are not message placeholders: render them in first (escaped)
+    # and leave ``{student_first_name}`` for ``notify``. The text is the P4 text, unchanged.
+    template = MESSAGE.format(
+        amount=_escape(naira_display(receipt.payment.amount_kobo)),
+        first_name="{student_first_name}",
+        number=_escape(receipt.number),
     )
-    emails = _unique([student.guardian_email, student.guardian2_email])
-    phones = _unique([student.guardian_phone, student.guardian2_phone])
-    for address in emails:
-        try:
-            send_mail(
+    try:
+        with transaction.atomic():
+            Receipt.objects.select_for_update().filter(pk=receipt.pk).first()
+            if Message.objects.filter(
+                kind=Message.Kind.RECEIPT, related_type="fees.receipt", related_id=receipt.pk
+            ).exists():
+                return counts
+            message = notify(
+                "receipt",
+                students=[student],
                 subject="Payment received",
-                message=body,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[address],
-                fail_silently=False,
+                body=template,
+                per_student=True,
+                context_for=lambda s: {"student_first_name": s.first_name},
+                related=receipt,
+                audience_label="1 student",
             )
-        except Exception as exc:  # noqa: BLE001 - one bad address must not stop the rest
-            counts["failures"] += 1
-            logger.warning(
-                "Receipt email for payment %s failed (%s).", payment_id, type(exc).__name__
-            )
-        else:
-            counts["emails_sent"] += 1
+    except Exception as exc:  # noqa: BLE001 - a receipt message must never raise
+        counts["failures"] += 1
+        logger.warning(
+            "Receipt message for payment %s failed (%s).", payment_id, type(exc).__name__
+        )
+        return counts
+    counts["emails_queued"] = message.deliveries.filter(channel="email").count()
+    counts["inapp"] = message.deliveries.filter(channel="inapp").count()
     if sms_configured():
-        for phone in phones:
+        body = MESSAGE.format(
+            amount=naira_display(receipt.payment.amount_kobo),
+            first_name=student.first_name,
+            number=receipt.number,
+        )
+        for phone in _unique([student.guardian_phone, student.guardian2_phone]):
             try:
                 send_sms(phone, body)
             except Exception as exc:  # noqa: BLE001 - one bad number must not stop the rest

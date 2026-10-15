@@ -7,9 +7,11 @@ from unittest import mock
 
 import pytest
 from django.core import mail
+from django.core.mail.backends.locmem import EmailBackend as LocmemBackend
 from django_tenants.utils import schema_context
 
 from apps.audit.models import AuditEvent
+from apps.comms.models import Delivery, Message
 from apps.core.logging import SECRET_ARG_TASKS
 from apps.results.models import ClassResult, ResultSummary, SubjectResult
 from apps.results.tasks import notify_published_task
@@ -54,13 +56,6 @@ EMAILS = {
     "e.home@example.com",
     "f.home@example.com",
 }
-PHONES = {
-    "+2348030000001",
-    "+2348030000003",
-    "+2348030000033",
-    "+2348030000004",
-    "+2348030000006",
-}
 
 
 def publish(w, capture):
@@ -98,12 +93,11 @@ def test_publish_notifies_each_guardian_once_without_scores(
             assert number not in scores, number
         assert "Pupil" not in text
 
-    assert {m.to for m in sms_outbox} == PHONES
-    assert len(sms_outbox) == len(PHONES)
-    assert all(m.body == BODY for m in sms_outbox)
+    # P6: the results message is email and in-app only, even with SMS configured.
+    assert sms_outbox == []
 
     event = AuditEvent.objects.get(action="results.published_notified")
-    assert event.after == {"emails_sent": 5, "sms_queued": 5, "failures": 0}
+    assert event.after == audit_counts(w, emails=5)
     assert ClassResult.objects.get(arm=w.arm, term=w.term).status == "published"
 
 
@@ -119,50 +113,53 @@ def test_publish_queues_cards_and_notifications(w, django_capture_on_commit_call
     assert not mail.outbox
 
 
+def audit_counts(w, *, emails):
+    """The counts-only audit payload: the message id and its email and in-app deliveries
+    (one in-app delivery per ranked student)."""
+    msg = Message.objects.get(kind="results_published")
+    return {"message_id": msg.pk, "email_count": emails, "inapp_count": len(w.students)}
+
+
 def test_no_sms_when_not_configured(w, settings, django_capture_on_commit_callbacks):
     settings.SMS_BACKEND = None
     publish(w, django_capture_on_commit_callbacks)
     assert len(mail.outbox) == len(EMAILS)
     event = AuditEvent.objects.get(action="results.published_notified")
-    assert event.after == {"emails_sent": 5, "sms_queued": 0, "failures": 0}
+    assert event.after == audit_counts(w, emails=5)
 
 
 def test_send_failures_are_logged_and_never_raised(
     w, django_capture_on_commit_callbacks, sms_outbox, caplog
 ):
-    from django.core.mail import send_mail as real_send_mail
-
+    """Email now goes out in ``comms`` batches: a refused address marks that delivery failed
+    (logged by type only) and the rest still go."""
     calls = []
 
-    def flaky(*args, **kwargs):
-        calls.append(kwargs["recipient_list"])
-        if len(calls) == 1:
+    def flaky(self, messages):
+        calls.append(messages[0].to)
+        if messages[0].to == ["c.mum@example.com"]:
             raise SMTPException("refused for c.mum@example.com")
-        return real_send_mail(*args, **kwargs)
-
-    def sms_flaky(to, body):
-        if to.endswith("0004"):
-            raise ConnectionError(f"provider down for {to}")
-        from apps.core.sms import outbox
-
-        outbox.append(mock.Mock(to=to, body=body))
+        mail.outbox.extend(messages)
+        return len(messages)
 
     with (
-        mock.patch("apps.results.notify.send_mail", side_effect=flaky),
-        mock.patch("apps.results.notify.send_sms", side_effect=sms_flaky),
+        mock.patch.object(LocmemBackend, "send_messages", autospec=True, side_effect=flaky),
         caplog.at_level(logging.WARNING),
     ):
         publish(w, django_capture_on_commit_callbacks)
 
     assert len(calls) == len(EMAILS)
     assert len(mail.outbox) == len(EMAILS) - 1
-    assert len(sms_outbox) == len(PHONES) - 1
+    assert not sms_outbox
+    failed = Delivery.objects.get(status="failed")
+    assert (failed.email, failed.error_type) == ("c.mum@example.com", "SMTPException")
+    assert Delivery.objects.filter(channel="email", status="sent").count() == len(EMAILS) - 1
     event = AuditEvent.objects.get(action="results.published_notified")
-    assert event.after == {"emails_sent": 4, "sms_queued": 4, "failures": 2}
+    assert event.after == audit_counts(w, emails=5)
     assert ClassResult.objects.get(arm=w.arm, term=w.term).status == "published"
     logged = caplog.text
-    assert "SMTPException" in logged and "ConnectionError" in logged
-    assert "example.com" not in logged and "0004" not in logged and "Pupil" not in logged
+    assert "SMTPException" in logged
+    assert "example.com" not in logged and "Pupil" not in logged
 
 
 def test_task_does_nothing_unless_still_published(w, sms_outbox):
@@ -182,19 +179,30 @@ def test_task_args_are_redacted_in_logs():
     assert notify_published_task.name in SECRET_ARG_TASKS
 
 
-def test_sending_stops_when_the_class_is_unlocked_part_way(
+def test_class_unlocked_before_the_message_is_created_sends_nothing(
     w, django_capture_on_commit_callbacks, sms_outbox
 ):
-    from django.core.mail import send_mail as real_send_mail
+    """The still-published re-check runs under the class's results lock: an unlock that
+    commits while the task waits for the lock stops the message. (Email is now sent in
+    ``comms`` batches after the message is created, so the old per-recipient stop is gone.)"""
+    from apps.core.locks import school_lock as real_lock
 
-    def unlock_after_first(*args, **kwargs):
+    def unlocked_meanwhile(name):
+        real_lock(name)
         ClassResult.objects.filter(arm=w.arm, term=w.term).update(status="draft")
-        return real_send_mail(*args, **kwargs)
 
-    with mock.patch("apps.results.notify.send_mail", side_effect=unlock_after_first):
+    with mock.patch("apps.results.notify.school_lock", side_effect=unlocked_meanwhile):
         publish(w, django_capture_on_commit_callbacks)
 
-    assert len(mail.outbox) == 1
-    assert not sms_outbox
-    event = AuditEvent.objects.get(action="results.published_notified")
-    assert event.after == {"emails_sent": 1, "sms_queued": 0, "failures": 0}
+    assert not mail.outbox and not sms_outbox
+    assert not Message.objects.exists()
+    assert not AuditEvent.objects.filter(action="results.published_notified").exists()
+
+
+def test_published_class_is_messaged_once(w, django_capture_on_commit_callbacks):
+    publish(w, django_capture_on_commit_callbacks)
+    with django_capture_on_commit_callbacks(execute=True):
+        notify_published_task.delay(w.arm.pk, w.term.pk)
+    assert Message.objects.filter(kind="results_published").count() == 1
+    assert len(mail.outbox) == len(EMAILS)
+    assert AuditEvent.objects.filter(action="results.published_notified").count() == 1

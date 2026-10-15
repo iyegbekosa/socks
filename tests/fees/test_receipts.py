@@ -89,11 +89,15 @@ def test_pdf_contents(school_a, uploads):
         assert "Recorded by" in text and w.bursar.get_full_name() in text
 
 
-def test_guardian_email_is_exact_deduped_and_has_no_balance(school_a, uploads):
+def test_guardian_email_is_exact_deduped_and_has_no_balance(
+    school_a, uploads, django_capture_on_commit_callbacks
+):
     with schema_context("school_a"):
         w = _paid_world()
         mail.outbox.clear()
-        tasks.generate_receipt_task.apply_async(args=[w.payment.pk], queue="reports")
+        # Email goes out on commit through ``comms.notify`` (P6).
+        with django_capture_on_commit_callbacks(execute=True):
+            tasks.generate_receipt_task.apply_async(args=[w.payment.pk], queue="reports")
         year = w.receipt.year
         assert len(mail.outbox) == 1  # the two addresses differ only in case
         assert mail.outbox[0].body == BODY.format(year=year)
@@ -144,7 +148,7 @@ def test_task_names_are_secret_arg_tasks():
 
 
 def test_storage_failure_leaves_pdf_blank_logs_type_and_regenerate_fixes(
-    school_a, uploads, client_a, caplog
+    school_a, uploads, client_a, caplog, django_capture_on_commit_callbacks
 ):
     with schema_context("school_a"):
         w = _paid_world()
@@ -158,13 +162,15 @@ def test_storage_failure_leaves_pdf_blank_logs_type_and_regenerate_fixes(
         assert w.receipt.pdf_name == ""
         login_verified(client_a, w.bursar)
         mail.outbox.clear()
-        r = client_a.post(reverse("fees:receipt_regenerate", args=[w.receipt.pk]))
+        with django_capture_on_commit_callbacks(execute=True):
+            r = client_a.post(reverse("fees:receipt_regenerate", args=[w.receipt.pk]))
         assert r.status_code == 302
         w.receipt.refresh_from_db()
         assert w.receipt.pdf_name != ""
         assert len(mail.outbox) == 1
         # regenerating an existing PDF does not message guardians again
-        client_a.post(reverse("fees:receipt_regenerate", args=[w.receipt.pk]))
+        with django_capture_on_commit_callbacks(execute=True):
+            client_a.post(reverse("fees:receipt_regenerate", args=[w.receipt.pk]))
         assert len(mail.outbox) == 1
 
 

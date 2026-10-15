@@ -7,7 +7,7 @@ from apps.attendance.models import AttendanceRecord, AttendanceSettings, Holiday
 from apps.audit.services import record
 from apps.core.locks import school_lock
 
-FIELDS = ("late_threshold", "edit_window_days", "absence_email")
+FIELDS = ("late_threshold", "edit_window_days", "absence_email", "absence_email_delay_minutes")
 DUPLICATE = "A holiday is already set on this date."
 
 
