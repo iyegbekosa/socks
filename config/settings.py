@@ -51,6 +51,7 @@ TENANT_APPS = [
     "apps.results",
     "apps.fees",
     "apps.attendance",
+    "apps.comms",
     "django_otp",
     "django_otp.plugins.otp_totp",
 ]
@@ -165,6 +166,11 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.fees.tasks.reverify_all_schools",
         "schedule": 900.0,
         "options": {"queue": "payments"},
+    },
+    "comms-send-held": {
+        "task": "apps.comms.tasks.send_held_all_schools",
+        "schedule": 300.0,
+        "options": {"queue": "notifications"},
     },
 }
 # Workers keep Django's JSON LOGGING (see the setup_logging receiver in config/celery.py).
