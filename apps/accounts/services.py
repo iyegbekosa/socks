@@ -3,6 +3,7 @@ import hmac
 import logging
 import secrets
 from collections.abc import Iterable
+from typing import Any
 
 from django.conf import settings
 from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
@@ -105,18 +106,26 @@ def reset_phone_for(user: User) -> str | None:
     return phone or None
 
 
+def current_school() -> Any:
+    """The current school (tenant) row. In a Celery worker ``connection.tenant`` is a bare
+    schema stand-in, so fall back to the tenant registry (which lives in the public schema)."""
+    from django_tenants.utils import get_public_schema_name, get_tenant_model, schema_context
+
+    model = get_tenant_model()
+    tenant = getattr(connection, "tenant", None)
+    if isinstance(tenant, model):
+        return tenant
+    schema = connection.schema_name  # type: ignore[attr-defined]
+    with schema_context(get_public_schema_name()):
+        return model.objects.get(schema_name=schema)
+
+
 def current_school_name() -> str:
-    """The school's name. In a Celery worker ``connection.tenant`` is a bare schema stand-in
-    without a name, so fall back to the tenant registry (which lives in the public schema)."""
+    """The school's name, from ``connection.tenant`` or the tenant registry (see above)."""
     name = getattr(connection.tenant, "name", None)  # type: ignore[attr-defined]
     if name:
         return str(name)
-    from django_tenants.utils import get_public_schema_name, get_tenant_model, schema_context
-
-    schema = connection.schema_name  # type: ignore[attr-defined]
-    with schema_context(get_public_schema_name()):
-        tenant = get_tenant_model().objects.get(schema_name=schema)
-    return str(tenant.name)
+    return str(current_school().name)
 
 
 def reset_email_for(user: User) -> str | None:

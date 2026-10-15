@@ -270,10 +270,10 @@ def test_held_job_returns_stale_sending_rows_and_sends_them(w):
     with schema_context("school_a"):
         stale, fresh = _emails(msg)
         Delivery.objects.filter(pk=stale.pk).update(
-            status="sending", claimed_at=timezone.now() - timedelta(minutes=16)
+            status="sending", claimed_at=timezone.now() - timedelta(minutes=31)
         )
         Delivery.objects.filter(pk=fresh.pk).update(
-            status="sending", claimed_at=timezone.now() - timedelta(minutes=5)
+            status="sending", claimed_at=timezone.now() - timedelta(minutes=20)
         )
     tasks.send_held_school_task.apply(headers={"schema_name": "school_a"})
     with schema_context("school_a"):
@@ -458,3 +458,112 @@ def test_tasks_args_redacted():
     for task in (tasks.send_email_batch_task, tasks.send_held_school_task):
         assert task.name in SECRET_ARG_TASKS
     assert "apps.comms.tasks.send_held_all_schools" in SECRET_ARG_TASKS
+
+
+# --- Final review fixes: Rulings AI (branding), AJ (connection outage), AK (claim ownership) ---
+
+
+def test_email_from_names_the_school_and_replies_to_its_contact(w, settings):
+    settings.DEFAULT_FROM_EMAIL = "Build2Learn <no-reply@build2learn.ng>"
+    School.objects.filter(schema_name="school_a").update(contact_email="office@school-a.ng")
+    try:
+        msg = service.notify(
+            "announcement", students=w.students, subject="S", body="Body.", per_student=False
+        )
+        with schema_context("school_a"):
+            ids = [d.pk for d in _emails(msg)]
+        tasks.send_email_batch_task.apply(args=[ids], headers={"schema_name": "school_a"})
+    finally:
+        School.objects.filter(schema_name="school_a").update(contact_email="")
+    assert len(mail.outbox) == 2
+    assert {m.from_email for m in mail.outbox} == {"School A <no-reply@build2learn.ng>"}
+    assert all(m.reply_to == ["office@school-a.ng"] for m in mail.outbox)
+    assert all(m.body == "Body." for m in mail.outbox)  # texts unchanged
+
+
+def test_no_reply_to_without_school_contact_email(w, settings):
+    settings.DEFAULT_FROM_EMAIL = "no-reply@build2learn.ng"
+    msg = service.notify(
+        "announcement", students=[w.c], subject="S", body="Body.", per_student=False
+    )
+    with schema_context("school_a"):
+        ids = [d.pk for d in _emails(msg)]
+    tasks.send_email_batch_task.apply(args=[ids], headers={"schema_name": "school_a"})
+    assert mail.outbox[0].from_email == "School A <no-reply@build2learn.ng>"
+    assert mail.outbox[0].reply_to == []
+
+
+def test_connection_open_failure_requeues_and_held_job_sends_later(w, caplog):
+    msg = service.notify(
+        "announcement", students=w.students, subject="S", body="B", per_student=False
+    )
+    with schema_context("school_a"):
+        ids = [d.pk for d in _emails(msg)]
+    with mock.patch.object(LocmemBackend, "open", side_effect=smtplib.SMTPConnectError(421, "x")):
+        result = tasks.send_email_batch_task.apply(
+            args=[ids], headers={"schema_name": "school_a"}
+        ).get()
+    assert result == {"sent": 0, "failed": 0, "requeued": 2}
+    assert mail.outbox == []
+    with schema_context("school_a"):
+        rows = _emails(msg)
+    assert {(d.status, d.claimed_at, d.error_type) for d in rows} == {("queued", None, "")}
+    assert caplog.text.count("SMTPConnectError") == 1
+    tasks.send_held_school_task.apply(headers={"schema_name": "school_a"})
+    with schema_context("school_a"):
+        assert {d.status for d in _emails(msg)} == {"sent"}
+    assert len(mail.outbox) == 2
+
+
+def test_reclaimed_row_is_not_sent_or_overwritten_by_the_old_batch(w):
+    msg = service.notify(
+        "announcement", students=w.students, subject="S", body="B", per_student=False
+    )
+    with schema_context("school_a"):
+        first, second = _emails(msg)
+    later = timezone.now() + timedelta(minutes=31)
+    sent_by_old = []
+    real_send = LocmemBackend.send_messages
+
+    def send_then_steal(self, messages):
+        # While the old batch sends its first email, the sweep re-queues and a new batch
+        # re-claims both rows (simulated by moving claimed_at forward).
+        if not sent_by_old:
+            Delivery.objects.filter(pk__in=[first.pk, second.pk]).update(claimed_at=later)
+        sent_by_old.extend(m.to[0] for m in messages)
+        return real_send(self, messages)
+
+    with mock.patch.object(
+        LocmemBackend, "send_messages", autospec=True, side_effect=send_then_steal
+    ):
+        result = tasks.send_email_batch_task.apply(
+            args=[[first.pk, second.pk]], headers={"schema_name": "school_a"}
+        ).get()
+    # The first email was already handed over; its row now belongs to the new claim, so the old
+    # batch neither marks it nor sends the second row.
+    assert sent_by_old == [first.email]
+    assert result == {"sent": 0, "failed": 0, "requeued": 0}
+    with schema_context("school_a"):
+        first.refresh_from_db()
+        second.refresh_from_db()
+    assert (first.status, first.claimed_at, first.sent_at) == ("sending", later, None)
+    assert (second.status, second.claimed_at) == ("sending", later)
+
+
+def test_stale_claim_is_thirty_minutes():
+    assert service.STALE_CLAIM == timedelta(minutes=30)
+
+
+def test_notify_refuses_unknown_channels(w):
+    for bad in (("emial",), (), ("email", "sms")):
+        with pytest.raises(ValueError):
+            service.notify(
+                "announcement",
+                students=[w.a],
+                subject="S",
+                body="B",
+                per_student=False,
+                channels=bad,
+            )
+    with schema_context("school_a"):
+        assert not Message.objects.exists()

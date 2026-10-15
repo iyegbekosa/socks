@@ -11,6 +11,7 @@ Logs carry ids and exception types only; the audit holds counts only.
 import logging
 from collections.abc import Callable, Iterable
 from datetime import datetime, time, timedelta
+from email.utils import formataddr, parseaddr
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -23,7 +24,7 @@ from django.utils import timezone
 from django.utils.dateformat import format as date_format
 
 from apps.academics.services import current_term
-from apps.accounts.services import current_school_name
+from apps.accounts.services import current_school, current_school_name
 from apps.audit.services import record
 from apps.comms.models import SUBJECT_MAX, CommsSettings, Delivery, Message
 from apps.comms.render import check_template, render
@@ -33,7 +34,8 @@ logger = logging.getLogger(__name__)
 
 LAGOS = ZoneInfo("Africa/Lagos")
 BATCH_SIZE = 100
-STALE_CLAIM = timedelta(minutes=15)
+# Comfortably above BATCH_SIZE x EMAIL_TIMEOUT (100 x 10 s), so a slow live batch is not swept.
+STALE_CLAIM = timedelta(minutes=30)
 BULK_KINDS = frozenset({"announcement", "fee_reminder", "results_published"})
 PER_STUDENT_KINDS = frozenset({"fee_reminder", "receipt", "absence"})
 
@@ -153,6 +155,8 @@ def notify(
         raise ValidationError(f"Keep the subject to {SUBJECT_MAX} characters or fewer.")
     check_template(body, per_student=per_student)
     chosen = set(channels)
+    if not chosen or not chosen <= {EMAIL, INAPP}:
+        raise ValueError(f"Unknown channels {sorted(chosen)!r}")
     now = now or clock()
 
     with transaction.atomic():
@@ -255,39 +259,69 @@ def claim(ids: list[int], now: datetime) -> list[int]:
     return pks
 
 
-def _finish(pk: int, status: str, error_type: str = "") -> None:
-    Delivery.objects.filter(pk=pk, status=Delivery.Status.SENDING).update(
-        status=status,
-        error_type=error_type[:80],
-        sent_at=timezone.now() if status == Delivery.Status.SENT else None,
+def _mine(pk: int, claimed_at: datetime) -> Q:
+    """The row ``pk`` while it is still this batch's claim: ``claimed_at`` is the ownership
+    token, so a row swept as stale and re-claimed by another batch is left alone."""
+    return Q(pk=pk, status=Delivery.Status.SENDING, claimed_at=claimed_at)
+
+
+def _finish(pk: int, claimed_at: datetime, status: str, error_type: str = "") -> bool:
+    return bool(
+        Delivery.objects.filter(_mine(pk, claimed_at)).update(
+            status=status,
+            error_type=error_type[:80],
+            sent_at=timezone.now() if status == Delivery.Status.SENT else None,
+        )
     )
+
+
+def sender() -> tuple[str, list[str]]:
+    """The From header and Reply-To list for this school's email: the school's name on the
+    platform address (``DEFAULT_FROM_EMAIL`` may carry its own display name, which is
+    replaced), replying to the school's contact email when it has one."""
+    school = current_school()
+    address = parseaddr(settings.DEFAULT_FROM_EMAIL)[1] or settings.DEFAULT_FROM_EMAIL
+    reply_to = [school.contact_email] if school.contact_email else []
+    return formataddr((str(school.name), address)), reply_to
 
 
 def send_batch(ids: list[int]) -> dict[str, int]:
     """Send the claimable email deliveries among ``ids`` over one connection, marking each
-    ``sent`` or ``failed``. Failures are logged by type and id; the batch continues."""
-    pks = claim(list(ids)[:BATCH_SIZE], timezone.now())
-    counts = {"sent": 0, "failed": 0}
+    ``sent`` or ``failed``. Failures are logged by type and id; the batch continues.
+
+    If the connection cannot be opened nothing was handed to the provider, so the claimed rows
+    go back to ``queued`` (no error recorded) and the 5-minute job retries them. Each row is
+    sent and finished only while its ``claimed_at`` is still this batch's claim time."""
+    claimed_at = timezone.now()
+    pks = claim(list(ids)[:BATCH_SIZE], claimed_at)
+    counts = {"sent": 0, "failed": 0, "requeued": 0}
     if not pks:
         return counts
     deliveries = list(Delivery.objects.filter(pk__in=pks).select_related("message").order_by("pk"))
+    from_email, reply_to = sender()
     connection = get_connection()
     try:
         connection.open()
-    except Exception as exc:  # noqa: BLE001 - mark the batch failed rather than strand it
-        name = type(exc).__name__
-        logger.warning("Email connection for %s deliveries failed (%s).", len(pks), name)
-        for d in deliveries:
-            _finish(d.pk, Delivery.Status.FAILED, name)
-        counts["failed"] = len(deliveries)
+    except Exception as exc:  # noqa: BLE001 - nothing was sent; the held-send job retries
+        logger.warning(
+            "Email connection failed (%s); %s deliveries returned to the queue.",
+            type(exc).__name__,
+            len(pks),
+        )
+        counts["requeued"] = Delivery.objects.filter(
+            pk__in=pks, status=Delivery.Status.SENDING, claimed_at=claimed_at
+        ).update(status=Delivery.Status.QUEUED, claimed_at=None, error_type="")
         return counts
     try:
         for d in deliveries:
+            if not Delivery.objects.filter(_mine(d.pk, claimed_at)).exists():
+                continue  # swept as stale and re-claimed elsewhere: not ours to send
             email = EmailMessage(
                 subject=d.message.subject,
                 body=d.body,
-                from_email=settings.DEFAULT_FROM_EMAIL,
+                from_email=from_email,
                 to=[d.email],
+                reply_to=reply_to,
                 connection=connection,
             )
             try:
@@ -296,10 +330,9 @@ def send_batch(ids: list[int]) -> dict[str, int]:
                 error = type(exc).__name__
             if error:
                 logger.warning("Email delivery %s failed (%s).", d.pk, error)
-                _finish(d.pk, Delivery.Status.FAILED, error)
-                counts["failed"] += 1
-            else:
-                _finish(d.pk, Delivery.Status.SENT)
+                if _finish(d.pk, claimed_at, Delivery.Status.FAILED, error):
+                    counts["failed"] += 1
+            elif _finish(d.pk, claimed_at, Delivery.Status.SENT):
                 counts["sent"] += 1
     finally:
         try:
@@ -310,7 +343,7 @@ def send_batch(ids: list[int]) -> dict[str, int]:
 
 
 def release_and_enqueue_held() -> int:
-    """The 5-minute job for this school: return ``sending`` rows claimed over 15 minutes ago
+    """The 5-minute job for this school: return ``sending`` rows claimed over 30 minutes ago
     to ``queued`` (a crashed worker must not strand them), then enqueue every due queued email
     in batches of 100. Returns the number of deliveries enqueued."""
     now = timezone.now()
@@ -330,7 +363,8 @@ def release_and_enqueue_held() -> int:
 def requeue_failed(message: Message, *, by: Any, request: Any = None) -> int:
     """ "Retry failed": return the message's ``failed`` email deliveries to ``queued`` (clearing
     ``error_type`` and the claim) and enqueue them in batches on commit. Audited as
-    ``comms.retry_failed`` with ``{message_id, count}`` when anything was re-queued."""
+    ``comms.retry_failed`` with ``{message_id, count}`` when anything was re-queued. A bulk
+    message retried in quiet hours is held until they end, like a newly composed one."""
     with transaction.atomic():
         ids = list(
             Delivery.objects.select_for_update()
@@ -340,8 +374,13 @@ def requeue_failed(message: Message, *, by: Any, request: Any = None) -> int:
         )
         if not ids:
             return 0
+        held = None
+        if message.kind in BULK_KINDS:
+            conf = CommsSettings.load()
+            held = quiet_send_after(clock(), conf.email_quiet_start, conf.email_quiet_end)
+        extra = {"send_after": held} if held else {}
         Delivery.objects.filter(pk__in=ids, status=Delivery.Status.FAILED).update(
-            status=Delivery.Status.QUEUED, error_type="", claimed_at=None, sent_at=None
+            status=Delivery.Status.QUEUED, error_type="", claimed_at=None, sent_at=None, **extra
         )
         record(
             "comms.retry_failed",
@@ -350,5 +389,6 @@ def requeue_failed(message: Message, *, by: Any, request: Any = None) -> int:
             obj=message,
             after={"message_id": message.pk, "count": len(ids)},
         )
-        transaction.on_commit(lambda: enqueue_batches(ids))
+        if not held:
+            transaction.on_commit(lambda: enqueue_batches(ids))
     return len(ids)
