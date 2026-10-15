@@ -177,7 +177,7 @@ def test_other_staff_forbidden(client_a, w, role):
 
 def test_student_and_anonymous_refused(client_a, w):
     r = _post(client_a, _body({"type": "school"}))
-    assert r.status_code in (401, 403)
+    assert r.status_code == 401
     client_a.force_login(w.a.user)
     assert _post(client_a, _body({"type": "school"})).status_code == 403
     assert _count() == 0
@@ -186,3 +186,12 @@ def test_student_and_anonymous_refused(client_a, w):
 def test_get_not_allowed(client_a, w):
     login_verified(client_a, w.admin)
     assert client_a.get(URL).status_code == 405
+
+
+def test_body_is_stripped_like_the_html_form(client_a, w):
+    login_verified(client_a, w.admin)
+    r = _post(client_a, _body({"type": "school"}, subject="  S  ", body="\n  Hello.  \n"))
+    assert r.status_code == 201
+    with schema_context("school_a"):
+        msg = Message.objects.get()
+        assert (msg.subject, msg.body) == ("S", "Hello.")

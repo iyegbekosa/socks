@@ -827,8 +827,8 @@ def _message_text(data: dict, field: str, limit: int) -> str:
     value = data.get(field)
     if not isinstance(value, str):
         raise _bad(field, "Must be text.")
-    text = value.strip() if field == "subject" else value
-    if not text.strip():
+    text = value.strip()  # like the HTML form's CharField (strip=True)
+    if not text:
         raise _bad(field, "This field is required.")
     if len(text) > limit:
         raise _bad(field, f"Keep it to {limit} characters or fewer.")
