@@ -129,6 +129,20 @@ Mailpit (<http://localhost:8025>), the web server, a Celery worker and Celery Be
   then reset codes by SMS are unavailable (the reset page says so) and invites go by email
   only. SMS codes are added as a second channel once a provider is configured. Do not set
   it to the console backend in production.
+- **Messages to families (P6) need a verified sender.** Set `DEFAULT_FROM_EMAIL` to an
+  address on a sender domain verified with the provider (SES or Postmark, with SPF, DKIM
+  and DMARC). Guardian emails show the school's name on that address
+  (`"Greenfield School" <no-reply@build2learn.ng>`; any display name in the setting is
+  replaced) and reply to the school's contact email when one is set.
+- **Celery Beat is required.** Run exactly one `celery -A config beat` process and monitor
+  it. Its schedule: `comms-send-held` every 5 minutes (quiet-hours email, stale claims,
+  broker-failure and email-server-outage retries) and `comms-fee-reminders` daily at 08:00
+  Africa/Lagos, plus `fees-reverify` every 15 minutes. Without Beat, held mail never goes
+  out and fee reminders never run. A missed 08:00 run is not caught up: use "Send now".
+- **Provider sending limits.** SES and similar providers rate-limit sending (SES sandbox:
+  1 message/s; production often 14/s). Nothing in the app throttles yet, and a throttled
+  (4xx) send is marked failed: request a limit above your largest school's family count per
+  minute, and use "Has failures" on the Messages page with "Retry failed" if it happens.
 - **Celery worker queues:** the worker must consume all four queues, highest priority first:
   `celery -A config worker -Q payments,notifications,default,reports` (as in
   `docker-compose.yml`). Tasks are routed to these queues (SMS goes to `notifications`); a
