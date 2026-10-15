@@ -18,6 +18,7 @@ from django.db import transaction
 from apps.academics.models import ClassArm, Term
 from apps.audit.services import record
 from apps.comms.models import Message
+from apps.comms.render import literal
 from apps.comms.service import notify
 from apps.core.locks import school_lock
 from apps.results.models import ClassResult, ResultSummary
@@ -27,11 +28,6 @@ logger = logging.getLogger(__name__)
 
 SUBJECT = "Results are ready"
 MESSAGE = "Results for {term} are ready. Log in to the student portal to view them."
-
-
-def _escape(value: str) -> str:
-    """Make a value safe to place in a ``notify`` body as literal text."""
-    return value.replace("{", "{{").replace("}", "}}")
 
 
 def ranked_students(arm: ClassArm, term: Term) -> list[Student]:
@@ -50,8 +46,22 @@ def notify_published(arm: ClassArm, term: Term) -> dict[str, int] | None:
     """Tell the class's families and students that results are out. Does nothing (None) unless
     the class is still published and this publish has not been messaged yet; both are checked
     under the ``results:{arm}:{term}`` lock, so an unlock cannot slip in before the message is
-    created. Returns the counts it audited (email and in-app deliveries of the message)."""
+    created. Returns the counts it audited (email and in-app deliveries of the message).
+    Never raises: a failure to create the message is logged by type and rolled back."""
     term = Term.objects.select_related("session").filter(pk=term.pk).first() or term
+    try:
+        return _notify_locked(arm, term)
+    except Exception as exc:  # noqa: BLE001 - like the receipt and absence senders
+        logger.warning(
+            "Results message for class %s term %s failed (%s).",
+            arm.pk,
+            term.pk,
+            type(exc).__name__,
+        )
+        return None
+
+
+def _notify_locked(arm: ClassArm, term: Term) -> dict[str, int] | None:
     with transaction.atomic():
         school_lock(f"results:{arm.pk}:{term.pk}")
         klass = ClassResult.objects.filter(arm=arm, term=term).first()
@@ -71,7 +81,7 @@ def notify_published(arm: ClassArm, term: Term) -> dict[str, int] | None:
             "results_published",
             students=ranked_students(arm, term),
             subject=SUBJECT,
-            body=MESSAGE.format(term=_escape(str(term))),
+            body=MESSAGE.format(term=literal(str(term))),
             per_student=False,
             related=klass,
             audience_label=f"{arm.display_name} — {term}"[:120],

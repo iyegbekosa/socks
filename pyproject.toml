@@ -57,6 +57,7 @@ markers = [
     "cloudinary: hits the live Cloudinary API (needs CLOUDINARY_URL)",
     "slow: slow tests (still run in CI; deselect locally with -m \"not slow\")",
     "pdf: renders PDFs with WeasyPrint (needs Pango; run via scripts/with-pango locally)",
+    "real_clock: keep comms.notify's real clock (skip the daytime pin in tests/conftest.py)",
 ]
 
 [tool.mypy]

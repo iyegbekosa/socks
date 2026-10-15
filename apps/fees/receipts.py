@@ -15,6 +15,7 @@ from django.template.loader import render_to_string
 
 from apps.branding.models import get_branding
 from apps.comms.models import Message
+from apps.comms.render import literal
 from apps.comms.service import notify
 from apps.core.logging import log_exception_redacted
 from apps.core.money import naira_display
@@ -126,22 +127,6 @@ def generate_receipt(payment_id: int) -> bool:
     return store_receipt(payment_id) != FAILED
 
 
-def _unique(values: list[str | None]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for value in values:
-        text = (value or "").strip()
-        if text and text.lower() not in seen:
-            seen.add(text.lower())
-            out.append(text)
-    return out
-
-
-def _escape(value: str) -> str:
-    """Make a value safe to place in a ``notify`` body as literal text."""
-    return value.replace("{", "{{").replace("}", "}}")
-
-
 def receipt_dedupe_key(receipt: Receipt) -> str:
     return f"receipt:{receipt.pk}"
 
@@ -161,9 +146,9 @@ def send_receipt(payment_id: int) -> dict[str, int]:
     # ``{amount}`` and ``{number}`` are not message placeholders: render them in first (escaped)
     # and leave ``{student_first_name}`` for ``notify``. The text is the P4 text, unchanged.
     template = MESSAGE.format(
-        amount=_escape(naira_display(receipt.payment.amount_kobo)),
+        amount=literal(naira_display(receipt.payment.amount_kobo)),
         first_name="{student_first_name}",
-        number=_escape(receipt.number),
+        number=literal(receipt.number),
     )
     try:
         with transaction.atomic():

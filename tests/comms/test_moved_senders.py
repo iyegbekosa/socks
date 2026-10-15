@@ -4,6 +4,7 @@ Each sender makes one ``Message`` of its kind with exactly the old text, with em
 deliveries, and its own once-only guard still holds on a repeat trigger (Review Focus 5).
 """
 
+from datetime import UTC, datetime
 from unittest import mock
 
 import cloudinary
@@ -115,33 +116,78 @@ def test_receipt_goes_through_notify_once(school_a, uploads, django_capture_on_c
         assert len(mail.outbox) == 1
 
 
-def test_receipt_ignores_quiet_hours(school_a, django_capture_on_commit_callbacks):
-    from datetime import UTC, datetime
+LATE = datetime(2026, 10, 14, 21, 30, tzinfo=UTC)  # 22:30 in Lagos: inside quiet hours
+
+
+def _at_night():
+    """Run ``notify`` at 22:30 Lagos (overrides the suite's daytime pin)."""
+    return mock.patch("apps.comms.service.clock", return_value=LATE)
+
+
+def test_quiet_hours_window_contains_late():
+    from datetime import time
 
     from apps.comms import service
+
+    assert service.quiet_send_after(LATE, time(21, 0), time(7, 0)) is not None
+
+
+def test_receipt_ignores_quiet_hours(school_a, django_capture_on_commit_callbacks):
+    from apps.fees.receipts import send_receipt
 
     with schema_context("school_a"):
         w = _paid_world()
         mail.outbox.clear()
-        late = datetime(2026, 10, 14, 21, 30, tzinfo=UTC)  # 22:30 in Lagos
-        with (
-            mock.patch("apps.comms.service.timezone.now", return_value=late),
-            django_capture_on_commit_callbacks(execute=True),
-        ):
-            from apps.fees.receipts import send_receipt
-
+        with _at_night(), django_capture_on_commit_callbacks(execute=True):
             send_receipt(w.payment.pk)
         (msg,) = Message.objects.filter(kind="receipt")
         assert all(x.send_after is None for x in _channels(msg)["email"])
         assert len(mail.outbox) == 1
-        assert service.quiet_send_after(late, *_quiet()) is not None
 
 
-def _quiet():
-    from apps.comms.models import CommsSettings
+def test_results_published_at_night_is_held_until_seven(
+    results_world,  # noqa: F811
+    django_capture_on_commit_callbacks,
+):
+    with _at_night():
+        publish(results_world, django_capture_on_commit_callbacks)
+    (msg,) = Message.objects.filter(kind="results_published")
+    d = _channels(msg)
+    assert mail.outbox == []
+    assert d["email"] and all(x.status == "queued" and x.send_after for x in d["email"])
+    assert all(x.status == "sent" for x in d["inapp"])  # in-app is never held
 
-    c = CommsSettings.load()
-    return c.email_quiet_start, c.email_quiet_end
+
+@pytest.mark.real_clock
+def test_real_clock_marker_skips_the_daytime_pin():
+    from apps.comms import service
+
+    assert not isinstance(service.clock, mock.Mock)
+
+
+def test_suite_pins_notify_to_daytime():
+    from zoneinfo import ZoneInfo
+
+    from apps.comms import service
+
+    assert service.clock().astimezone(ZoneInfo("Africa/Lagos")).hour == 10
+
+
+def test_results_message_failure_is_logged_and_never_raised(
+    results_world,  # noqa: F811
+    django_capture_on_commit_callbacks,
+    caplog,
+):
+    import logging
+
+    with (
+        mock.patch("apps.results.notify.notify", side_effect=RuntimeError("secret Pupil")),
+        caplog.at_level(logging.WARNING, logger="apps.results"),
+    ):
+        publish(results_world, django_capture_on_commit_callbacks)  # must not raise
+    assert not Message.objects.exists() and mail.outbox == []
+    assert "RuntimeError" in caplog.text
+    assert "secret" not in caplog.text and "Pupil" not in caplog.text
 
 
 # --- absence --------------------------------------------------------------------------------
@@ -286,3 +332,34 @@ def test_receipt_message_carries_its_dedupe_key(
         with django_capture_on_commit_callbacks(execute=True):
             fee_tasks.generate_receipt_task.apply_async(args=[w.payment.pk], queue="reports")
         assert Message.objects.get(kind="receipt").dedupe_key == f"receipt:{w.receipt.pk}"
+
+
+def test_absence_ignores_quiet_hours(client_a, aw, django_capture_on_commit_callbacks):
+    mail.outbox.clear()
+    with schema_context("school_a"):
+        AttendanceSettings.objects.filter(pk=1).update(absence_email_delay_minutes=0)
+        AttendanceSettings.load()
+        with _at_night(), django_capture_on_commit_callbacks(execute=True):
+            _save(client_a, aw, "absent")
+        (msg,) = Message.objects.filter(kind="absence")
+        assert all(x.send_after is None for x in _channels(msg)["email"])
+    assert [m.body for m in mail.outbox] == [ABSENCE_BODY]
+
+
+def test_delay_form_refuses_negative_and_keeps_value_when_omitted(client_a, school_a):
+    from tests.accounts.helpers import login_verified
+    from tests.fees.factories import make_staff
+
+    with schema_context("school_a"):
+        AttendanceSettings.load()
+        AttendanceSettings.objects.filter(pk=1).update(absence_email_delay_minutes=25)
+        admin = make_staff("school_admin")
+    login_verified(client_a, admin)
+    base = {"late_threshold": "3", "edit_window_days": "7", "absence_email": "on"}
+    r = client_a.post("/attendance/settings/", {**base, "absence_email_delay_minutes": "-1"})
+    assert r.status_code == 200
+    r = client_a.post("/attendance/settings/", {**base, "late_threshold": "4"})
+    assert r.status_code == 302
+    with schema_context("school_a"):
+        conf = AttendanceSettings.load()
+        assert (conf.late_threshold, conf.absence_email_delay_minutes) == (4, 25)

@@ -38,6 +38,12 @@ def _fields(body: str, names: tuple[str, ...]) -> list[str]:
     return out
 
 
+def literal(value: str) -> str:
+    """``value`` as literal text inside a body: braces doubled so the strict parser never reads
+    them as a placeholder. For senders that fill a non-placeholder value in before ``notify``."""
+    return value.replace("{", "{{").replace("}", "}}")
+
+
 def check_template(body: str, *, per_student: bool) -> None:
     """Raise ``ValidationError`` unless every placeholder is allowed for this kind of message."""
     _fields(body, allowed(per_student))

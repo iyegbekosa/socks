@@ -41,6 +41,12 @@ EMAIL = Delivery.Channel.EMAIL
 INAPP = Delivery.Channel.INAPP
 
 
+def clock() -> datetime:
+    """The time ``notify`` uses when it is not given ``now``. One seam, so the test suite can
+    pin it to daytime and the quiet-hours rule never depends on when the suite runs."""
+    return timezone.now()
+
+
 def quiet_send_after(now: datetime, start: time, end: time) -> datetime | None:
     """The aware UTC time bulk email composed at ``now`` may go out, or None to send now.
     Quiet hours are ``[start, end)`` in Africa/Lagos, wrapping past midnight when start > end."""
@@ -126,7 +132,7 @@ def notify(
         raise ValidationError(f"Keep the subject to {SUBJECT_MAX} characters or fewer.")
     check_template(body, per_student=per_student)
     chosen = set(channels)
-    now = now or timezone.now()
+    now = now or clock()
 
     with transaction.atomic():
         base = _base_context(now)

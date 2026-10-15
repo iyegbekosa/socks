@@ -1,3 +1,7 @@
+from datetime import datetime, time
+from unittest import mock
+from zoneinfo import ZoneInfo
+
 import pytest
 from django_tenants.utils import get_public_schema_name
 
@@ -77,3 +81,23 @@ def sms_outbox(settings):
     sms.outbox.clear()
     yield sms.outbox
     sms.outbox.clear()
+
+
+@pytest.fixture(autouse=True)
+def _daytime_notify_clock(request):
+    """Pin ``comms.notify``'s clock (``service.clock``, used when no ``now`` is passed) to 10:00
+    Africa/Lagos on today's date, so bulk kinds (announcements, fee reminders, results) are
+    never held by quiet hours just because the suite runs in the evening. Tests that pass
+    ``now=`` are unaffected; mark a test ``real_clock`` to keep the real clock."""
+    if request.node.get_closest_marker("real_clock"):
+        yield
+        return
+    from django.utils import timezone
+
+    from apps.comms import service
+
+    lagos = ZoneInfo("Africa/Lagos")
+    day = timezone.now().astimezone(lagos).date()
+    pinned = datetime.combine(day, time(10, 0), tzinfo=lagos)
+    with mock.patch.object(service, "clock", return_value=pinned):
+        yield
