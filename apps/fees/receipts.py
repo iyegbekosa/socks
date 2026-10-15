@@ -20,7 +20,6 @@ from apps.core.logging import log_exception_redacted
 from apps.core.money import naira_display
 from apps.core.parsing import parse_id
 from apps.core.pdf import render_pdf
-from apps.core.sms import send_sms, sms_configured
 from apps.fees.models import Receipt
 from apps.fees.scope import can_view_fees
 from apps.results.cards import _school_name, load_logo
@@ -143,17 +142,22 @@ def _escape(value: str) -> str:
     return value.replace("{", "{{").replace("}", "}}")
 
 
+def receipt_dedupe_key(receipt: Receipt) -> str:
+    return f"receipt:{receipt.pk}"
+
+
 def send_receipt(payment_id: int) -> dict[str, int]:
     """Tell the student's family (email) and the student (in-app) that a payment was received,
-    through ``comms.notify``; and text the guardians when SMS is configured. No PDF and no
-    balances; email recipients are de-duplicated case-insensitively. Receipts ignore quiet
-    hours. Sends once per receipt: a second run (a redelivered task) finds the message and
-    stops. Failures are logged by type and never raised."""
-    counts = {"emails_queued": 0, "inapp": 0, "sms_queued": 0, "failures": 0}
+    through ``comms.notify``. Email and in-app only: no SMS (Ruling AF). No PDF and no balances;
+    email recipients are de-duplicated case-insensitively. Receipts ignore quiet hours. Sends
+    once per receipt (``dedupe_key`` "receipt:<pk>"): a second run, such as a redelivered
+    task, finds the message and stops. Failures are logged by type and never raised."""
+    counts = {"emails_queued": 0, "inapp": 0, "failures": 0}
     receipt = _receipt_for_payment(payment_id)
     if receipt is None:
         return counts
     student = receipt.payment.student
+    key = receipt_dedupe_key(receipt)
     # ``{amount}`` and ``{number}`` are not message placeholders: render them in first (escaped)
     # and leave ``{student_first_name}`` for ``notify``. The text is the P4 text, unchanged.
     template = MESSAGE.format(
@@ -164,9 +168,7 @@ def send_receipt(payment_id: int) -> dict[str, int]:
     try:
         with transaction.atomic():
             Receipt.objects.select_for_update().filter(pk=receipt.pk).first()
-            if Message.objects.filter(
-                kind=Message.Kind.RECEIPT, related_type="fees.receipt", related_id=receipt.pk
-            ).exists():
+            if Message.objects.filter(kind=Message.Kind.RECEIPT, dedupe_key=key).exists():
                 return counts
             message = notify(
                 "receipt",
@@ -177,6 +179,7 @@ def send_receipt(payment_id: int) -> dict[str, int]:
                 context_for=lambda s: {"student_first_name": s.first_name},
                 related=receipt,
                 audience_label="1 student",
+                dedupe_key=key,
             )
     except Exception as exc:  # noqa: BLE001 - a receipt message must never raise
         counts["failures"] += 1
@@ -186,22 +189,6 @@ def send_receipt(payment_id: int) -> dict[str, int]:
         return counts
     counts["emails_queued"] = message.deliveries.filter(channel="email").count()
     counts["inapp"] = message.deliveries.filter(channel="inapp").count()
-    if sms_configured():
-        body = MESSAGE.format(
-            amount=naira_display(receipt.payment.amount_kobo),
-            first_name=student.first_name,
-            number=receipt.number,
-        )
-        for phone in _unique([student.guardian_phone, student.guardian2_phone]):
-            try:
-                send_sms(phone, body)
-            except Exception as exc:  # noqa: BLE001 - one bad number must not stop the rest
-                counts["failures"] += 1
-                logger.warning(
-                    "Receipt SMS for payment %s failed (%s).", payment_id, type(exc).__name__
-                )
-            else:
-                counts["sms_queued"] += 1
     return counts
 
 

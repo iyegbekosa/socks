@@ -206,3 +206,47 @@ def test_published_class_is_messaged_once(w, django_capture_on_commit_callbacks)
     assert Message.objects.filter(kind="results_published").count() == 1
     assert len(mail.outbox) == len(EMAILS)
     assert AuditEvent.objects.filter(action="results.published_notified").count() == 1
+
+
+def _republished(w):
+    """Unlock then publish again: a new publish event with a later ``published_at``."""
+    from datetime import timedelta
+
+    klass = ClassResult.objects.get(arm=w.arm, term=w.term)
+    ClassResult.objects.filter(pk=klass.pk).update(status="draft")
+    ClassResult.objects.filter(pk=klass.pk).update(
+        status="published", published_at=klass.published_at + timedelta(hours=1)
+    )
+
+
+def test_retry_or_regenerate_of_the_same_publish_sends_nothing(
+    w, django_capture_on_commit_callbacks
+):
+    from apps.results import workflow
+
+    publish(w, django_capture_on_commit_callbacks)
+    with django_capture_on_commit_callbacks(execute=True):
+        notify_published_task.delay(w.arm.pk, w.term.pk)  # a retried task
+    ClassResult.objects.filter(arm=w.arm, term=w.term).update(
+        cards_error=ClassResult.NOTIFY_START_ERROR
+    )
+    with (
+        mock.patch("apps.results.tasks.generate_report_cards_task.apply_async"),
+        django_capture_on_commit_callbacks(execute=True),
+    ):
+        workflow.regenerate_report_cards(w.arm, w.term, by=w.admin)  # re-queues notifications
+    assert Message.objects.filter(kind="results_published").count() == 1
+    assert len(mail.outbox) == len(EMAILS)
+
+
+def test_republish_after_unlock_notifies_again(w, django_capture_on_commit_callbacks):
+    publish(w, django_capture_on_commit_callbacks)
+    _republished(w)
+    with django_capture_on_commit_callbacks(execute=True):
+        notify_published_task.delay(w.arm.pk, w.term.pk)
+    msgs = list(Message.objects.filter(kind="results_published").order_by("pk"))
+    assert len(msgs) == 2
+    assert msgs[0].dedupe_key != msgs[1].dedupe_key
+    assert len(mail.outbox) == 2 * len(EMAILS)
+    assert all(m.body == BODY for m in mail.outbox)
+    assert AuditEvent.objects.filter(action="results.published_notified").count() == 2

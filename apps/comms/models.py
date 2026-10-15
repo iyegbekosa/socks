@@ -41,10 +41,20 @@ class Message(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
     related_type = models.CharField(max_length=60, blank=True)
     related_id = models.PositiveBigIntegerField(null=True, blank=True)
+    # The once-only key of an automatic notice (e.g. "receipt:12" or one results publish
+    # event); blank for messages that may repeat. Unique per kind when set.
+    dedupe_key = models.CharField(max_length=100, blank=True, default="")
 
     class Meta:
         ordering = ["-created_at", "-pk"]
         indexes = [models.Index(fields=["kind", "created_at"], name="comms_msg_kind_created")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["kind", "dedupe_key"],
+                condition=~Q(dedupe_key=""),
+                name="comms_message_dedupe_unique",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.get_kind_display()} {self.pk}"

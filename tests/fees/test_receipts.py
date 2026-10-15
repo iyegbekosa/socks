@@ -104,17 +104,23 @@ def test_guardian_email_is_exact_deduped_and_has_no_balance(
         assert "balance" not in mail.outbox[0].body.lower()
 
 
-def test_sms_goes_to_guardian_phones_when_configured(school_a, uploads, settings):
+def test_no_sms_for_a_receipt_even_when_configured(
+    school_a, uploads, sms_outbox, django_capture_on_commit_callbacks
+):
+    """Ruling AF: receipts are email and in-app only, even with an SMS backend configured."""
     with schema_context("school_a"):
         w = _paid_world()
         w.student.guardian_phone = "+2348012345678"
         w.student.save()
+        mail.outbox.clear()
         with (
-            mock.patch("apps.fees.receipts.sms_configured", return_value=True),
-            mock.patch("apps.fees.receipts.send_sms") as sms,
+            mock.patch("apps.core.sms.send_sms") as sms,
+            django_capture_on_commit_callbacks(execute=True),
         ):
             tasks.generate_receipt_task.apply_async(args=[w.payment.pk], queue="reports")
-        sms.assert_called_once_with("+2348012345678", BODY.format(year=w.receipt.year))
+        sms.assert_not_called()
+        assert sms_outbox == []
+        assert len(mail.outbox) == 1
 
 
 def test_hook_enqueues_on_reports_queue_and_swallows_errors(school_a, caplog):

@@ -260,3 +260,29 @@ def test_delay_setting_range_and_form(client_a, school_a):
     assert r.status_code == 302
     with schema_context("school_a"):
         assert AttendanceSettings.load().absence_email_delay_minutes == 30
+
+
+# --- dedupe key (Ruling AG) -----------------------------------------------------------------
+
+
+def test_dedupe_key_unique_per_kind_when_set(school_a):
+    from django.db import IntegrityError, transaction
+
+    with schema_context("school_a"):
+        Message.objects.create(kind="announcement", subject="S", body="B")
+        Message.objects.create(kind="announcement", subject="S", body="B")  # blank: repeatable
+        Message.objects.create(kind="receipt", subject="S", body="B", dedupe_key="receipt:1")
+        Message.objects.create(kind="absence", subject="S", body="B", dedupe_key="receipt:1")
+        with pytest.raises(IntegrityError), transaction.atomic():
+            Message.objects.create(kind="receipt", subject="S", body="B", dedupe_key="receipt:1")
+
+
+@pytest.mark.pdf
+def test_receipt_message_carries_its_dedupe_key(
+    school_a, uploads, django_capture_on_commit_callbacks
+):
+    with schema_context("school_a"):
+        w = _paid_world()
+        with django_capture_on_commit_callbacks(execute=True):
+            fee_tasks.generate_receipt_task.apply_async(args=[w.payment.pk], queue="reports")
+        assert Message.objects.get(kind="receipt").dedupe_key == f"receipt:{w.receipt.pk}"

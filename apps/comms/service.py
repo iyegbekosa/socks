@@ -105,13 +105,16 @@ def notify(
     related: Any = None,
     audience_label: str = "",
     now: datetime | None = None,
+    dedupe_key: str = "",
 ) -> Message:
     """Send ``body`` to the families (email) and student users (in-app) of ``students``.
 
     Family email is de-duplicated case-insensitively across the whole message, so a guardian
     of two siblings gets one email; when ``per_student`` the body differs per student and
     de-duplication is per (email, student) instead. ``context_for(student)`` adds per-student
-    placeholder values. Raises ``ValidationError`` for a bad subject or placeholder."""
+    placeholder values. ``dedupe_key`` marks an automatic notice that must go once: a second
+    message of the same kind and key raises ``IntegrityError`` (callers check first under their
+    own lock). Raises ``ValidationError`` for a bad subject or placeholder."""
     if kind not in Message.Kind.values:
         raise ValueError(f"Unknown message kind {kind!r}")
     if per_student and kind not in PER_STUDENT_KINDS:
@@ -142,6 +145,7 @@ def notify(
                 f"{related._meta.app_label}.{related._meta.model_name}" if related else ""
             ),
             related_id=related.pk if related else None,
+            dedupe_key=dedupe_key,
         )
         rows: list[Delivery] = []
         seen_students: set[int] = set()
