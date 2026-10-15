@@ -165,3 +165,38 @@ def test_portal_badge(client_a, w):
     html = client_a.get(reverse("home")).content.decode()
     assert "Inbox (" not in html
     assert reverse("comms:inbox") in html
+
+
+def test_own_email_delivery_is_404_on_the_item_route(client_a, w):
+    Delivery.objects.filter(pk=w.da.pk).update(channel="email", email="mum@example.com")
+    client_a.force_login(w.a.user)
+    assert client_a.get(reverse("comms:inbox_item", args=[w.da.pk])).status_code == 404
+    w.da.refresh_from_db()
+    assert w.da.read_at is None
+
+
+def test_subject_is_escaped_on_list_and_item(client_a, w):
+    with schema_context("school_a"):
+        msg = service.notify(
+            "announcement",
+            students=[w.a],
+            subject="<script>alert(1)</script>",
+            body="B",
+            per_student=False,
+            channels=("inapp",),
+        )
+        item = Delivery.objects.get(message=msg)
+    client_a.force_login(w.a.user)
+    for url in (reverse("comms:inbox"), reverse("comms:inbox_item", args=[item.pk])):
+        html = client_a.get(url).content.decode()
+        assert "<script>alert(1)</script>" not in html, url
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html, url
+
+
+def test_anonymous_item_and_read_all_redirect_to_login(client_a, w):
+    r = client_a.get(reverse("comms:inbox_item", args=[w.da.pk]))
+    assert r.status_code == 302 and "/accounts/login/" in r["Location"]
+    r = client_a.post(reverse("comms:inbox_read_all"))
+    assert r.status_code == 302 and "/accounts/login/" in r["Location"]
+    w.da.refresh_from_db()
+    assert w.da.read_at is None

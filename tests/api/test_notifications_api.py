@@ -75,9 +75,9 @@ def test_staff_403(client_a, w):
     assert client_a.post(f"{URL}/{w.da.pk}/read").status_code == 403
 
 
-def test_anonymous_401_or_403(client_a, w):
-    assert client_a.get(URL).status_code in (401, 403)
-    assert client_a.post(f"{URL}/{w.da.pk}/read").status_code in (401, 403)
+def test_anonymous_401(client_a, w):
+    assert client_a.get(URL).status_code == 401
+    assert client_a.post(f"{URL}/{w.da.pk}/read").status_code == 401
 
 
 def test_read_marks_and_is_idempotent(client_a, w):
@@ -107,3 +107,48 @@ def test_read_other_students_delivery_404(client_a, w):
 def test_read_is_post_only(client_a, w):
     client_a.force_login(w.a.user)
     assert client_a.get(f"{URL}/{w.da.pk}/read").status_code == 405
+
+
+def test_created_at_is_the_message_time(client_a, w):
+    from django.utils.dateparse import parse_datetime
+
+    client_a.force_login(w.a.user)
+    item = client_a.get(URL).json()["results"][0]
+    assert parse_datetime(item["created_at"]) == w.da.message.created_at
+
+
+def test_pagination_page_size_and_page(client_a, w):
+    with schema_context("school_a"):
+        for i in range(55):
+            service.notify(
+                "announcement",
+                students=[w.a],
+                subject=f"N{i}",
+                body="B",
+                per_student=False,
+                channels=("inapp",),
+            )
+    client_a.force_login(w.a.user)
+    first = client_a.get(URL).json()
+    assert first["count"] == 56 and len(first["results"]) == 50 and first["next"]
+    second = client_a.get(URL, {"page": 2}).json()
+    assert len(second["results"]) == 6 and second["next"] is None
+    assert len(client_a.get(URL, {"page_size": 10}).json()["results"]) == 10
+    ids = [i["id"] for i in first["results"] + second["results"]]
+    assert len(set(ids)) == 56
+
+
+@pytest.mark.parametrize("raw", ["abc", "0", "-1", "١٢"])
+def test_read_bad_ids_404(client_a, w, raw):
+    client_a.force_login(w.a.user)
+    r = client_a.post(f"{URL}/{raw}/read")
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_read_own_email_delivery_404(client_a, w):
+    Delivery.objects.filter(pk=w.da.pk).update(channel="email", email="mum@example.com")
+    client_a.force_login(w.a.user)
+    assert client_a.post(f"{URL}/{w.da.pk}/read").status_code == 404
+    w.da.refresh_from_db()
+    assert w.da.read_at is None
