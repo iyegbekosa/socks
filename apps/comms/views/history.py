@@ -10,7 +10,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
 from apps.academics.services import current_session
-from apps.accounts.roles import require_roles
+from apps.accounts.roles import BURSAR, SCHOOL_ADMIN, require_roles
 from apps.comms.models import Delivery, Message
 from apps.comms.scope import (
     HISTORY_ROLES,
@@ -66,6 +66,7 @@ def history(request):
             "kind": kind,
             "kinds": Message.Kind.choices,
             "can_compose": bool(audiences_for(request.user)),
+            "can_manage_reminders": request.user.has_role(BURSAR, SCHOOL_ADMIN),
         },
     )
 

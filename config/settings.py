@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import environ
+from celery.schedules import crontab
 from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -170,6 +171,11 @@ CELERY_BEAT_SCHEDULE = {
     "comms-send-held": {
         "task": "apps.comms.tasks.send_held_all_schools",
         "schedule": 300.0,
+        "options": {"queue": "notifications"},
+    },
+    "comms-fee-reminders": {
+        "task": "apps.comms.tasks.send_reminders_all_schools",
+        "schedule": crontab(hour=8, minute=0),
         "options": {"queue": "notifications"},
     },
 }

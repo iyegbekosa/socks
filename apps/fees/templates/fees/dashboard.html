@@ -26,7 +26,7 @@
   </dl>
   <p class="hint">Invoiced, Collected and Outstanding count only invoices for this term. Invoiced includes balances brought forward from earlier terms; Outstanding leaves out balances carried into a later invoice, so invoiced minus collected equals outstanding plus any balances carried forward from this term.</p>
   <p class="hint">Owed up to this term counts open balances on invoices for this term and every earlier term, exactly as the Debtors list does for this term.</p>
-  <p><a href="{% url 'fees:debtors' %}?term={{ term.pk }}">Debtors list</a> · <a href="{% url 'fees:invoices' %}?term={{ term.pk }}">Invoices</a></p>
+  <p><a href="{% url 'fees:debtors' %}?term={{ term.pk }}">Debtors list</a> · <a href="{% url 'fees:invoices' %}?term={{ term.pk }}">Invoices</a>{% if can_manage_reminders %} · <a href="{% url 'comms:reminders' %}">Fee reminders</a>{% endif %}</p>
   {% else %}<p>No terms yet. Ask the school admin to set up the academic session first.</p>{% endif %}
 </div>
 {% endblock %}

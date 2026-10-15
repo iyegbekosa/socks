@@ -13,7 +13,7 @@ from django.utils.cache import add_never_cache_headers
 from django.views.decorators.cache import never_cache
 
 from apps.academics.models import ClassArm, ClassLevel, Term
-from apps.accounts.roles import require_roles
+from apps.accounts.roles import BURSAR, SCHOOL_ADMIN, require_roles
 from apps.core.money import kobo_from_naira
 from apps.fees import debtors as debtors_service
 from apps.fees.forms import naira_text
@@ -159,5 +159,6 @@ def dashboard(request):
             "today_kobo": int(today),
             "pending_count": pending,
             "flagged_count": flagged,
+            "can_manage_reminders": request.user.has_role(BURSAR, SCHOOL_ADMIN),
         },
     )

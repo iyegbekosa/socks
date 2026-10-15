@@ -6,6 +6,7 @@
   <h1>Messages</h1>
   {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
   {% if can_compose %}<p><a href="{% url 'comms:compose' %}">New announcement</a></p>{% endif %}
+  {% if can_manage_reminders %}<p><a href="{% url 'comms:reminders' %}">Fee reminders</a></p>{% endif %}
   <form method="get">
     <label for="kind">Kind</label>
     <select name="kind" id="kind"><option value="">All kinds</option>{% for value, name in kinds %}<option value="{{ value }}"{% if value == kind %} selected{% endif %}>{{ name }}</option>{% endfor %}</select>
