@@ -298,7 +298,10 @@ def sender() -> tuple[str, list[str]]:
     school = current_school()
     address = parseaddr(settings.DEFAULT_FROM_EMAIL)[1] or settings.DEFAULT_FROM_EMAIL
     reply_to = [school.contact_email] if school.contact_email else []
-    return formataddr((str(school.name), address)), reply_to
+    # Collapse whitespace: a CR/LF in a self-service school name would make Django refuse
+    # the header (BadHeaderError) and fail every email from that school.
+    name = " ".join(str(school.name).split())
+    return formataddr((name, address)), reply_to
 
 
 def send_batch(ids: list[int]) -> dict[str, int]:

@@ -576,3 +576,18 @@ def test_term_placeholder_has_one_wording(w):
     assert _inapp(msg)[0].body == "Term: 2026/2027 1st Term."
     assert service.term_text(w.terms.term1) == "2026/2027 1st Term"
     assert service.term_text(None) == ""
+
+
+def test_newline_in_school_name_does_not_break_email(w, settings):
+    settings.DEFAULT_FROM_EMAIL = "no-reply@build2learn.ng"
+    School.objects.filter(schema_name="school_a").update(name="School\r\nA")
+    try:
+        msg = service.notify(
+            "announcement", students=[w.c], subject="S", body="Body.", per_student=False
+        )
+        with schema_context("school_a"):
+            ids = [d.pk for d in _emails(msg)]
+        tasks.send_email_batch_task.apply(args=[ids], headers={"schema_name": "school_a"})
+    finally:
+        School.objects.filter(schema_name="school_a").update(name="School A")
+    assert mail.outbox[0].from_email == "School A <no-reply@build2learn.ng>"
