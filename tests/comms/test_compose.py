@@ -131,8 +131,73 @@ def test_replayed_token_sends_nothing_twice(client_a, w, django_capture_on_commi
 def test_forged_token_is_refused(client_a, w):
     login_verified(client_a, w.admin)
     _token(client_a)
-    r = client_a.post(COMPOSE, _data("not-a-token"))
+    r = client_a.post(COMPOSE, _data("not-a-token"), follow=True)
+    assert r.redirect_chain[-1][0] == COMPOSE
+    html = r.content.decode()
+    assert "This form has expired or was already used — nothing was sent." in html
+    assert "already sent" not in html
+    assert _count() == 0
+
+
+def test_expired_session_token_says_nothing_was_sent(client_a, w):
+    login_verified(client_a, w.admin)
+    token = _token(client_a)
+    session = client_a.session
+    session["comms_compose_tokens"] = []
+    session.save()
+    r = client_a.post(COMPOSE, _data(token), follow=True)
+    assert "nothing was sent" in r.content.decode()
+    assert _count() == 0
+
+
+def test_back_then_preview_after_send_does_not_offer_send_again(
+    client_a, w, django_capture_on_commit_callbacks
+):
+    login_verified(client_a, w.admin)
+    token = _token(client_a)
+    with django_capture_on_commit_callbacks(execute=True):
+        assert client_a.post(COMPOSE, _data(token)).status_code == 302
+    r = client_a.post(COMPOSE, _data(token, action="preview"), follow=True)
+    assert r.redirect_chain[-1][0] == reverse("comms:history")
+    assert "This message was already sent." in r.content.decode()
+    assert _count() == 1
+
+
+def test_send_when_message_with_live_token_exists_redirects(client_a, w):
+    """The DB ``exists()`` branch: the token is still live but its message was created."""
+    from apps.comms import service
+
+    login_verified(client_a, w.admin)
+    token = _token(client_a)
+    with schema_context("school_a"):
+        service.notify(
+            "announcement",
+            students=[w.a],
+            subject="S",
+            body="B",
+            per_student=False,
+            dedupe_key=f"compose:{token}",
+        )
+    r = client_a.post(COMPOSE, _data(token))
     assert r.status_code == 302 and r["Location"] == reverse("comms:history")
+    assert _count() == 1
+
+
+def test_concurrent_send_integrity_error_redirects(client_a, w):
+    """The ``IntegrityError`` branch: another request created the message in between."""
+    from unittest import mock
+
+    from django.db import IntegrityError
+
+    login_verified(client_a, w.admin)
+    token = _token(client_a)
+    with (
+        mock.patch("apps.comms.views.compose._sent_with", return_value=False),
+        mock.patch("apps.comms.announcements.send", side_effect=IntegrityError),
+    ):
+        r = client_a.post(COMPOSE, _data(token), follow=True)
+    assert r.redirect_chain[-1][0] == reverse("comms:history")
+    assert "This message was already sent." in r.content.decode()
     assert _count() == 0
 
 

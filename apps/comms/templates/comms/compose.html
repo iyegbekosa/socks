@@ -4,6 +4,7 @@
 <div class="card">
   <p><a href="{% url 'comms:history' %}">Back to messages</a></p>
   <h1>New announcement</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
   <p class="hint">Each family gets one email, however many of their children are in the audience; each student also sees it in their inbox.</p>
   <form method="post">
     {% csrf_token %}

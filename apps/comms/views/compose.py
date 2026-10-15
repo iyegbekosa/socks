@@ -21,6 +21,7 @@ from apps.comms.scope import BURSAR_AUDIENCES, COMPOSE_ROLES, audiences_for
 SESSION_KEY = "comms_compose_tokens"
 MAX_TOKENS = 20
 ALREADY_SENT = "This message was already sent."
+EXPIRED = "This form has expired or was already used — nothing was sent."
 
 
 def _issue_token(request) -> str:
@@ -47,6 +48,19 @@ def _already_sent(request):
     return redirect("comms:history")
 
 
+def _expired(request):
+    messages.info(request, EXPIRED)
+    return redirect("comms:compose")
+
+
+def _sent_with(token: str) -> bool:
+    return bool(token) and (
+        Message.objects.filter(
+            kind=Message.Kind.ANNOUNCEMENT, dedupe_key=_dedupe_key(token)
+        ).exists()
+    )
+
+
 def _page(request, form, preview=None):
     return render(
         request,
@@ -71,13 +85,13 @@ def compose(request):
     action = request.POST.get("action")
     token = request.POST.get("token", "")
     data = request.POST.copy()
+    # A token that already sent a message (a replay, or Back then preview again) goes to
+    # history; one that is neither live nor used (forged, or the session expired) sent nothing.
+    if _sent_with(token):
+        return _already_sent(request)
     if action == "send":
-        if not _token_live(request, token) or (
-            Message.objects.filter(
-                kind=Message.Kind.ANNOUNCEMENT, dedupe_key=_dedupe_key(token)
-            ).exists()
-        ):
-            return _already_sent(request)
+        if not _token_live(request, token):
+            return _expired(request)
     elif not _token_live(request, token):
         data["token"] = _issue_token(request)
 
