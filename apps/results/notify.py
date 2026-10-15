@@ -19,7 +19,7 @@ from apps.academics.models import ClassArm, Term
 from apps.audit.services import record
 from apps.comms.models import Message
 from apps.comms.render import literal
-from apps.comms.service import notify, record_notify_failure
+from apps.comms.service import notify, record_notify_failure, term_text
 from apps.core.locks import school_lock
 from apps.core.logging import log_exception_redacted
 from apps.results.models import ClassResult, ResultSummary
@@ -93,7 +93,7 @@ def _notify_locked(arm: ClassArm, term: Term) -> dict[str, int] | None:
             "results_published",
             students=ranked_students(arm, term),
             subject=SUBJECT,
-            body=MESSAGE.format(term=literal(str(term))),
+            body=MESSAGE.format(term=literal(term_text(term))),
             per_student=False,
             related=klass,
             audience_label=f"{arm.display_name} — {term}"[:120],

@@ -16,7 +16,7 @@ from apps.academics.models import Term
 from apps.academics.services import current_term
 from apps.comms import audience
 from apps.comms.models import CommsSettings, FeeReminderDate, Message
-from apps.comms.service import notify
+from apps.comms.service import notify, term_text
 from apps.core.locks import school_lock
 from apps.core.money import naira_display
 from apps.fees.debtors import debtors
@@ -30,10 +30,6 @@ MAX_DATES = 6
 
 def dedupe_key(today: date) -> str:
     return f"fee_reminder:{today.isoformat()}"
-
-
-def term_name(term: Term) -> str:
-    return f"{term.get_number_display()} {term.session.name}"
 
 
 def send_due_reminders(today: date) -> Message | None:
@@ -68,7 +64,6 @@ def _send(term: Term, today: date, *, by) -> Message | None:
         if not rows:
             return None
         balances = {r.student.pk: r.balance_kobo for r in rows}
-        name = term_name(term)
         label = audience.label(
             audience.Audience(
                 type="debtors", term=term.pk, min_balance_kobo=conf.reminder_min_balance_kobo
@@ -82,7 +77,7 @@ def _send(term: Term, today: date, *, by) -> Message | None:
             per_student=True,
             context_for=lambda s: {
                 "student_first_name": s.first_name,
-                "term": name,
+                "term": term_text(term),
                 "balance": naira_display(balances[s.pk]),
             },
             by=by,

@@ -22,7 +22,7 @@ pytestmark = pytest.mark.django_db
 
 URL = "/messages/reminders/"
 EXACT = (
-    "Dear parent, Ada's school fees balance for 1st Term 2026/2027 is ₦50,000.00. "
+    "Dear parent, Ada's school fees balance for 2026/2027 1st Term is ₦50,000.00. "
     "Please pay through the student portal or at the school bursary. Thank you."
 )
 

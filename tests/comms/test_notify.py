@@ -567,3 +567,12 @@ def test_notify_refuses_unknown_channels(w):
             )
     with schema_context("school_a"):
         assert not Message.objects.exists()
+
+
+def test_term_placeholder_has_one_wording(w):
+    msg = service.notify(
+        "announcement", students=[w.a], subject="S", body="Term: {term}.", per_student=False
+    )
+    assert _inapp(msg)[0].body == "Term: 2026/2027 1st Term."
+    assert service.term_text(w.terms.term1) == "2026/2027 1st Term"
+    assert service.term_text(None) == ""

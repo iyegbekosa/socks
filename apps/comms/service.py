@@ -71,11 +71,15 @@ def _family_emails(student: Student) -> list[str]:
     return out
 
 
+def term_text(term: Any) -> str:
+    """What ``{term}`` shows in every message kind: the P3 wording, "2026/2027 1st Term"."""
+    return str(term) if term else ""
+
+
 def _base_context(now: datetime) -> dict[str, str]:
-    term = current_term()
     return {
         "school_name": current_school_name(),
-        "term": str(term) if term else "",
+        "term": term_text(current_term()),
         "date": date_format(now.astimezone(LAGOS).date(), "j F Y"),
     }
 
