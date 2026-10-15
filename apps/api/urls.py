@@ -22,6 +22,12 @@ urlpatterns = [
     ),
     path("invoices", views.InvoiceListView.as_view(), name="invoices"),
     path("payments/manual", views.ManualPaymentView.as_view(), name="payments_manual"),
+    path("notifications", views.NotificationListView.as_view(), name="notifications"),
+    path(
+        "notifications/<str:pk>/read",
+        views.NotificationReadView.as_view(),
+        name="notification_read",
+    ),
     path(
         "attendance/<str:arm>/<str:date>",
         views.AttendanceRegisterView.as_view(),

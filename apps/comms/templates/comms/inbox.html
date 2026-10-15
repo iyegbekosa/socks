@@ -1,0 +1,26 @@
+{% extends "core/base.html" %}
+{% block title %}Inbox{% endblock %}
+{% block content %}
+<div class="card">
+<h1>Inbox</h1>
+{% if unread %}
+<form method="post" action="{% url 'comms:inbox_read_all' %}">{% csrf_token %}
+<button type="submit">Mark all read</button>
+</form>
+{% endif %}
+{% if page.object_list %}
+<ul>
+{% for d in page.object_list %}
+<li>{% if d.read_at %}<a href="{% url 'comms:inbox_item' d.pk %}">{{ d.message.subject }}</a>{% else %}<strong><a href="{% url 'comms:inbox_item' d.pk %}">{{ d.message.subject }}</a></strong> <span class="muted">(unread)</span>{% endif %}
+ <span class="muted">{{ d.message.created_at|date:"j F Y, H:i" }}</span></li>
+{% endfor %}
+</ul>
+{% if page.has_previous or page.has_next %}
+<p>
+{% if page.has_previous %}<a href="?page={{ page.previous_page_number }}">Newer</a>{% endif %}
+{% if page.has_next %}<a href="?page={{ page.next_page_number }}">Older</a>{% endif %}
+</p>
+{% endif %}
+{% else %}<p class="muted">No messages yet.</p>{% endif %}
+</div>
+{% endblock %}

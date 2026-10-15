@@ -1,0 +1,10 @@
+{% extends "core/base.html" %}
+{% block title %}{{ delivery.message.subject }}{% endblock %}
+{% block content %}
+<div class="card">
+<p><a href="{% url 'comms:inbox' %}">Back to inbox</a></p>
+<h1>{{ delivery.message.subject }}</h1>
+<p class="muted">{{ delivery.message.created_at|date:"j F Y, H:i" }}</p>
+<p>{{ delivery.body|linebreaksbr }}</p>
+</div>
+{% endblock %}

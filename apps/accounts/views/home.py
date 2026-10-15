@@ -42,6 +42,7 @@ def _student_home(request):
     # apps.accounts, so a top-level import would be circular.
     from apps.academics.services import current_term
     from apps.attendance.totals import term_totals
+    from apps.comms.inbox import unread_count
     from apps.fees.checkout import payable_invoices
     from apps.fees.invoicing import outstanding_for
     from apps.students.models import Enrolment, Student
@@ -65,6 +66,7 @@ def _student_home(request):
         "students/portal_profile.html",
         {
             "attendance": attendance,
+            "unread": unread_count(request.user),
             "student": student,
             "enrolment": enrolment,
             "term": term,

@@ -31,11 +31,14 @@ from apps.api.serializers import (
     ImportJobSerializer,
     ImportUploadSerializer,
     InvoiceSerializer,
+    NotificationSerializer,
     StudentListSerializer,
     sheet_data_json,
 )
 from apps.attendance import register as attendance
 from apps.attendance.days import RegisterDateError, check_register_date
+from apps.comms.inbox import inbox_for, mark_read
+from apps.comms.models import Delivery
 from apps.core.errors import ApiError
 from apps.core.money import money_fields
 from apps.core.parsing import parse_id
@@ -721,3 +724,39 @@ class AttendanceRegisterView(APIView):
             ]
             raise _validation(details) from exc
         return self._respond(klass, d, term, level)
+
+
+class IsStudent(IsAuthenticated):  # type: ignore[misc]
+    def has_permission(self, request: Request, view: Any) -> bool:
+        if not super().has_permission(request, view):
+            return False
+        if getattr(request.user, "kind", None) != "student":
+            raise ApiError("FORBIDDEN", "Only students have an inbox.", 403)
+        return True
+
+
+class NotificationListView(ListAPIView):  # type: ignore[type-arg]
+    """GET: the student's own in-app messages, newest first, paginated like the student list."""
+
+    permission_classes = [IsStudent]
+    serializer_class = NotificationSerializer
+    pagination_class = StudentPagination
+    http_method_names = ["get", "head", "options"]
+
+    def get_queryset(self) -> QuerySet[Delivery]:
+        return inbox_for(self.request.user)
+
+
+class NotificationReadView(APIView):
+    """POST: mark one of the student's own messages read (idempotent)."""
+
+    permission_classes = [IsStudent]
+    http_method_names = ["post", "options"]
+
+    def post(self, request: Request, pk: str) -> Response:
+        delivery_id = parse_id(pk)
+        delivery = inbox_for(request.user).filter(pk=delivery_id).first() if delivery_id else None
+        if delivery is None:
+            raise _not_found("Notification")
+        mark_read(delivery)
+        return Response({"id": delivery.pk, "read": True})

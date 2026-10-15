@@ -252,6 +252,26 @@ def student_sibling_actor():
     return StudentProfileFactory.create(guardian_phone=SHARED_PHONE).user
 
 
+# A unique string in school B's in-app message body: it must never reach school A.
+NOTIFICATION_MARKER = "Zqxnotifbodyonly"
+
+
+def _marked_delivery_in_active_schema():
+    from apps.comms import service
+    from tests.students.factories import StudentProfileFactory
+
+    student = StudentProfileFactory.create()
+    service.notify(
+        "announcement",
+        students=[student],
+        subject="Notice",
+        body=f"Hello {NOTIFICATION_MARKER}",
+        per_student=False,
+        channels=("inapp",),
+    )
+    return student.deliveries.get(channel="inapp")
+
+
 def _tiny_csv() -> dict:
     from django.core.files.uploadedfile import SimpleUploadedFile
 
@@ -502,6 +522,41 @@ ISOLATION_CASES: list[IsolationCase] = [
         body_for=_attendance_body,
         actor=None,
         count_model=_attendance_count,
+        label="anonymous",
+    ),
+    IsolationCase(
+        "api:notifications",
+        "GET",
+        url=lambda d: "/api/v1/notifications",
+        make_obj=_marked_delivery_in_active_schema,
+        actor=student_actor,
+        expect="absent",
+        marker=lambda d: NOTIFICATION_MARKER,
+        label="student",
+    ),
+    IsolationCase(
+        "api:notifications",
+        "GET",
+        url=lambda d: "/api/v1/notifications",
+        make_obj=_marked_delivery_in_active_schema,
+        actor=None,
+        label="anonymous",
+    ),
+    # School B's delivery id is unknown in A: 404, and B's delivery stays unread.
+    IsolationCase(
+        "api:notification_read",
+        "POST",
+        url=lambda d: f"/api/v1/notifications/{d.pk}/read",
+        make_obj=_marked_delivery_in_active_schema,
+        actor=student_actor,
+        label="student",
+    ),
+    IsolationCase(
+        "api:notification_read",
+        "POST",
+        url=lambda d: f"/api/v1/notifications/{d.pk}/read",
+        make_obj=_marked_delivery_in_active_schema,
+        actor=None,
         label="anonymous",
     ),
 ]

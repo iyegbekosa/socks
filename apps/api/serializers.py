@@ -117,3 +117,16 @@ class InvoiceSerializer(serializers.Serializer):  # type: ignore[type-arg]
             for line in invoice.lines.all()
         ]
         return data
+
+
+class NotificationSerializer(serializers.Serializer):  # type: ignore[type-arg]
+    """A student's in-app delivery; ``id`` is the Delivery id."""
+
+    id = serializers.IntegerField()
+    subject = serializers.CharField(source="message.subject")
+    body = serializers.CharField()
+    created_at = serializers.DateTimeField(source="message.created_at")
+    read = serializers.SerializerMethodField()
+
+    def get_read(self, obj: Any) -> bool:
+        return obj.read_at is not None
