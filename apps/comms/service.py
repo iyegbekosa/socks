@@ -28,6 +28,7 @@ from apps.accounts.services import current_school, current_school_name
 from apps.audit.services import record
 from apps.comms.models import SUBJECT_MAX, CommsSettings, Delivery, Message
 from apps.comms.render import check_template, render
+from apps.core.logging import log_exception_redacted
 from apps.students.models import Student
 
 logger = logging.getLogger(__name__)
@@ -237,6 +238,17 @@ def notify(
         if due:
             transaction.on_commit(lambda: enqueue_batches(due))
     return message
+
+
+def record_notify_failure(kind: str, related_id: int | None) -> None:
+    """Leave a visible trace of an automatic message that could not be created:
+    ``comms.notify_failed`` with the kind and the related row's id (ids only). For senders
+    that never raise; runs in its own savepoint and never raises itself."""
+    try:
+        with transaction.atomic():
+            record("comms.notify_failed", after={"kind": kind, "related_id": related_id})
+    except Exception:  # noqa: BLE001 - the sender has already logged the failure
+        log_exception_redacted(logger, "Auditing a failed %s message failed", kind)
 
 
 def _due(now: datetime) -> Q:

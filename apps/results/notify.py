@@ -19,7 +19,7 @@ from apps.academics.models import ClassArm, Term
 from apps.audit.services import record
 from apps.comms.models import Message
 from apps.comms.render import literal
-from apps.comms.service import notify
+from apps.comms.service import notify, record_notify_failure
 from apps.core.locks import school_lock
 from apps.core.logging import log_exception_redacted
 from apps.results.models import ClassResult, ResultSummary
@@ -62,19 +62,15 @@ def notify_published(arm: ClassArm, term: Term) -> dict[str, int] | None:
 
 
 def _audit_failure(arm: ClassArm, term: Term) -> None:
-    """Leave a visible trace of a failed results message: ``comms.notify_failed`` with the
-    kind and the class result's id (ids only). Never raises."""
+    """Audit the failed results message against the class result's id. Never raises."""
     try:
         with transaction.atomic():
             klass_id = (
                 ClassResult.objects.filter(arm=arm, term=term).values_list("pk", flat=True).first()
             )
-            record(
-                "comms.notify_failed",
-                after={"kind": Message.Kind.RESULTS_PUBLISHED.value, "related_id": klass_id},
-            )
-    except Exception:  # noqa: BLE001 - the log line above already records the failure
-        log_exception_redacted(logger, "Auditing the failed results message failed")
+    except Exception:  # noqa: BLE001 - the log line already records the failure
+        klass_id = None
+    record_notify_failure(Message.Kind.RESULTS_PUBLISHED.value, klass_id)
 
 
 def _notify_locked(arm: ClassArm, term: Term) -> dict[str, int] | None:

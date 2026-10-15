@@ -3,7 +3,8 @@ student per date (email to the family and in-app to the student), never SMS.
 
 The ``absence_emailed_at`` conditional update stays the send-once guard: it runs first, only
 for records still ``absent``, and only the run that changes the row calls ``notify``. Absence
-messages ignore quiet hours. Failures are logged with the exception type and record id only.
+messages ignore quiet hours. Failures are logged with the exception type and record id only,
+and audited as ``comms.notify_failed``.
 """
 
 import logging
@@ -14,8 +15,9 @@ from django.utils import timezone
 from django.utils.dateformat import format as date_format
 
 from apps.attendance.models import AttendanceRecord, AttendanceSettings
-from apps.comms.models import SUBJECT_MAX
-from apps.comms.service import notify
+from apps.comms.models import SUBJECT_MAX, Message
+from apps.comms.service import notify, record_notify_failure
+from apps.core.logging import log_exception_redacted
 from apps.students.models import Student
 
 logger = logging.getLogger(__name__)
@@ -64,11 +66,11 @@ def send_absence_emails(record_ids: list[int]) -> int:
                     related=record,
                     audience_label="1 student",
                 )
-        except Exception as exc:  # noqa: BLE001 - one bad record must not stop the rest
-            # The claim rolled back with it, so a later run may try this record again.
-            logger.warning(
-                "Absence message for record %s failed (%s).", record_id, type(exc).__name__
-            )
+        except Exception:  # noqa: BLE001 - one bad record must not stop the rest
+            # The claim rolled back with it, but nothing re-triggers this record: log it
+            # (message redacted) and audit it so staff can see the absence went unreported.
+            log_exception_redacted(logger, "Absence message for record %s failed", record_id)
+            record_notify_failure(Message.Kind.ABSENCE.value, record_id)
             continue
         claimed += 1
     return claimed

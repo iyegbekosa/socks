@@ -390,3 +390,46 @@ def test_delay_form_refuses_negative_and_keeps_value_when_omitted(client_a, scho
     with schema_context("school_a"):
         conf = AttendanceSettings.load()
         assert (conf.late_threshold, conf.absence_email_delay_minutes) == (4, 25)
+
+
+# --- receipt and absence failures are visible like the results one (final review Minor 2) ---
+
+
+def _assert_redacted_failure(caplog, logger_name, kind, related_id):
+    import logging
+
+    from apps.audit.models import AuditEvent
+
+    records = [r for r in caplog.records if r.name == logger_name]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR and records[0].exc_info is not None
+    assert "secret" not in caplog.text and "Pupil" not in caplog.text
+    (event,) = AuditEvent.objects.filter(action="comms.notify_failed")
+    assert event.after == {"kind": kind, "related_id": related_id}
+
+
+def test_receipt_message_failure_is_logged_redacted_and_audited(school_a, caplog):
+    from apps.fees.receipts import send_receipt
+
+    with schema_context("school_a"):
+        w = _paid_world()
+        with mock.patch("apps.fees.receipts.notify", side_effect=RuntimeError("secret Pupil")):
+            counts = send_receipt(w.payment.pk)
+        assert counts["failures"] == 1
+        assert not Message.objects.exists()
+        _assert_redacted_failure(caplog, "apps.fees.receipts", "receipt", w.receipt.pk)
+
+
+def test_absence_message_failure_is_logged_redacted_and_audited(
+    client_a, aw, django_capture_on_commit_callbacks, caplog
+):
+    with schema_context("school_a"):
+        with (
+            mock.patch("apps.attendance.notify.notify", side_effect=RuntimeError("secret Pupil")),
+            django_capture_on_commit_callbacks(execute=True),
+        ):
+            _save(client_a, aw, "absent")
+        record = AttendanceRecord.objects.get(student=aw.students[0])
+        assert record.absence_emailed_at is None  # the claim rolled back with the failure
+        assert not Message.objects.exists()
+        _assert_redacted_failure(caplog, "apps.attendance.notify", "absence", record.pk)

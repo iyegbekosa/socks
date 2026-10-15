@@ -16,7 +16,7 @@ from django.template.loader import render_to_string
 from apps.branding.models import get_branding
 from apps.comms.models import Message
 from apps.comms.render import literal
-from apps.comms.service import notify
+from apps.comms.service import notify, record_notify_failure
 from apps.core.logging import log_exception_redacted
 from apps.core.money import naira_display
 from apps.core.parsing import parse_id
@@ -136,7 +136,8 @@ def send_receipt(payment_id: int) -> dict[str, int]:
     through ``comms.notify``. Email and in-app only: no SMS (Ruling AF). No PDF and no balances;
     email recipients are de-duplicated case-insensitively. Receipts ignore quiet hours. Sends
     once per receipt (``dedupe_key`` "receipt:<pk>"): a second run, such as a redelivered
-    task, finds the message and stops. Failures are logged by type and never raised."""
+    task, finds the message and stops. Failures are logged (message redacted), audited as
+    ``comms.notify_failed`` and never raised."""
     counts = {"emails_queued": 0, "inapp": 0, "failures": 0}
     receipt = _receipt_for_payment(payment_id)
     if receipt is None:
@@ -166,11 +167,10 @@ def send_receipt(payment_id: int) -> dict[str, int]:
                 audience_label="1 student",
                 dedupe_key=key,
             )
-    except Exception as exc:  # noqa: BLE001 - a receipt message must never raise
+    except Exception:  # noqa: BLE001 - a receipt message must never raise
         counts["failures"] += 1
-        logger.warning(
-            "Receipt message for payment %s failed (%s).", payment_id, type(exc).__name__
-        )
+        log_exception_redacted(logger, "Receipt message for payment %s failed", payment_id)
+        record_notify_failure(Message.Kind.RECEIPT.value, receipt.pk)
         return counts
     counts["emails_queued"] = message.deliveries.filter(channel="email").count()
     counts["inapp"] = message.deliveries.filter(channel="inapp").count()
