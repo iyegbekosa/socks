@@ -7,13 +7,15 @@
 - everyone else: 403.
 """
 
+from datetime import timedelta
 from typing import Any
 
-from django.db.models import Q, QuerySet
+from django.db.models import Exists, OuterRef, Q, QuerySet
+from django.utils import timezone
 
 from apps.accounts.roles import BURSAR, PRINCIPAL, PROPRIETOR, SCHOOL_ADMIN
 from apps.comms.audience import TYPES
-from apps.comms.models import Message
+from apps.comms.models import Delivery, Message
 
 COMPOSE_ROLES = (SCHOOL_ADMIN, PRINCIPAL, BURSAR)
 HISTORY_ROLES = (SCHOOL_ADMIN, PRINCIPAL, BURSAR, PROPRIETOR)
@@ -58,3 +60,21 @@ def retryable_messages(user: Any) -> QuerySet[Message]:
     if _staff_has(user, BURSAR):
         return qs.filter(_bursar_q(user))
     return qs.none()
+
+
+FAILED_WINDOW = timedelta(days=7)
+
+
+def with_failures(qs: QuerySet[Message]) -> QuerySet[Message]:
+    """The messages in ``qs`` with at least one failed delivery."""
+    failed = Delivery.objects.filter(message=OuterRef("pk"), status=Delivery.Status.FAILED)
+    return qs.filter(Exists(failed))
+
+
+def recent_failed_count(user: Any) -> int:
+    """How many messages ``user`` may see that were sent in the last 7 days and have a failed
+    delivery (one query; 0 for users without history access)."""
+    if not _staff_has(user, *HISTORY_ROLES):
+        return 0
+    since = timezone.now() - FAILED_WINDOW
+    return with_failures(visible_messages(user).filter(created_at__gte=since)).count()

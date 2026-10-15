@@ -235,3 +235,80 @@ def test_system_messages_show_no_sender(client_a, w):
     assert "System" in html
     with schema_context("school_a"):
         assert Message.objects.filter(created_by__isnull=True).count() == 3
+
+
+# --- Ruling AJ: "Has failures" filter and the staff-home failure count; retry in quiet hours ---
+
+
+def test_has_failures_filter_keeps_kind_and_paginates(client_a, w):
+    with schema_context("school_a"):
+        _fail_one_email(w.announce)
+        _fail_one_email(w.results)
+    login_verified(client_a, w.admin)
+    assert _subjects(client_a.get(HISTORY + "?failed=1")) == ["Results are ready", "Admin notice"]
+    assert _subjects(client_a.get(HISTORY + "?failed=1&kind=announcement")) == ["Admin notice"]
+    r = client_a.get(HISTORY + "?failed=1&kind=receipt")
+    assert _subjects(r) == [] and "No messages match." in r.content.decode()
+    assert len(_subjects(client_a.get(HISTORY + "?failed=0"))) == 5
+    row = client_a.get(HISTORY + "?failed=1").context["page"].object_list[1]
+    # Counts are not narrowed by the filter: 1 failed + 1 queued email, 4 in-app sent.
+    assert (row.failed_count, row.queued_count, row.sent_count) == (1, 1, 4)
+    with schema_context("school_a"):
+        for i in range(25):
+            m = _send("announcement", [w.c], by=w.admin, subject=f"Bulk {i}")
+            Delivery.objects.filter(message=m, channel="email").update(status="failed")
+    html = client_a.get(HISTORY + "?failed=1&kind=announcement").content.decode()
+    assert "?page=2&amp;kind=announcement&amp;failed=1" in html
+
+
+def test_staff_home_counts_messages_with_failures_this_week(client_a, w):
+    with schema_context("school_a"):
+        _fail_one_email(w.announce)
+        _fail_one_email(w.results)
+        _fail_one_email(w.bursar_note)
+        Message.objects.filter(pk=w.results.pk).update(
+            created_at=timezone.now() - timezone.timedelta(days=8)
+        )
+    login_verified(client_a, w.admin)
+    with CaptureQueriesContext(connection) as ctx:
+        html = client_a.get("/").content.decode()
+    assert "2 with failed emails this week" in html
+    assert HISTORY + "?failed=1" in html
+    assert sum("comms_delivery" in q["sql"] for q in ctx.captured_queries) == 1
+    client_a.logout()
+    login_verified(client_a, w.bursar)  # sees only their own announcement among these
+    assert "1 with failed emails this week" in client_a.get("/").content.decode()
+    client_a.logout()
+    client_a.force_login(w.teacher)
+    assert "failed emails" not in client_a.get("/").content.decode()
+
+
+def test_no_failure_note_when_nothing_failed(client_a, w):
+    login_verified(client_a, w.admin)
+    assert "failed emails" not in client_a.get("/").content.decode()
+
+
+def test_retry_in_quiet_hours_holds_bulk_email(client_a, w, django_capture_on_commit_callbacks):
+    from datetime import datetime
+    from unittest import mock
+    from zoneinfo import ZoneInfo
+
+    night = datetime(2026, 10, 14, 23, 0, tzinfo=ZoneInfo("Africa/Lagos"))
+    with schema_context("school_a"):
+        failed, _ = _fail_one_email(w.announce)
+        receipt_failed, _ = _fail_one_email(w.receipt)
+    login_verified(client_a, w.admin)
+    with mock.patch.object(service, "clock", return_value=night):
+        with django_capture_on_commit_callbacks(execute=True) as callbacks:
+            r = client_a.post(reverse("comms:retry_failed", args=[w.announce.pk]), follow=True)
+        assert len(callbacks) == 0  # held: the 5-minute job sends it at 07:00
+        assert "They go out when quiet hours end." in r.content.decode()
+        with django_capture_on_commit_callbacks(execute=True) as callbacks:
+            client_a.post(reverse("comms:retry_failed", args=[w.receipt.pk]))
+        assert len(callbacks) == 1  # receipts are not bulk: never held
+    with schema_context("school_a"):
+        failed.refresh_from_db()
+        receipt_failed.refresh_from_db()
+    assert failed.status == "queued"
+    assert failed.send_after == datetime(2026, 10, 15, 7, 0, tzinfo=ZoneInfo("Africa/Lagos"))
+    assert receipt_failed.status == "sent"

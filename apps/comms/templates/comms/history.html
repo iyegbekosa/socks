@@ -10,6 +10,7 @@
   <form method="get">
     <label for="kind">Kind</label>
     <select name="kind" id="kind"><option value="">All kinds</option>{% for value, name in kinds %}<option value="{{ value }}"{% if value == kind %} selected{% endif %}>{{ name }}</option>{% endfor %}</select>
+    <label><input type="checkbox" name="failed" value="1"{% if failed %} checked{% endif %}> Has failures</label>
     <button type="submit">Show</button>
   </form>
   <table>
@@ -27,14 +28,14 @@
       <td>{{ m.failed_count }}</td>
       <td>{{ m.read_count }}</td>
     </tr>
-    {% empty %}<tr><td colspan="9">No messages yet.</td></tr>
+    {% empty %}<tr><td colspan="9">{% if failed or kind %}No messages match.{% else %}No messages yet.{% endif %}</td></tr>
     {% endfor %}
     </tbody>
   </table>
   {% if page.has_previous or page.has_next %}
   <p>
-  {% if page.has_previous %}<a href="?page={{ page.previous_page_number }}{% if kind %}&amp;kind={{ kind }}{% endif %}">Newer</a>{% endif %}
-  {% if page.has_next %}<a href="?page={{ page.next_page_number }}{% if kind %}&amp;kind={{ kind }}{% endif %}">Older</a>{% endif %}
+  {% if page.has_previous %}<a href="?page={{ page.previous_page_number }}{% if filters %}&amp;{{ filters }}{% endif %}">Newer</a>{% endif %}
+  {% if page.has_next %}<a href="?page={{ page.next_page_number }}{% if filters %}&amp;{{ filters }}{% endif %}">Older</a>{% endif %}
   </p>
   {% endif %}
 </div>

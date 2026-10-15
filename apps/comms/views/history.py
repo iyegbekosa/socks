@@ -1,6 +1,8 @@
 """Message history (``comms:history``), one message's delivery status (``comms:message``) and
 "Retry failed" (``comms:retry_failed``). Guardian emails are always shown masked."""
 
+from urllib.parse import urlencode
+
 from django.contrib import messages
 from django.core.paginator import Paginator
 from django.db.models import Count, Q
@@ -11,6 +13,7 @@ from django.views.decorators.http import require_POST
 
 from apps.academics.services import current_session
 from apps.accounts.roles import BURSAR, SCHOOL_ADMIN, require_roles
+from apps.comms import service
 from apps.comms.models import Delivery, Message
 from apps.comms.scope import (
     HISTORY_ROLES,
@@ -18,6 +21,7 @@ from apps.comms.scope import (
     audiences_for,
     retryable_messages,
     visible_messages,
+    with_failures,
 )
 from apps.comms.service import requeue_failed
 from apps.core.parsing import parse_id
@@ -56,6 +60,9 @@ def history(request):
         qs = qs.filter(kind=kind)
     else:
         kind = ""
+    failed = request.GET.get("failed") == "1"
+    if failed:
+        qs = with_failures(qs)
     ordered = _with_counts(qs).order_by("-created_at", "-pk")  # aggregates drop Meta.ordering
     page = Paginator(ordered, PAGE_SIZE).get_page(request.GET.get("page"))
     return render(
@@ -64,6 +71,10 @@ def history(request):
         {
             "page": page,
             "kind": kind,
+            "failed": failed,
+            "filters": urlencode(
+                {k: v for k, v in (("kind", kind), ("failed", "1" if failed else "")) if v}
+            ),
             "kinds": Message.Kind.choices,
             "can_compose": bool(audiences_for(request.user)),
             "can_manage_reminders": request.user.has_role(BURSAR, SCHOOL_ADMIN),
@@ -137,7 +148,14 @@ def message_detail(request, pk):
 def retry_failed(request, pk):
     message = _message_or_404(retryable_messages(request.user), pk)
     count = requeue_failed(message, by=request.user, request=request)
-    if count:
+    held = Delivery.objects.filter(
+        message=message, status=S.QUEUED, send_after__gt=service.clock()
+    ).exists()
+    if count and held:
+        messages.success(
+            request, f"{count} failed email(s) queued again. They go out when quiet hours end."
+        )
+    elif count:
         messages.success(request, f"{count} failed email(s) queued again.")
     else:
         messages.info(request, "No failed emails to retry.")

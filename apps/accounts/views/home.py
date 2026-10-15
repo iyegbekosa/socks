@@ -12,10 +12,16 @@ def home(request):
     can_see_students = request.user.kind == "staff" and request.user.has_role(
         SCHOOL_ADMIN, PROPRIETOR, PRINCIPAL, BURSAR, TEACHER
     )
+    from apps.comms.scope import recent_failed_count
+
     return render(
         request,
         "accounts/home.html",
-        {"can_see_students": can_see_students, "register_arms": _form_teacher_arms(request.user)},
+        {
+            "can_see_students": can_see_students,
+            "register_arms": _form_teacher_arms(request.user),
+            "failed_messages": recent_failed_count(request.user),
+        },
     )
 
 
