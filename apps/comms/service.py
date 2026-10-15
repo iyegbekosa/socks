@@ -77,6 +77,27 @@ def _base_context(now: datetime) -> dict[str, str]:
     }
 
 
+def sample_context() -> dict[str, str]:
+    """The shared placeholder values a message composed now would get (for previews)."""
+    return _base_context(clock())
+
+
+def recipient_counts(students: Iterable[Student]) -> dict[str, int]:
+    """The deliveries ``notify`` would create for a shared (not per-student) body, counted
+    without writing anything: family emails de-duplicated across the whole message, and one
+    in-app delivery per student user."""
+    emails: set[str] = set()
+    users: set[int | None] = set()
+    seen: set[int] = set()
+    for student in students:
+        if student.pk in seen:
+            continue
+        seen.add(student.pk)
+        emails.update(_family_emails(student))
+        users.add(student.user_id)
+    return {"email_count": len(emails), "inapp_count": len(users)}
+
+
 def _chunks(ids: list[int]) -> Iterable[list[int]]:
     for i in range(0, len(ids), BATCH_SIZE):
         yield ids[i : i + BATCH_SIZE]
@@ -303,4 +324,31 @@ def release_and_enqueue_held() -> int:
         .values_list("pk", flat=True)
     )
     enqueue_batches(ids)
+    return len(ids)
+
+
+def requeue_failed(message: Message, *, by: Any, request: Any = None) -> int:
+    """ "Retry failed": return the message's ``failed`` email deliveries to ``queued`` (clearing
+    ``error_type`` and the claim) and enqueue them in batches on commit. Audited as
+    ``comms.retry_failed`` with ``{message_id, count}`` when anything was re-queued."""
+    with transaction.atomic():
+        ids = list(
+            Delivery.objects.select_for_update()
+            .filter(message=message, channel=EMAIL, status=Delivery.Status.FAILED)
+            .order_by("pk")
+            .values_list("pk", flat=True)
+        )
+        if not ids:
+            return 0
+        Delivery.objects.filter(pk__in=ids, status=Delivery.Status.FAILED).update(
+            status=Delivery.Status.QUEUED, error_type="", claimed_at=None, sent_at=None
+        )
+        record(
+            "comms.retry_failed",
+            request=request,
+            actor=by,
+            obj=message,
+            after={"message_id": message.pk, "count": len(ids)},
+        )
+        transaction.on_commit(lambda: enqueue_batches(ids))
     return len(ids)

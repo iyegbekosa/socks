@@ -16,7 +16,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.academics.models import ClassArm, SubjectOffering, Term
+from apps.academics.models import ClassArm, ClassLevel, SubjectOffering, Term
 from apps.academics.scope import students_visible_to
 from apps.academics.services import current_session, current_term
 from apps.accounts.roles import (
@@ -37,10 +37,16 @@ from apps.api.serializers import (
 )
 from apps.attendance import register as attendance
 from apps.attendance.days import RegisterDateError, check_register_date
+from apps.comms import announcements
+from apps.comms.audience import MAX_STUDENTS as MAX_AUDIENCE_STUDENTS
+from apps.comms.audience import TYPES as AUDIENCE_TYPES
+from apps.comms.audience import Audience
 from apps.comms.inbox import inbox_for, mark_read
 from apps.comms.models import Delivery
+from apps.comms.render import check_template
+from apps.comms.scope import audiences_for
 from apps.core.errors import ApiError
-from apps.core.money import money_fields
+from apps.core.money import MAX_KOBO, money_fields
 from apps.core.parsing import parse_id
 from apps.fees import checkout, manual, siblings
 from apps.fees.blocking import WITHHELD_MESSAGE
@@ -760,3 +766,129 @@ class NotificationReadView(APIView):
             raise _not_found("Notification")
         mark_read(delivery)
         return Response({"id": delivery.pk, "read": True})
+
+
+MESSAGE_KEYS = {"audience", "subject", "body"}
+AUDIENCE_KEYS = {"type", "id", "ids", "term", "min_balance_kobo"}
+
+
+def _message_audience(raw: Any) -> Audience:
+    """Parse and check the ``audience`` object; unknown level, arm, term or student ids
+    (including another school's) are a 404."""
+    kind = raw["type"]
+    if kind in ("level", "arm"):
+        pk = _json_id(raw.get("id"))
+        if pk is None:
+            raise _bad(
+                "audience.id", f"Must be a {'class level' if kind == 'level' else 'class'} id."
+            )
+        model, what = (ClassLevel, "Class level") if kind == "level" else (ClassArm, "Class")
+        if not model.objects.filter(pk=pk).exists():
+            raise _not_found(what)
+        return Audience(type=kind, id=pk)
+    if kind == "students":
+        ids = raw.get("ids")
+        if not isinstance(ids, list) or not 1 <= len(ids) <= MAX_AUDIENCE_STUDENTS:
+            raise _bad("audience.ids", f"Send 1 to {MAX_AUDIENCE_STUDENTS} student ids.")
+        parsed = [_json_id(i) for i in ids]
+        if any(i is None for i in parsed):
+            raise _bad("audience.ids", "Each must be a student id.")
+        pks = list(dict.fromkeys(i for i in parsed if i is not None))
+        statuses = dict(Student.objects.filter(pk__in=pks).values_list("pk", "status"))
+        if len(statuses) != len(pks):
+            raise _not_found("Student")
+        inactive = [pk for pk in pks if statuses[pk] != Student.Status.ACTIVE]
+        if inactive:
+            raise _bad("audience.ids", f"Inactive students: {', '.join(map(str, inactive))}.")
+        return Audience(type=kind, ids=tuple(pks))
+    if kind == "debtors":
+        term_pk = None
+        if raw.get("term") is not None:
+            term_pk = _json_id(raw["term"])
+            if term_pk is None:
+                raise _bad("audience.term", "Must be a term id.")
+            term = Term.objects.filter(pk=term_pk).first()
+            if term is None:
+                raise _not_found("Term")
+            session = current_session()
+            if session is None or term.session_id != session.pk:
+                raise _bad("audience.term", "Choose a term in the current session.")
+        minimum = 1
+        if raw.get("min_balance_kobo") is not None:
+            value = _json_kobo(raw["min_balance_kobo"])
+            if value is None or not 1 <= value <= MAX_KOBO:
+                raise _bad("audience.min_balance_kobo", "Must be a whole number of kobo from 1.")
+            minimum = value
+        return Audience(type=kind, term=term_pk, min_balance_kobo=minimum)
+    return Audience(type=kind)
+
+
+def _message_text(data: dict, field: str, limit: int) -> str:
+    value = data.get(field)
+    if not isinstance(value, str):
+        raise _bad(field, "Must be text.")
+    text = value.strip() if field == "subject" else value
+    if not text.strip():
+        raise _bad(field, "This field is required.")
+    if len(text) > limit:
+        raise _bad(field, f"Keep it to {limit} characters or fewer.")
+    return text
+
+
+class MessagesView(APIView):
+    """POST: send an announcement (§6.2, P6). Body ``{"audience": {"type": "school"|"level"|
+    "arm"|"debtors"|"students", "id"?, "ids"?, "term"?, "min_balance_kobo"?}, "subject",
+    "body"}``; unknown keys are refused. Returns 201 ``{id, email_count, inapp_count}``.
+
+    School admins and principals may use every audience; a bursar may use ``debtors`` only
+    (any other type is a 403); everyone else gets 403. Unknown level, arm, term or student
+    ids (including another school's) are a 404.
+
+    Unlike the HTML composer there is no double-submit token: API clients own their retries,
+    and every successful POST sends a new message, so do not retry a request that succeeded.
+    """
+
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["post", "options"]
+
+    def post(self, request: Request) -> Response:
+        allowed = audiences_for(request.user)
+        if not allowed:
+            raise ApiError(
+                "FORBIDDEN", "Only a school admin, principal or bursar can send messages.", 403
+            )
+        data = request.data
+        if not isinstance(data, dict):
+            raise _bad("non_field_errors", "Send a JSON object.")
+        unknown = sorted(set(data) - MESSAGE_KEYS)
+        if unknown:
+            raise _bad(unknown[0], "Unknown field.")
+        raw = data.get("audience")
+        if not isinstance(raw, dict):
+            raise _bad("audience", "Send an audience object.")
+        unknown = sorted(set(raw) - AUDIENCE_KEYS)
+        if unknown:
+            raise _bad(f"audience.{unknown[0]}", "Unknown field.")
+        kind = raw.get("type")
+        if not isinstance(kind, str) or kind not in AUDIENCE_TYPES:
+            raise _bad("audience.type", "Must be school, level, arm, debtors or students.")
+        if kind not in allowed:
+            raise ApiError("FORBIDDEN", "A bursar can only message students owing fees.", 403)
+        subject = _message_text(data, "subject", announcements.SUBJECT_MAX)
+        body = _message_text(data, "body", announcements.BODY_MAX)
+        try:
+            check_template(body, per_student=False)
+        except DjangoValidationError as exc:
+            raise _bad("body", exc.messages[0]) from exc
+        audience = _message_audience(raw)
+        try:
+            students = announcements.students_for(audience)
+        except DjangoValidationError as exc:
+            raise _bad("audience", exc.messages[0]) from exc
+        message = announcements.send(
+            audience, students, subject=subject, body=body, by=request.user
+        )
+        return Response(
+            {"id": message.pk, **announcements.delivery_counts(message)},
+            status=status.HTTP_201_CREATED,
+        )

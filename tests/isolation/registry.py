@@ -322,6 +322,49 @@ def _attendance_count() -> int:
     return AttendanceRecord.objects.count()
 
 
+# School B's arm id for api:messages: far above any arm school A creates.
+SCHOOL_B_MESSAGE_ARM_PK = 7_000_002
+
+
+def _arm_with_student_in_active_schema():
+    """An arm (pk SCHOOL_B_MESSAGE_ARM_PK) with an enrolled student and a current term."""
+    from apps.academics.models import ClassArm, Term
+    from tests.fees.factories import make_terms
+    from tests.students.factories import StudentProfileFactory
+
+    w = make_terms()
+    Term.objects.filter(pk=w.term1.pk).update(is_current=True)
+    arm = ClassArm.objects.create(pk=SCHOOL_B_MESSAGE_ARM_PK, level=w.level, suffix="Msg")
+    StudentProfileFactory(enrolment__arm=arm, guardian_email="b.family@example.com")
+    return arm
+
+
+def _message_body_for_arm(arm) -> dict:
+    return {"audience": {"type": "arm", "id": arm.pk}, "subject": "Notice", "body": "Hello."}
+
+
+def _school_message_body(arm) -> dict:
+    return {"audience": {"type": "school"}, "subject": "Notice", "body": "Hello."}
+
+
+def _message_count() -> int:
+    from apps.comms.models import Message
+
+    return Message.objects.count()
+
+
+def _student_in_a() -> None:
+    """School A has a current term and an active student, so a school audience is not empty
+    (a bursar's refusal is then about the audience type, not an empty audience)."""
+    from apps.academics.models import Term
+    from tests.fees.factories import make_terms
+    from tests.students.factories import StudentProfileFactory
+
+    w = make_terms()
+    Term.objects.filter(pk=w.term1.pk).update(is_current=True)
+    StudentProfileFactory()
+
+
 # Several cases may share a route and method (the guard only needs one); give them labels.
 # Per-schema session storage is covered by
 # tests/accounts/test_me_api.py::test_school_b_session_cookie_rejected_on_school_a.
@@ -558,6 +601,39 @@ ISOLATION_CASES: list[IsolationCase] = [
         make_obj=_marked_delivery_in_active_schema,
         actor=None,
         label="anonymous",
+    ),
+    # School A's admin posts school B's arm id: unknown in A, so 404, and no Message is
+    # written in either school. tests/api/test_messages_api.py covers roles and validation.
+    IsolationCase(
+        "api:messages",
+        "POST",
+        url=lambda arm: "/api/v1/messages",
+        make_obj=_arm_with_student_in_active_schema,
+        body_for=_message_body_for_arm,
+        count_model=_message_count,
+        label="admin",
+    ),
+    IsolationCase(
+        "api:messages",
+        "POST",
+        url=lambda arm: "/api/v1/messages",
+        make_obj=_arm_with_student_in_active_schema,
+        body_for=_message_body_for_arm,
+        actor=None,
+        count_model=_message_count,
+        label="anonymous",
+    ),
+    # Review Focus 4: a bursar may only message debtors, so a school audience is a 403.
+    IsolationCase(
+        "api:messages",
+        "POST",
+        url=lambda arm: "/api/v1/messages",
+        make_obj=_arm_with_student_in_active_schema,
+        body_for=_school_message_body,
+        actor=bursar_actor,
+        count_model=_message_count,
+        setup_a=_student_in_a,
+        label="bursar_school",
     ),
 ]
 

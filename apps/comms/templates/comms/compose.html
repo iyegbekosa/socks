@@ -1,0 +1,31 @@
+{% extends "core/base.html" %}
+{% block title %}New announcement{% endblock %}
+{% block content %}
+<div class="card">
+  <p><a href="{% url 'comms:history' %}">Back to messages</a></p>
+  <h1>New announcement</h1>
+  <p class="hint">Each family gets one email, however many of their children are in the audience; each student also sees it in their inbox.</p>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.token }}
+    {% if form.non_field_errors %}<p class="error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+    <fieldset>
+      <legend>Who it is for</legend>
+      {% with field=form.audience %}{% include "comms/_field.html" %}{% endwith %}
+      {% for field in form %}{% if field.name in audience_fields %}{% include "comms/_field.html" %}{% endif %}{% endfor %}
+    </fieldset>
+    {% with field=form.subject %}{% include "comms/_field.html" %}{% endwith %}
+    {% with field=form.body %}{% include "comms/_field.html" %}{% endwith %}
+    <button type="submit" name="action" value="preview">Preview</button>
+    {% if preview %}<button type="submit" name="action" value="send">Send</button>{% endif %}
+  </form>
+  {% if preview %}
+  <section aria-labelledby="preview-heading">
+    <h2 id="preview-heading">Preview</h2>
+    <p>This will send <strong>{{ preview.email_count }}</strong> email{{ preview.email_count|pluralize }} and <strong>{{ preview.inapp_count }}</strong> in-app message{{ preview.inapp_count|pluralize }}.</p>
+    <p><strong>{{ form.cleaned_data.subject }}</strong></p>
+    <p>{{ preview.body|linebreaksbr }}</p>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

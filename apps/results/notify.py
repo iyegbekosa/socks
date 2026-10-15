@@ -21,6 +21,7 @@ from apps.comms.models import Message
 from apps.comms.render import literal
 from apps.comms.service import notify
 from apps.core.locks import school_lock
+from apps.core.logging import log_exception_redacted
 from apps.results.models import ClassResult, ResultSummary
 from apps.students.models import Student
 
@@ -47,18 +48,33 @@ def notify_published(arm: ClassArm, term: Term) -> dict[str, int] | None:
     the class is still published and this publish has not been messaged yet; both are checked
     under the ``results:{arm}:{term}`` lock, so an unlock cannot slip in before the message is
     created. Returns the counts it audited (email and in-app deliveries of the message).
-    Never raises: a failure to create the message is logged by type and rolled back."""
+    Never raises: a failure to create the message is rolled back, logged with its traceback
+    (exception message redacted) and audited as ``comms.notify_failed``."""
     term = Term.objects.select_related("session").filter(pk=term.pk).first() or term
     try:
         return _notify_locked(arm, term)
-    except Exception as exc:  # noqa: BLE001 - like the receipt and absence senders
-        logger.warning(
-            "Results message for class %s term %s failed (%s).",
-            arm.pk,
-            term.pk,
-            type(exc).__name__,
+    except Exception:  # noqa: BLE001 - like the receipt and absence senders
+        log_exception_redacted(
+            logger, "Results message for class %s term %s failed", arm.pk, term.pk
         )
+        _audit_failure(arm, term)
         return None
+
+
+def _audit_failure(arm: ClassArm, term: Term) -> None:
+    """Leave a visible trace of a failed results message: ``comms.notify_failed`` with the
+    kind and the class result's id (ids only). Never raises."""
+    try:
+        with transaction.atomic():
+            klass_id = (
+                ClassResult.objects.filter(arm=arm, term=term).values_list("pk", flat=True).first()
+            )
+            record(
+                "comms.notify_failed",
+                after={"kind": Message.Kind.RESULTS_PUBLISHED.value, "related_id": klass_id},
+            )
+    except Exception:  # noqa: BLE001 - the log line above already records the failure
+        log_exception_redacted(logger, "Auditing the failed results message failed")
 
 
 def _notify_locked(arm: ClassArm, term: Term) -> dict[str, int] | None:

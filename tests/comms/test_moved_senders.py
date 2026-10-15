@@ -190,6 +190,33 @@ def test_results_message_failure_is_logged_and_never_raised(
     assert "secret" not in caplog.text and "Pupil" not in caplog.text
 
 
+def test_results_message_failure_leaves_an_audit_trace(
+    results_world,  # noqa: F811
+    django_capture_on_commit_callbacks,
+    caplog,
+):
+    """A failed results message is logged with its traceback (message redacted) and audited
+    as ``comms.notify_failed`` so admins can see it."""
+    import logging
+
+    from apps.audit.models import AuditEvent
+    from apps.results.models import ClassResult
+
+    w = results_world
+    with (
+        mock.patch("apps.results.notify.notify", side_effect=RuntimeError("secret Pupil")),
+        caplog.at_level(logging.WARNING, logger="apps.results"),
+    ):
+        publish(w, django_capture_on_commit_callbacks)
+    (record,) = [r for r in caplog.records if r.name == "apps.results.notify"]
+    assert record.levelno == logging.ERROR and record.exc_info is not None
+    assert "secret" not in caplog.text
+    with schema_context("school_a"):
+        klass = ClassResult.objects.get(arm=w.arm, term=w.term)
+        (event,) = AuditEvent.objects.filter(action="comms.notify_failed")
+        assert event.after == {"kind": "results_published", "related_id": klass.pk}
+
+
 # --- absence --------------------------------------------------------------------------------
 
 

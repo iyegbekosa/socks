@@ -1,0 +1,49 @@
+{% extends "core/base.html" %}
+{% block title %}{{ message.subject }}{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <p><a href="{% url 'comms:history' %}">Back to messages</a></p>
+  <h1>{{ message.subject }}</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  <dl>
+    <dt>Kind</dt><dd>{{ message.get_kind_display }}</dd>
+    <dt>To</dt><dd>{{ message.audience_label|default:"—" }}</dd>
+    <dt>By</dt><dd>{% if message.created_by %}{{ message.created_by.get_full_name|default:"Staff" }}{% else %}System{% endif %}</dd>
+    <dt>Sent</dt><dd>{{ message.created_at|date:"j F Y, H:i" }}</dd>
+    <dt>Delivered</dt><dd>{{ totals.sent_count }}</dd>
+    <dt>Queued</dt><dd>{{ totals.queued_count }}</dd>
+    <dt>Failed</dt><dd>{{ totals.failed_count }}</dd>
+    <dt>Read</dt><dd>{{ totals.read_count }}</dd>
+  </dl>
+  <p>{{ message.body|linebreaksbr }}</p>
+  {% if can_retry and totals.failed_count %}
+  <form method="post" action="{% url 'comms:retry_failed' message.pk %}">{% csrf_token %}
+    <button type="submit">Retry failed</button>
+  </form>
+  {% endif %}
+  <h2>Deliveries</h2>
+  <table>
+    <thead><tr><th>Recipient</th><th>Channel</th><th>Status</th><th>Error</th><th>Sent at</th><th>Read</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.recipient }}{% if row.klass %} <span class="muted">{{ row.klass }}</span>{% endif %}</td>
+      <td>{{ row.channel }}</td>
+      <td>{{ row.status }}</td>
+      <td>{{ row.error_type }}</td>
+      <td>{% if row.sent_at %}{{ row.sent_at|date:"j M Y, H:i" }}{% endif %}</td>
+      <td>{% if row.read %}Yes{% endif %}</td>
+    </tr>
+    {% empty %}<tr><td colspan="6">No deliveries.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if page.has_previous or page.has_next %}
+  <p>
+  {% if page.has_previous %}<a href="?page={{ page.previous_page_number }}">Previous</a>{% endif %}
+  {% if page.has_next %}<a href="?page={{ page.next_page_number }}">Next</a>{% endif %}
+  </p>
+  {% endif %}
+</div>
+{% endblock %}

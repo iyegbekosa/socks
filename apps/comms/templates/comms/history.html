@@ -1,0 +1,40 @@
+{% extends "core/base.html" %}
+{% block title %}Messages{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Messages</h1>
+  {% for m in messages %}<p role="status">{{ m }}</p>{% endfor %}
+  {% if can_compose %}<p><a href="{% url 'comms:compose' %}">New announcement</a></p>{% endif %}
+  <form method="get">
+    <label for="kind">Kind</label>
+    <select name="kind" id="kind"><option value="">All kinds</option>{% for value, name in kinds %}<option value="{{ value }}"{% if value == kind %} selected{% endif %}>{{ name }}</option>{% endfor %}</select>
+    <button type="submit">Show</button>
+  </form>
+  <table>
+    <thead><tr><th>Sent</th><th>Kind</th><th>Subject</th><th>To</th><th>By</th><th>Delivered</th><th>Queued</th><th>Failed</th><th>Read</th></tr></thead>
+    <tbody>
+    {% for m in page.object_list %}
+    <tr>
+      <td>{{ m.created_at|date:"j M Y, H:i" }}</td>
+      <td>{{ m.get_kind_display }}</td>
+      <td><a href="{% url 'comms:message' m.pk %}">{{ m.subject }}</a></td>
+      <td>{{ m.audience_label }}</td>
+      <td>{% if m.created_by %}{{ m.created_by.get_full_name|default:"Staff" }}{% else %}<span class="muted">System</span>{% endif %}</td>
+      <td>{{ m.sent_count }}</td>
+      <td>{{ m.queued_count }}</td>
+      <td>{{ m.failed_count }}</td>
+      <td>{{ m.read_count }}</td>
+    </tr>
+    {% empty %}<tr><td colspan="9">No messages yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if page.has_previous or page.has_next %}
+  <p>
+  {% if page.has_previous %}<a href="?page={{ page.previous_page_number }}{% if kind %}&amp;kind={{ kind }}{% endif %}">Newer</a>{% endif %}
+  {% if page.has_next %}<a href="?page={{ page.next_page_number }}{% if kind %}&amp;kind={{ kind }}{% endif %}">Older</a>{% endif %}
+  </p>
+  {% endif %}
+</div>
+{% endblock %}
